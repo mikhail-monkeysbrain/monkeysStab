@@ -46,8 +46,10 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("monkeysStab — критические параметры FC")
-        super().geometry("1040x790")
-        super().minsize(980,720)
+        # Окно должно помещаться и на 720p/VNC-экране. Раньше фиксированные
+        # 790 px по высоте выталкивали нижнюю панель кнопок за границу экрана.
+        super().geometry("1040x700")
+        super().minsize(900,620)
         self.device=tk.StringVar(value=os.environ.get("MONKEYS_FC","tcp://127.0.0.1:5760"))
         self.baud=tk.StringVar(value=os.environ.get("MONKEYS_FC_BAUD","460800"))
         self.sysid=tk.StringVar(value=os.environ.get("MONKEYS_FC_SYSID","1"))
@@ -61,13 +63,13 @@ class App(tk.Tk):
         self.after(250,self.read_fc)
 
     def _build(self):
-        root=ttk.Frame(self,padding=16); root.pack(fill="both",expand=True)
+        root=ttk.Frame(self,padding=12); root.pack(fill="both",expand=True)
         ttk.Label(root,text="Критические параметры monkeysStab",
                   font=("DejaVu Sans",16,"bold")).pack(anchor="w")
         ttk.Label(root,text=(
             "GUI настраивает только параметры, необходимые текущему Optical Flow-контуру. "
             "ExternalNav yaw (EK3_SRC1_YAW=6) здесь намеренно недоступен."
-        ),wraplength=990).pack(anchor="w",pady=(4,12))
+        ),wraplength=990).pack(anchor="w",pady=(2,7))
 
         conn=ttk.LabelFrame(root,text="Подключение к FC",padding=8); conn.pack(fill="x")
         for i in range(8): conn.columnconfigure(i,weight=1)
@@ -78,7 +80,7 @@ class App(tk.Tk):
             ttk.Entry(conn,textvariable=var,width=14).grid(row=0,column=col+1,sticky="ew",padx=5)
             col+=2
 
-        body=ttk.Frame(root); body.pack(fill="both",expand=True,pady=12)
+        body=ttk.Frame(root); body.pack(fill="x",pady=7)
         body.columnconfigure(0,weight=1); body.columnconfigure(1,weight=1)
 
         left=ttk.Frame(body); left.grid(row=0,column=0,sticky="nsew",padx=(0,6))
@@ -130,11 +132,14 @@ class App(tk.Tk):
             ttk.Label(rng,text=t).grid(row=i,column=0,sticky="w",pady=2)
 
         values=ttk.LabelFrame(root,text="Текущие значения FC",padding=8); values.pack(fill="both",expand=True)
-        self.text=tk.Text(values,height=12,font=("DejaVu Sans Mono",9),wrap="none")
+        self.text=tk.Text(values,height=8,font=("DejaVu Sans Mono",9),wrap="none")
         self.text.pack(fill="both",expand=True)
         self.text.configure(state="disabled")
 
-        buttons=ttk.Frame(root); buttons.pack(fill="x",pady=(10,0))
+        # Кнопки размещаются до расширяемого списка значений, чтобы они всегда
+        # оставались видимыми даже при небольшой высоте рабочего стола.
+        buttons=ttk.Frame(root)
+        buttons.pack(fill="x",pady=(8,0),before=values)
         ttk.Button(buttons,text="ПРОЧИТАТЬ ИЗ FC",command=self.read_fc).pack(side="left",padx=(0,8))
         ttk.Button(buttons,text="ПРИМЕНИТЬ ПРОФИЛЬ",command=self.apply).pack(side="left",padx=(0,8))
         ttk.Button(buttons,text="ГЕОМЕТРИЯ ДАТЧИКОВ",command=self.open_geometry_gui).pack(side="left")
