@@ -14,6 +14,8 @@
 #include <ctime>
 #include <iostream>
 #include <string>
+#include <sys/socket.h>
+#include <netdb.h>
 
 static mavlink_status_t g_status{};
 
@@ -22,8 +24,32 @@ static mavlink_status_t g_status{};
   std::exit(2);
 }
 
-static int open_serial(const std::string& dev,int baud){
-  if(baud!=460800) die("эта утилита поддерживает baud=460800");
+static int open_endpoint(const std::string& dev,int baud){
+  if(dev.rfind("tcp://",0)==0){
+    const std::string hp=dev.substr(6);
+    const auto colon=hp.rfind(':');
+    if(colon==std::string::npos) die("TCP endpoint должен быть tcp://host:port");
+    const std::string host=hp.substr(0,colon);
+    const std::string port=hp.substr(colon+1);
+    addrinfo hints{},*res=nullptr;
+    hints.ai_family=AF_UNSPEC; hints.ai_socktype=SOCK_STREAM;
+    const int gr=getaddrinfo(host.c_str(),port.c_str(),&hints,&res);
+    if(gr!=0) die(std::string("getaddrinfo: ")+gai_strerror(gr));
+    int fd=-1;
+    for(addrinfo* p=res;p;p=p->ai_next){
+      fd=::socket(p->ai_family,p->ai_socktype,p->ai_protocol);
+      if(fd<0) continue;
+      if(::connect(fd,p->ai_addr,p->ai_addrlen)==0) break;
+      ::close(fd); fd=-1;
+    }
+    freeaddrinfo(res);
+    if(fd<0) die("TCP connect "+dev+" failed");
+    const int fl=fcntl(fd,F_GETFL,0);
+    if(fl>=0) fcntl(fd,F_SETFL,fl|O_NONBLOCK);
+    return fd;
+  }
+
+  if(baud!=460800) die("эта утилита поддерживает baud=460800 для прямого UART");
   int fd=::open(dev.c_str(),O_RDWR|O_NOCTTY|O_NONBLOCK);
   if(fd<0) die("open "+dev+": "+std::strerror(errno));
   termios t{};
@@ -138,7 +164,7 @@ int main(int argc,char** argv){
   const uint8_t sys=(uint8_t)std::stoi(argv[3]);
   const uint8_t comp=(uint8_t)std::stoi(argv[4]);
   const std::string mode=argv[5];
-  int fd=open_serial(dev,baud);
+  int fd=open_endpoint(dev,baud);
   std::cout<<"TARGET FC sys="<<(int)sys<<" comp="<<(int)comp<<"\n";
 
   if(mode=="read"){
