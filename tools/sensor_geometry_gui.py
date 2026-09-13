@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
+import json
 import math
 import os
+import re
 import subprocess
 import sys
+from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, ttk
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+ROOT_PATH = Path(ROOT)
+GEOMETRY_JSON = ROOT_PATH / "config" / "mount_geometry.json"
+CAMERA_YAML = ROOT_PATH / "config" / "ov9281_current_mount.yaml"
 PARAMS = {
     "cam_x": "FLOW_POS_X",
     "cam_y": "FLOW_POS_Y",
@@ -31,6 +37,7 @@ class GeometryGui(tk.Tk):
 
         self.vars = {k: tk.StringVar(value="") for k in PARAMS}
         self._build()
+        self.after(250, self.read_fc)
 
     def _build(self):
         pad = {"padx": 10, "pady": 6}
@@ -167,6 +174,34 @@ class GeometryGui(tk.Tk):
             vals[param]=mm/1000.0
         return vals
 
+    def _save_local_geometry(self, vals):
+        if GEOMETRY_JSON.exists():
+            with GEOMETRY_JSON.open("r", encoding="utf-8") as f:
+                cfg=json.load(f)
+        else:
+            cfg={"frame":"FRD","units":"m","reference":"FC_IMU","camera":{"name":"OV9281"},
+                 "rangefinder":{"name":"TF-Luna"}}
+        cfg.setdefault("camera", {})["name"]="OV9281"
+        cfg.setdefault("rangefinder", {})["name"]="TF-Luna"
+        cfg["camera"].update({"x":vals["FLOW_POS_X"],"y":vals["FLOW_POS_Y"],"z":vals["FLOW_POS_Z"]})
+        cfg["rangefinder"].update({"x":vals["RNGFND1_POS_X"],"y":vals["RNGFND1_POS_Y"],"z":vals["RNGFND1_POS_Z"]})
+        GEOMETRY_JSON.write_text(json.dumps(cfg,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+
+    def _update_camera_yaml(self, vals):
+        text=CAMERA_YAML.read_text(encoding="utf-8")
+        x=vals["FLOW_POS_X"]; y=vals["FLOW_POS_Y"]; z=vals["FLOW_POS_Z"]
+        # YAML T_BS uses body FLU translation: X forward, Y left, Z up.
+        block=(
+            "data: [ 0.000000000, -1.000000000,  0.000000000,  {x:.6f},\n"
+            "       -1.000000000,  0.000000000,  0.000000000,  {yflu:.6f},\n"
+            "        0.000000000,  0.000000000, -1.000000000,  {zflu:.6f},\n"
+            "        0.000000000,  0.000000000,  0.000000000,  1.0000 ]"
+        ).format(x=x,yflu=-y,zflu=-z)
+        text2,n=re.subn(r"data:\s*\[.*?1\.0000\s*\]",block,text,count=1,flags=re.S)
+        if n!=1:
+            raise RuntimeError("Не удалось обновить T_BS.data в camera YAML")
+        CAMERA_YAML.write_text(text2,encoding="utf-8")
+
     def write_fc(self):
         try:
             vals=self._entered_meters()
@@ -203,6 +238,11 @@ class GeometryGui(tk.Tk):
             if bad:
                 raise RuntimeError("Проверка после записи не прошла: "+", ".join(bad))
 
+            # Только после подтверждения FC обновляем локальную геометрию проекта,
+            # чтобы следующий preflight сравнивал FC с теми же значениями.
+            self._save_local_geometry(vals)
+            self._update_camera_yaml(vals)
+
             dx=(got["RNGFND1_POS_X"]-got["FLOW_POS_X"])*1000
             dy=(got["RNGFND1_POS_Y"]-got["FLOW_POS_Y"])*1000
             dz=(got["RNGFND1_POS_Z"]-got["FLOW_POS_Z"])*1000
@@ -210,9 +250,12 @@ class GeometryGui(tk.Tk):
                 "ГОТОВО: все 6 параметров записаны и повторно прочитаны из FC.\n"
                 f"Разнос TF-Luna относительно камеры: ΔX={dx:+.1f} мм, "
                 f"ΔY={dy:+.1f} мм, ΔZ={dz:+.1f} мм.\n"
-                "Перед следующим flight-тестом перезагрузите FC и запустите обычный preflight."
+                "Локальный mount_geometry.json и camera YAML тоже обновлены.\n"
+                "Перезагрузите FC перед следующим flight-тестом."
             )
-            messagebox.showinfo("Запись завершена", "Все 6 параметров записаны и подтверждены FC.")
+            messagebox.showinfo("Запись завершена",
+                                "Все 6 параметров записаны и подтверждены FC.\n"
+                                "Конфигурация monkeysStab синхронизирована с FC.")
         except Exception as e:
             messagebox.showerror("Ошибка записи", str(e))
             self.status.set("ОШИБКА: параметры не были полностью подтверждены FC.")
