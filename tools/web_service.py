@@ -176,7 +176,7 @@ def live_payload(raw):
             if raw_n is not None and raw_e is not None:
                 _raw_zero["n"],_raw_zero["e"]=raw_n,raw_e
             rc_zero_event=True
-            log_event("INFO",f"HOME/0 с пульта: RC6={raw.get('rc6_us',0)} RC8={raw.get('rc8_us',0)} seq={rc_seq}")
+            log_event("INFO",f"HOME/0 с пульта: RC6={raw.get('rc6_us',0)} RC8={raw.get('rc8_us',0)} RC10={raw.get('rc10_us',0)} seq={rc_seq}")
 
         if _zero["x"] is None:
             _zero["x"],_zero["y"],_zero["z"]=x,y,z
@@ -217,6 +217,7 @@ def live_payload(raw):
         "rc_zero_seq":rc_seq,
         "rc6_us":raw.get("rc6_us",0),
         "rc8_us":raw.get("rc8_us",0),
+        "rc10_us":raw.get("rc10_us",0),
         "vx":raw.get("vx",0.0),"vy":raw.get("vy",0.0),"vz":raw.get("vz",0.0),
         "roll_deg":raw.get("roll_deg",0.0),
         "pitch_deg":raw.get("pitch_deg",0.0),
