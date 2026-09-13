@@ -11,7 +11,7 @@ OV9281 USB -> Optical Flow -> MAVLink OPTICAL_FLOW -> ArduPilot EKF3
 TF-Luna    -> DISTANCE_SENSOR ---------------------> ArduPilot
 ```
 
-Проект намеренно очищен от старых Kimera/VIO экспериментов, исторических диагностик, stereo-кода и датасетов. В репозитории оставлен только рабочий fixed-mount Optical Flow MVP и обязательные проверки перед запуском.
+Проект отделён от старого jtzero-kimera/Kimera-VIO контура. Старый `ground_motion_live_v2_v3_ab.cpp` больше не является исходной зависимостью: захват OV9281, TF-Luna и загрузка калибровки вынесены в `src/runtime.hpp`. Исторические Kimera/VIO/stereo датасеты в этот репозиторий не перенесены. В production source пока сохранены актуальные flight-диагностики и GUI, которые нужны для текущей проверки поведения системы.
 
 ## Текущее оборудование
 
@@ -81,7 +81,22 @@ sudo apt update
 sudo apt install -y build-essential pkg-config libopencv-dev python3
 ```
 
-MAVLink headers можно установить в `/usr/local/include/mavlink/v2.0`, либо указать путь переменной `MAVLINK_ROOT`.
+MAVLink headers ищутся в `/usr/local/include/mavlink/v2.0` и `/usr/include/mavlink/v2.0`. Другой путь можно указать переменной `MAVLINK_ROOT`. `~/Kimera-VIO` больше не используется как неявная зависимость.
+
+## Проверка сборки
+
+После `git pull` сначала можно проверить только компиляцию, не открывая устройства и не отправляя MAVLink:
+
+```bash
+cd ~/monkeysStab
+bash scripts/smoke_build.sh
+```
+
+Ожидаемый результат:
+
+```text
+BUILD PASS: /tmp/monkeysstab_optical_flow_buildcheck
+```
 
 ## Запуск
 
