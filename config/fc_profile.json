@@ -1,0 +1,27 @@
+{
+  "profile": "fixed_mount_optical_flow",
+  "description": "Текущий проверенный профиль monkeysStab без гироподвеса",
+  "params": {
+    "AHRS_EKF_TYPE": 3,
+    "EK3_ENABLE": 1,
+    "FLOW_TYPE": 5,
+    "FLOW_OPTIONS": 0,
+    "FLOW_ORIENT_YAW": 0,
+    "FLOW_FXSCALER": 0,
+    "FLOW_FYSCALER": 0,
+    "EK3_FLOW_DELAY": 0,
+    "EK3_FLOW_MAX": 2.5,
+    "RNGFND1_TYPE": 10,
+    "RNGFND1_ORIENT": 25,
+    "RNGFND1_MIN": 0.1,
+    "RNGFND1_MAX": 8.0,
+    "EK3_SRC1_POSXY": 0,
+    "EK3_SRC1_VELXY": 5,
+    "EK3_SRC1_POSZ": 2,
+    "EK3_SRC1_VELZ": 0,
+    "EK3_SRC1_YAW": 0,
+    "EK3_SRC_OPTIONS": 0,
+    "COMPASS_ENABLE": 1,
+    "COMPASS_USE": 0
+  }
+}
