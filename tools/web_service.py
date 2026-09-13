@@ -323,203 +323,315 @@ HTML=r'''<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>monkeysStab</title>
+<title>monkeysStab — UAV Control & Visualizer</title>
 <style>
-:root{font-family:system-ui,-apple-system,sans-serif;color:#e8edf2;background:#11161b}
-body{margin:0;background:#11161b}.wrap{max-width:1450px;margin:auto;padding:18px}
-h1{margin:0 0 4px;font-size:28px} .sub{color:#9fb0bd;margin-bottom:16px}
-.grid{display:grid;grid-template-columns:390px 1fr;gap:16px}
-.card{background:#192129;border:1px solid #2c3943;border-radius:12px;padding:16px}
-label{display:block;font-size:13px;color:#aebbc5;margin:10px 0 4px}
-input{box-sizing:border-box;width:100%;background:#0f151a;color:#eef4f8;border:1px solid #40515d;border-radius:7px;padding:9px}
-.row{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
-button{border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer;margin:5px 5px 5px 0}
-.primary{background:#4da3ff;color:#06111b}.danger{background:#e05b65;color:white}.soft{background:#34434e;color:#eef4f8}
-.status{display:flex;gap:10px;align-items:center;margin-bottom:12px}.dot{width:12px;height:12px;border-radius:50%;background:#777}.on{background:#45c878}.off{background:#e05b65}
-.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:10px}.metric{background:#10171d;border-radius:8px;padding:10px}.metric b{display:block;font-size:20px}.metric span{color:#8fa1ae;font-size:12px}
-canvas{width:100%;height:560px;background:#0c1115;border-radius:10px}
-.visualRow{display:grid;grid-template-columns:1.45fr .75fr;gap:12px;margin-top:12px}
-#drone3d{height:360px}
-.inclinometers{display:grid;grid-template-columns:1fr;gap:10px}
-.gaugeWrap{background:#10171d;border-radius:10px;padding:8px}
-.gaugeWrap b{display:block;text-align:center;margin-bottom:4px}
-.gauge{width:100%;height:102px;background:#0c1115;border-radius:8px}
-pre{height:190px;overflow:auto;background:#0c1115;border-radius:8px;padding:10px;white-space:pre-wrap;font-size:12px}
-.small{font-size:12px;color:#93a5b2}.good{color:#56d88b}.bad{color:#f06b75}
-@media(max-width:900px){.grid{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}canvas{height:420px}.visualRow{grid-template-columns:1fr}#drone3d{height:320px}.inclinometers{grid-template-columns:repeat(3,1fr)}}
+*{box-sizing:border-box}
+:root{
+ --bg:#07111b;--panel:#0c1a27;--panel2:#0a1621;--line:#1d3950;--line2:#14293a;
+ --text:#e9f3fb;--muted:#87a5bd;--blue:#1299ff;--green:#0bd777;--red:#ff4654;
+ --yellow:#ffc928;--cyan:#15d2ff;--purple:#c98bff;
+ font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+ color:var(--text);background:var(--bg)
+}
+html,body{margin:0;min-height:100%;background:
+ radial-gradient(circle at 75% -10%,#0e2638 0,#07111b 35%),
+ linear-gradient(#07111b,#061018)}
+body{overflow-x:hidden}
+button,input,select{font:inherit}
+button{cursor:pointer}
+.topbar{height:64px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 18px;background:#071522dd;backdrop-filter:blur(12px);position:sticky;top:0;z-index:20}
+.brand{display:flex;align-items:center;gap:12px;min-width:280px}
+.logo{width:34px;height:34px;border:3px solid var(--blue);transform:rotate(30deg);border-radius:8px;position:relative;box-shadow:0 0 18px #1299ff55}
+.logo:after{content:"";position:absolute;inset:7px;border:2px solid #42b6ff;border-radius:4px}
+.brand b{font-size:22px;letter-spacing:.3px}.brand small{display:block;color:#9ab3c8;margin-top:1px}
+.nav{display:flex;height:100%;align-items:center;gap:8px;flex:1}
+.nav button{height:100%;padding:0 22px;background:none;color:#a4bdd1;border:0;border-bottom:3px solid transparent;font-weight:700}
+.nav button.active{color:#20aaff;border-bottom-color:#20aaff;background:#0f2d44}
+.topStatus{display:flex;gap:22px;align-items:center;font-size:13px;color:#9fb5c6}
+.okdot{width:10px;height:10px;border-radius:50%;display:inline-block;background:#17d768;box-shadow:0 0 10px #17d76888;margin-right:7px}
+.baddot{background:#ff4b59;box-shadow:0 0 10px #ff4b5988}
+.main{display:grid;grid-template-columns:275px minmax(580px,1fr) 270px;gap:12px;padding:12px;max-width:1900px;margin:auto}
+.col{display:flex;flex-direction:column;gap:12px}
+.card{background:linear-gradient(180deg,#0c1a27,#091621);border:1px solid #1c3b53;border-radius:9px;box-shadow:inset 0 1px 0 #ffffff08;padding:13px}
+.card h3{font-size:15px;margin:0 0 12px}.card h4{font-size:13px;color:#a8bfd0;margin:8px 0}
+.fcstate{font-size:25px;font-weight:800;display:flex;align-items:center;gap:10px}.modeLine{margin:7px 0 10px;color:#a7bfd1}.modeLine b{color:#27aaff}
+.btnrow{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.btnrow3{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:9px}
+.btn{border:1px solid #31526a;border-radius:6px;padding:10px 8px;background:#102438;color:#eaf5fc;font-weight:800}
+.btn:hover{filter:brightness(1.12)}.btn.green{background:#0aad5b;border-color:#0de479}.btn.red{background:#a92431;border-color:#ff4050}.btn.blue{background:#087aca;border-color:#17a9ff}.btn.stop{color:#ff5361;background:#24111a;border-color:#dc3444}
+.field{display:grid;grid-template-columns:1fr 112px;align-items:center;gap:8px;margin:9px 0;color:#9fb7ca;font-size:13px}
+.field input,.field select{width:100%;background:#0b1823;color:#eaf3f9;border:1px solid #26465d;border-radius:5px;padding:7px}
+.startBig{width:100%;margin-top:10px;border:1px solid #12df77;background:#0b9f56;color:white;border-radius:6px;padding:11px;font-weight:900}
+.stopBig{width:100%;margin-top:8px;border:1px solid #ff4352;background:#201018;color:#ff5a67;border-radius:6px;padding:10px;font-weight:900}
+.kv{display:grid;grid-template-columns:1fr auto;gap:5px 9px;font-size:12px}.kv span:nth-child(odd){color:#86a7bf}.kv span:nth-child(even){color:#dfeaf2}
+.sceneCard{padding:0;overflow:hidden;position:relative;min-height:625px}
+.sceneTitle{position:absolute;left:14px;top:10px;z-index:4;font-weight:800}
+#glCanvas{display:block;width:100%;height:625px;background:
+ radial-gradient(circle at 50% 15%,#11304a55,#07121c 52%),#07121c}
+.sceneControls{position:absolute;right:12px;top:10px;background:#081521dd;border:1px solid #26475e;border-radius:7px;padding:8px 10px;font-size:12px;z-index:4}
+.sceneControls label{display:block;margin:5px 0;color:#b3c9d7}
+.sceneLegend{position:absolute;left:14px;bottom:12px;display:flex;gap:8px;z-index:4}
+.miniBtn{border:1px solid #294c65;background:#0c1c29;color:#dbe8f0;padding:8px 11px;border-radius:5px}
+.telemetryStrip{position:absolute;right:14px;bottom:12px;background:#081521cc;border:1px solid #24445a;border-radius:6px;padding:8px 11px;font-size:12px;color:#a9c0d0;z-index:4}
+.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px}
+.metric{background:#09151f;border:1px solid #163147;border-radius:7px;padding:9px}.metric span{font-size:11px;color:#7fa1ba}.metric b{display:block;font-size:18px;margin-top:2px}
+.gaugeBox{padding:10px 12px}.gLine{display:grid;grid-template-columns:58px 1fr 52px;gap:7px;align-items:center;margin:12px 0;font-size:12px}.gLine strong{text-align:right}
+.bar{height:7px;background:#19364a;border-radius:10px;position:relative}.bar:after{content:"";position:absolute;left:50%;top:-5px;height:17px;width:2px;background:#5f7f95}.needle{position:absolute;top:-4px;width:5px;height:15px;border-radius:2px;background:#18e278;box-shadow:0 0 8px currentColor;transform:translateX(-50%)}
+#compass{width:100%;height:205px;display:block}
+.viewGrid{display:grid;grid-template-columns:1fr 1fr;gap:7px}.viewItem{height:80px;border:1px solid #294b63;border-radius:5px;background:#08141e;display:flex;align-items:end;justify-content:center;padding:6px;color:#9fb9cb;font-size:11px}.viewItem.active{border-color:#18a8ff;box-shadow:inset 0 0 0 1px #18a8ff55}
+.bottomCharts{display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:10px;margin-top:10px}.chartCard{padding:10px}.chartCard h3{margin-bottom:4px}.chart{width:100%;height:170px;display:block;background:#08131d;border-radius:5px}
+.logCard{grid-column:1/-1}.logHead{display:flex;justify-content:space-between;align-items:center}.log{height:120px;background:#07121a;border:1px solid #122a3c;border-radius:5px;padding:8px;overflow:auto;white-space:pre-wrap;font:12px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;color:#9cb5c8}
+.footer{height:38px;border-top:1px solid #16364d;display:flex;align-items:center;justify-content:space-between;padding:0 16px;color:#7798ae;font-size:12px}
+.badge{display:inline-flex;align-items:center;gap:5px}
+@media(max-width:1250px){.main{grid-template-columns:255px 1fr}.right{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr 1fr}.sceneCard{min-height:520px}#glCanvas{height:520px}.bottomCharts{grid-template-columns:1fr}.topStatus{display:none}}
+@media(max-width:850px){.main{grid-template-columns:1fr}.left,.right{grid-column:auto}.right{display:flex}.nav{display:none}.brand{min-width:0;flex:1}.sceneCard{min-height:430px}#glCanvas{height:430px}.metrics{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
-<body><div class="wrap">
-<h1>monkeysStab</h1><div class="sub">Optical Flow + TF-Luna + ArduPilot EKF3</div>
-<div class="grid">
-<div>
-<div class="card">
-<h3>Запуск</h3>
-<div class="status"><span id="dot" class="dot off"></span><b id="runState">Остановлено</b></div>
-<button class="primary" onclick="start()">ЗАПУСТИТЬ ДЛЯ ПОЛЁТА</button>
-<button class="danger" onclick="stop()">ОСТАНОВИТЬ</button>
-<button class="soft" onclick="zero()">НОВАЯ ТОЧКА 0</button>
-<div class="small">Запуск runtime сам по себе не ARM-ит FC и не переключает режим.</div>
+<body>
+<div class="topbar">
+ <div class="brand"><div class="logo"></div><div><b>monkeysStab</b><small>UAV Control & Visualizer</small></div></div>
+ <div class="nav">
+  <button class="active">⌂ ПОЛЁТ</button><button>⚙ НАСТРОЙКИ</button><button>⌁ ТЕЛЕМЕТРИЯ</button><button>▤ ЖУРНАЛ</button><button>⚙ СИСТЕМА</button>
+ </div>
+ <div class="topStatus"><span><i id="linkDot" class="okdot baddot"></i>СВЯЗЬ: <b id="linkText">НЕТ</b></span><span id="clock">--:--:--</span></div>
 </div>
-<div class="card" style="margin-top:16px">
-<h3>Полётный контроллер</h3>
-<div class="status"><span id="fcDot" class="dot off"></span><b id="fcState">FC: нет связи</b></div>
-<div style="margin-bottom:8px"><b>Режим: <span id="fcMode">—</span></b></div>
-<button class="primary" onclick="armFc()">ARM</button>
-<button class="danger" onclick="disarmFc()">DISARM</button>
-<div style="margin-top:8px">
-<button class="soft" onclick="setMode('stabilize','Stabilize')">STABILIZE</button>
-<button class="soft" onclick="setMode('poshold','PosHold')">POSHOLD</button>
-<button class="soft" onclick="setMode('loiter','Loiter')">LOITER</button>
-</div>
-<div id="fcMsg" class="small">Команды подтверждаются по HEARTBEAT FC.</div>
-</div>
-<div class="card" style="margin-top:16px">
-<h3>Стартовые параметры</h3>
-<label>focal_scale</label><input id="focal" type="number" min=".5" max="2" step=".001">
-<label>Feature ROI (x0 / y0 / x1 / y1)</label>
-<div class="row"><input id="r0" type="number" step=".01"><input id="r1" type="number" step=".01"><input id="r2" type="number" step=".01"><input id="r3" type="number" step=".01"></div>
-<label>Максимум точек</label><input id="features" type="number" min="100" max="1000" step="10">
-<button class="soft" onclick="saveConfig()">СОХРАНИТЬ</button>
-<div id="saveMsg" class="small"></div>
-</div>
-<div class="card" style="margin-top:16px">
-<h3>Текущая геометрия</h3><pre id="geometry" style="height:120px"></pre>
-<h3>Профиль FC</h3><pre id="profile" style="height:150px"></pre>
-</div>
-</div>
-<div>
-<div class="card">
-<div class="metrics">
-<div class="metric"><span>X</span><b id="mx">—</b></div>
-<div class="metric"><span>Y</span><b id="my">—</b></div>
-<div class="metric"><span>Z</span><b id="mz">—</b></div>
-<div class="metric"><span>TF-Luna</span><b id="mr">—</b></div>
-<div class="metric"><span>Flow quality</span><b id="mq">—</b></div>
-</div>
-<canvas id="plot" width="1000" height="650"></canvas>
-<div class="visualRow">
-  <div>
-    <h3>3D ориентация БПЛА</h3>
-    <canvas id="drone3d" width="900" height="500"></canvas>
+
+<div class="main">
+ <div class="col left">
+  <div class="card">
+   <h3>Полётный контроллер</h3>
+   <div class="fcstate"><i id="fcDotBig" class="okdot baddot"></i><span id="fcState">НЕТ СВЯЗИ</span></div>
+   <div class="modeLine">Режим: <b id="fcMode">—</b></div>
+   <div class="btnrow"><button class="btn green" onclick="armFc()">🔒 ARM</button><button class="btn red" onclick="disarmFc()">🔒 DISARM</button></div>
+   <div class="btnrow3">
+    <button id="mStab" class="btn" onclick="setMode('stabilize','Stabilize')">STABILIZE</button>
+    <button id="mPos" class="btn" onclick="setMode('poshold','PosHold')">POSHOLD</button>
+    <button id="mLoi" class="btn" onclick="setMode('loiter','Loiter')">LOITER</button>
+   </div>
+   <div id="fcMsg" style="margin-top:8px;color:#7798ae;font-size:11px">Команды подтверждаются FC.</div>
   </div>
-  <div>
-    <h3>Инклинометр</h3>
-    <div class="inclinometers">
-      <div class="gaugeWrap"><b>ROLL</b><canvas id="gRoll" class="gauge" width="320" height="120"></canvas></div>
-      <div class="gaugeWrap"><b>PITCH</b><canvas id="gPitch" class="gauge" width="320" height="120"></canvas></div>
-      <div class="gaugeWrap"><b>YAW</b><canvas id="gYaw" class="gauge" width="320" height="120"></canvas></div>
-    </div>
+
+  <div class="card">
+   <h3>Стартовые параметры</h3>
+   <div class="field"><span>Focal scale</span><input id="focal" type="number" min=".5" max="2" step=".001"></div>
+   <div class="field"><span>ROI x0</span><input id="r0" type="number" step=".01"></div>
+   <div class="field"><span>ROI y0</span><input id="r1" type="number" step=".01"></div>
+   <div class="field"><span>ROI x1</span><input id="r2" type="number" step=".01"></div>
+   <div class="field"><span>ROI y1</span><input id="r3" type="number" step=".01"></div>
+   <div class="field"><span>Feature points</span><input id="features" type="number" min="100" max="1000" step="10"></div>
+   <button class="btn" style="width:100%" onclick="saveConfig()">СОХРАНИТЬ ПАРАМЕТРЫ</button>
+   <div id="saveMsg" style="font-size:11px;color:#7798ae;margin-top:5px"></div>
+   <button class="startBig" onclick="start()">▶ ЗАПУСТИТЬ СИСТЕМУ</button>
+   <button class="stopBig" onclick="stop()">■ ОСТАНОВИТЬ</button>
   </div>
+
+  <div class="card">
+   <h3>Текущая геометрия (мм)</h3>
+   <div id="geomKv" class="kv"></div>
+  </div>
+  <div class="card">
+   <h3>Профиль FC (EKF3)</h3>
+   <div id="profileKv" class="kv"></div>
+  </div>
+ </div>
+
+ <div class="col center">
+  <div class="card sceneCard">
+   <div class="sceneTitle">3D — Траектория и ориентация</div>
+   <canvas id="glCanvas"></canvas>
+   <div class="sceneControls">
+    <label><input id="showTrail" type="checkbox" checked> Траектория</label>
+    <label><input id="showGrid" type="checkbox" checked> Сетка</label>
+    <label><input id="showAxes" type="checkbox" checked> Оси X/Y/Z</label>
+    <label><input id="followCam" type="checkbox"> След камеры</label>
+   </div>
+   <div class="sceneLegend"><button class="miniBtn" onclick="zero()">⟳ HOME = текущая точка</button><button class="miniBtn" onclick="resetView()">⌂ Сброс вида</button></div>
+   <div class="telemetryStrip"><span id="sceneXYZ">X 0.000 · Y 0.000 · Z 0.000 m</span></div>
+  </div>
+
+  <div class="metrics">
+   <div class="metric"><span>X</span><b id="mx">—</b></div>
+   <div class="metric"><span>Y</span><b id="my">—</b></div>
+   <div class="metric"><span>Z</span><b id="mz">—</b></div>
+   <div class="metric"><span>TF-Luna</span><b id="mr">—</b></div>
+   <div class="metric"><span>Flow quality</span><b id="mq">—</b></div>
+  </div>
+
+  <div class="bottomCharts">
+   <div class="card chartCard"><h3>X / Y / Z (м)</h3><canvas id="xyzChart" class="chart"></canvas></div>
+   <div class="card chartCard"><h3>Скорость (м/с)</h3><canvas id="speedChart" class="chart"></canvas></div>
+   <div class="card chartCard"><h3>TF-Luna (м)</h3><canvas id="rangeChart" class="chart"></canvas></div>
+   <div class="card logCard">
+    <div class="logHead"><h3>Журнал</h3><button class="miniBtn" onclick="document.getElementById('log').textContent=''">Очистить окно</button></div>
+    <div id="log" class="log"></div>
+   </div>
+  </div>
+ </div>
+
+ <div class="col right">
+  <div class="card gaugeBox">
+   <h3>Инклинометр</h3>
+   <div class="gLine"><span>ROLL</span><div class="bar"><i id="rollNeedle" class="needle"></i></div><strong id="roll">—</strong></div>
+   <div class="gLine"><span>PITCH</span><div class="bar"><i id="pitchNeedle" class="needle"></i></div><strong id="pitch">—</strong></div>
+   <div class="gLine"><span>YAW</span><div class="bar"><i id="yawNeedle" class="needle" style="background:#1ca6ff"></i></div><strong id="yaw">—</strong></div>
+  </div>
+  <div class="card"><h3>Компас (Yaw)</h3><canvas id="compass" width="240" height="205"></canvas></div>
+  <div class="card">
+   <h3>Виды модели</h3>
+   <div class="viewGrid">
+    <div class="viewItem active" onclick="setView('iso',this)">Изометрия</div>
+    <div class="viewItem" onclick="setView('side',this)">Сбоку</div>
+    <div class="viewItem" onclick="setView('front',this)">Спереди</div>
+    <div class="viewItem" onclick="setView('top',this)">Сверху</div>
+   </div>
+  </div>
+  <div class="card">
+   <h3>Состояние</h3>
+   <div class="kv">
+    <span>Runtime</span><span id="runState">Остановлен</span>
+    <span>FC</span><span id="arm">—</span>
+    <span>Inliers</span><span id="inl">—</span>
+    <span>Frame</span><span id="frame">—</span>
+    <span>EKF</span><span id="ekf">—</span>
+   </div>
+  </div>
+ </div>
 </div>
-<div class="metrics" style="margin-top:10px">
-<div class="metric"><span>Roll</span><b id="roll">—</b></div>
-<div class="metric"><span>Pitch</span><b id="pitch">—</b></div>
-<div class="metric"><span>Yaw</span><b id="yaw">—</b></div>
-<div class="metric"><span>Inliers</span><b id="inl">—</b></div>
-<div class="metric"><span>FC</span><b id="arm">—</b></div>
+
+<div class="footer">
+ <div>● &nbsp; monkeysStab Web UI &nbsp; | &nbsp; Raspberry Pi 5</div>
+ <div>MAVLink router: <b id="routerStatus" style="color:#16d979">OK</b> &nbsp; | &nbsp; Mission Planner: UDP 14550 &nbsp; | &nbsp; Runtime: <b id="footerRuntime">остановлен</b></div>
 </div>
-</div>
-<div class="card" style="margin-top:16px"><h3>Журнал</h3><pre id="log"></pre></div>
-</div>
-</div>
-</div>
+
 <script>
+const $=id=>document.getElementById(id);
+let latest=null,fcLatest=null;
+let viewMode='iso',viewYaw=.75,viewPitch=.65,viewDist=6.4;
+let drag=false,lastX=0,lastY=0;
+
 async function api(path,opt){let r=await fetch(path,opt);let j=await r.json();if(!r.ok)throw new Error(j.error||r.statusText);return j}
-function fmt(v,d=0){return v==null?'—':Number(v).toFixed(d)}
-async function loadConfig(){let j=await api('/api/config'); let c=j.runtime;
-focal.value=c.focal_scale; [r0.value,r1.value,r2.value,r3.value]=c.feature_roi; features.value=c.max_features;
-geometry.textContent=JSON.stringify(j.geometry,null,2); profile.textContent=JSON.stringify(j.fc_profile.params,null,2)}
-async function saveConfig(){try{let body={focal_scale:+focal.value,feature_roi:[+r0.value,+r1.value,+r2.value,+r3.value],max_features:+features.value,local_gui:true};
-await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});saveMsg.textContent='Сохранено';}catch(e){saveMsg.textContent='Ошибка: '+e.message}}
+function fmt(v,d=1){return v==null||!Number.isFinite(Number(v))?'—':Number(v).toFixed(d)}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+function setActiveMode(mode){
+ ['mStab','mPos','mLoi'].forEach(id=>$(id).classList.remove('blue'));
+ if(mode==='Stabilize')$('mStab').classList.add('blue');
+ if(mode==='PosHold')$('mPos').classList.add('blue');
+ if(mode==='Loiter')$('mLoi').classList.add('blue');
+}
+async function loadConfig(){
+ let j=await api('/api/config'),c=j.runtime;
+ $('focal').value=c.focal_scale;[$('r0').value,$('r1').value,$('r2').value,$('r3').value]=c.feature_roi;$('features').value=c.max_features;
+ let g=j.geometry||{},gv=[];
+ if(g.camera){gv.push(['FLOW_POS_X',g.camera.x*1000],['FLOW_POS_Y',g.camera.y*1000],['FLOW_POS_Z',g.camera.z*1000])}
+ if(g.rangefinder){gv.push(['RNGFND1_POS_X',g.rangefinder.x*1000],['RNGFND1_POS_Y',g.rangefinder.y*1000],['RNGFND1_POS_Z',g.rangefinder.z*1000])}
+ $('geomKv').innerHTML=gv.map(x=>'<span>'+x[0]+'</span><span>'+fmt(x[1],1)+'</span>').join('');
+ let p=(j.fc_profile||{}).params||{},keys=['EK3_SRC1_POSXY','EK3_SRC1_VELXY','EK3_SRC1_POSZ','EK3_SRC1_YAW','FLOW_TYPE','FLOW_FXSCALER','FLOW_FYSCALER','EK3_FLOW_DELAY'];
+ $('profileKv').innerHTML=keys.map(k=>'<span>'+k+'</span><span>'+(p[k]??'—')+'</span>').join('');
+}
+async function saveConfig(){
+ try{
+  let body={focal_scale:+$('focal').value,feature_roi:[+$('r0').value,+$('r1').value,+$('r2').value,+$('r3').value],max_features:+$('features').value,local_gui:true};
+  await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  $('saveMsg').textContent='Сохранено';
+ }catch(e){$('saveMsg').textContent='Ошибка: '+e.message}
+}
 async function start(){try{await api('/api/start',{method:'POST'});}catch(e){alert(e.message)}}
 async function stop(){try{await api('/api/stop',{method:'POST'});}catch(e){alert(e.message)}}
 async function zero(){try{await api('/api/zero',{method:'POST'});}catch(e){alert(e.message)}}
-async function armFc(){
- if(!confirm('ARM: разрешить запуск моторов? Аппарат должен быть подготовлен к безопасному запуску.'))return;
- try{let j=await api('/api/fc/arm',{method:'POST'});fcMsg.textContent='ARM подтверждён FC';showFc(j)}catch(e){fcMsg.textContent='ARM отклонён: '+e.message;alert(e.message)}
-}
-async function disarmFc(){
- if(!confirm('DISARM: отключить моторы? В полёте обычный DISARM может быть запрещён ArduPilot.'))return;
- try{let j=await api('/api/fc/disarm',{method:'POST'});fcMsg.textContent='DISARM подтверждён FC';showFc(j)}catch(e){fcMsg.textContent='DISARM отклонён: '+e.message;alert(e.message)}
-}
-async function setMode(id,name){
- if(!confirm('Переключить режим на '+name+'?'))return;
- try{let j=await api('/api/fc/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:id})});fcMsg.textContent='Режим '+name+' подтверждён FC';showFc(j)}catch(e){fcMsg.textContent='Смена режима отклонена: '+e.message;alert(e.message)}
-}
+async function armFc(){if(!confirm('ARM: разрешить запуск моторов?'))return;try{showFc(await api('/api/fc/arm',{method:'POST'}))}catch(e){alert(e.message)}}
+async function disarmFc(){if(!confirm('DISARM: отключить моторы?'))return;try{showFc(await api('/api/fc/disarm',{method:'POST'}))}catch(e){alert(e.message)}}
+async function setMode(id,name){if(!confirm('Переключить режим на '+name+'?'))return;try{showFc(await api('/api/fc/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:id})}))}catch(e){alert(e.message)}}
 function showFc(j){
- fcDot.className='dot on';
- fcState.textContent=j.armed?'ARMED':'DISARMED';
- fcState.className=j.armed?'bad':'good';
- fcMode.textContent=j.mode+(j.mode==='Other'?' ('+j.custom_mode+')':'');
+ fcLatest=j;$('linkDot').classList.remove('baddot');$('linkText').textContent='OK';$('fcDotBig').classList.remove('baddot');
+ $('fcState').textContent=j.armed?'ARMED':'DISARMED';$('fcState').style.color=j.armed?'#ff5967':'#e9f3fb';$('fcMode').textContent=j.mode;$('arm').textContent=j.armed?'ARMED':'DISARMED';setActiveMode(j.mode);
 }
-async function refreshFc(){
- try{let j=await api('/api/fc');showFc(j)}
- catch(e){fcDot.className='dot off';fcState.textContent='FC: нет связи';fcState.className='bad';fcMode.textContent='—'}
-}
-function draw(t){
- let c=plot,ctx=c.getContext('2d'),w=c.width,h=c.height;ctx.clearRect(0,0,w,h);
- ctx.fillStyle='#0c1115';ctx.fillRect(0,0,w,h);
- const cx=w/2,cy=h/2,scale=Math.min(w,h)/(2*550);
- ctx.strokeStyle='#26343d';ctx.lineWidth=1;
- for(let mm=-500;mm<=500;mm+=100){let x=cx+mm*scale,y=cy-mm*scale;ctx.beginPath();ctx.moveTo(x,40);ctx.lineTo(x,h-40);ctx.stroke();ctx.beginPath();ctx.moveTo(40,y);ctx.lineTo(w-40,y);ctx.stroke()}
- ctx.strokeStyle='#607582';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(cx,35);ctx.lineTo(cx,h-35);ctx.stroke();ctx.beginPath();ctx.moveTo(35,cy);ctx.lineTo(w-35,cy);ctx.stroke();
- ctx.fillStyle='#9fb0bd';ctx.font='16px system-ui';ctx.fillText('N +X',cx+8,55);ctx.fillText('E +Y',w-85,cy-10);ctx.fillText('фиксированный масштаб ±500 мм',45,h-18);
- if(t.trail&&t.trail.length){ctx.strokeStyle='#4da3ff';ctx.lineWidth=3;ctx.beginPath();t.trail.forEach((p,i)=>{let x=cx+p.y_mm*scale,y=cy-p.x_mm*scale;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)});ctx.stroke();
- let p=t.trail[t.trail.length-1],x=cx+p.y_mm*scale,y=cy-p.x_mm*scale;ctx.fillStyle='#56d88b';ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();}
+async function refreshFc(){try{showFc(await api('/api/fc'))}catch(e){$('linkDot').classList.add('baddot');$('linkText').textContent='НЕТ';$('fcDotBig').classList.add('baddot');$('fcState').textContent='НЕТ СВЯЗИ';$('fcMode').textContent='—'}}
+
+function updateHud(t){
+ latest=t;$('runState').textContent=t.running?'Работает':'Остановлен';$('footerRuntime').textContent=t.running?'работает':'остановлен';$('footerRuntime').style.color=t.running?'#15d876':'#8aa5b8';
+ $('mx').textContent=fmt(t.x_mm,0)+' мм';$('my').textContent=fmt(t.y_mm,0)+' мм';$('mz').textContent=fmt(t.z_mm,0)+' мм';$('mr').textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';$('mq').textContent=t.quality??'—';
+ $('roll').textContent=fmt(t.roll_deg,1)+'°';$('pitch').textContent=fmt(t.pitch_deg,1)+'°';$('yaw').textContent=fmt(t.yaw_deg,1)+'°';
+ $('inl').textContent=(t.inliers??'—')+'/'+(t.tracked??'—');$('frame').textContent=t.frame??'—';$('ekf').textContent=t.ekf_valid?'VALID':'NO DATA';
+ $('sceneXYZ').textContent='X '+fmt((t.x_mm||0)/1000,3)+' · Y '+fmt((t.y_mm||0)/1000,3)+' · Z '+fmt((t.z_mm||0)/1000,3)+' m';
+ $('rollNeedle').style.left=(50+clamp(t.roll_deg||0,-45,45)/45*50)+'%';
+ $('pitchNeedle').style.left=(50+clamp(t.pitch_deg||0,-45,45)/45*50)+'%';
+ let y=((t.yaw_deg||0)+180)%360-180;$('yawNeedle').style.left=(50+y/180*50)+'%';
+ drawCompass(t.yaw_deg||0);drawHistory(t.history||[]);renderScene();
 }
 
-function rot3(p,roll,pitch,yaw){
- const cr=Math.cos(roll),sr=Math.sin(roll),cp=Math.cos(pitch),sp=Math.sin(pitch),cy=Math.cos(yaw),sy=Math.sin(yaw);
- let x=p[0],y=p[1],z=p[2];
- let x1=x, y1=cr*y-sr*z, z1=sr*y+cr*z;
- let x2=cp*x1+sp*z1, y2=y1, z2=-sp*x1+cp*z1;
- return [cy*x2-sy*y2, sy*x2+cy*y2, z2];
+function drawCompass(deg){
+ let c=$('compass'),ctx=c.getContext('2d'),w=c.width,h=c.height,cx=w/2,cy=h/2,R=82;ctx.clearRect(0,0,w,h);
+ ctx.strokeStyle='#294a62';ctx.lineWidth=3;ctx.beginPath();ctx.arc(cx,cy,R,0,Math.PI*2);ctx.stroke();
+ ctx.font='12px system-ui';ctx.fillStyle='#cad9e4';ctx.textAlign='center';ctx.textBaseline='middle';
+ [['N',0],['E',90],['S',180],['W',270]].forEach(([q,d])=>{let a=(d-90)*Math.PI/180;ctx.fillText(q,cx+Math.cos(a)*(R-13),cy+Math.sin(a)*(R-13))});
+ for(let d=0;d<360;d+=10){let a=(d-90)*Math.PI/180,r1=R-4,r2=d%30===0?R-13:R-9;ctx.strokeStyle='#557188';ctx.lineWidth=d%30===0?2:1;ctx.beginPath();ctx.moveTo(cx+Math.cos(a)*r1,cy+Math.sin(a)*r1);ctx.lineTo(cx+Math.cos(a)*r2,cy+Math.sin(a)*r2);ctx.stroke()}
+ let a=(deg-90)*Math.PI/180;ctx.fillStyle='#1ca8ff';ctx.beginPath();ctx.moveTo(cx+Math.cos(a)*(R-24),cy+Math.sin(a)*(R-24));ctx.lineTo(cx+Math.cos(a+2.55)*20,cy+Math.sin(a+2.55)*20);ctx.lineTo(cx+Math.cos(a-2.55)*20,cy+Math.sin(a-2.55)*20);ctx.closePath();ctx.fill();
+ ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(cx,cy,5,0,Math.PI*2);ctx.fill();ctx.font='bold 22px system-ui';ctx.fillText(fmt(deg,0)+'°',cx,cy+42);
 }
-function project3(p,w,h){
- const d=5.5, s=Math.min(w,h)*0.23, z=d-p[2];
- return [w/2 + p[1]*s/z, h/2 - p[0]*s/z];
+function chartBase(c,ctx){
+ let w=c.width=c.clientWidth*devicePixelRatio,h=c.height=c.clientHeight*devicePixelRatio;ctx.scale(devicePixelRatio,devicePixelRatio);w=c.clientWidth;h=c.clientHeight;
+ ctx.fillStyle='#08131d';ctx.fillRect(0,0,w,h);ctx.strokeStyle='#183246';ctx.lineWidth=1;
+ for(let i=1;i<5;i++){let y=i*h/5;ctx.beginPath();ctx.moveTo(32,y);ctx.lineTo(w-8,y);ctx.stroke()}
+ for(let i=1;i<6;i++){let x=32+i*(w-40)/6;ctx.beginPath();ctx.moveTo(x,10);ctx.lineTo(x,h-22);ctx.stroke()}
+ return [w,h];
 }
-function drawDrone(t){
- let c=drone3d,ctx=c.getContext('2d'),w=c.width,h=c.height;
- ctx.clearRect(0,0,w,h);ctx.fillStyle='#0c1115';ctx.fillRect(0,0,w,h);
- let r=(t.roll_deg||0)*Math.PI/180,p=(t.pitch_deg||0)*Math.PI/180,y=(t.yaw_deg||0)*Math.PI/180;
- ctx.strokeStyle='#26343d';ctx.lineWidth=1;
- for(let i=-5;i<=5;i++){let a=project3([i*.35,-1.8,-1.1],w,h),b=project3([i*.35,1.8,-1.1],w,h);ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();
- let c1=project3([-1.8,i*.35,-1.1],w,h),d1=project3([1.8,i*.35,-1.1],w,h);ctx.beginPath();ctx.moveTo(...c1);ctx.lineTo(...d1);ctx.stroke();}
- const arm=1.25,z=0;
- const pts={f:[arm,0,z],b:[-arm,0,z],l:[0,-arm,z],rr:[0,arm,z],c:[0,0,z]};
- function rp(v){return project3(rot3(v,r,p,y),w,h)}
- function line(a,b,color,width){let A=rp(a),B=rp(b);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();ctx.moveTo(...A);ctx.lineTo(...B);ctx.stroke()}
- line([arm,0,0],[-arm,0,0],'#4da3ff',9);line([0,-arm,0],[0,arm,0],'#8ea1ad',9);
- for(const q of [[arm,0,0],[-arm,0,0],[0,-arm,0],[0,arm,0]]){let P=rp(q);ctx.fillStyle='#56d88b';ctx.beginPath();ctx.arc(P[0],P[1],18,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#dbe7ee';ctx.lineWidth=3;ctx.beginPath();ctx.arc(P[0],P[1],28,0,Math.PI*2);ctx.stroke();}
- let C=rp([0,0,0]);ctx.fillStyle='#dbe7ee';ctx.beginPath();ctx.arc(C[0],C[1],16,0,Math.PI*2);ctx.fill();
- let F=rp([1.55,0,0]);ctx.fillStyle='#ffb14d';ctx.beginPath();ctx.moveTo(F[0],F[1]);let f1=rp([1.15,-.18,0]),f2=rp([1.15,.18,0]);ctx.lineTo(f1[0],f1[1]);ctx.lineTo(f2[0],f2[1]);ctx.closePath();ctx.fill();
- ctx.fillStyle='#9fb0bd';ctx.font='17px system-ui';ctx.fillText('нос',Math.min(w-55,F[0]+10),Math.max(24,F[1]-6));
- ctx.fillText('roll '+fmt(t.roll_deg,1)+'°   pitch '+fmt(t.pitch_deg,1)+'°   yaw '+fmt(t.yaw_deg,1)+'°',20,28);
+function plotSeries(ctx,data,key,min,max,color,w,h){
+ let vals=data.map(d=>d[key]).filter(v=>v!=null&&Number.isFinite(v));if(!vals.length)return;
+ if(min==null){min=Math.min(...vals);max=Math.max(...vals);if(Math.abs(max-min)<1e-6){min-=1;max+=1}else{let p=(max-min)*.15;min-=p;max+=p}}
+ ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();let started=false;
+ data.forEach((d,i)=>{let v=d[key];if(v==null||!Number.isFinite(v))return;let x=32+i*(w-44)/Math.max(1,data.length-1),y=10+(max-v)/(max-min)*(h-34);if(!started){ctx.moveTo(x,y);started=true}else ctx.lineTo(x,y)});ctx.stroke();
 }
-function drawGauge(id,value,range,mode){
- let c=document.getElementById(id),ctx=c.getContext('2d'),w=c.width,h=c.height;
- ctx.clearRect(0,0,w,h);ctx.fillStyle='#0c1115';ctx.fillRect(0,0,w,h);
- let cx=w/2,cy=h*.70,R=Math.min(w*.42,h*.58);
- ctx.strokeStyle='#33434e';ctx.lineWidth=10;ctx.beginPath();ctx.arc(cx,cy,R,Math.PI,2*Math.PI);ctx.stroke();
- for(let i=0;i<=10;i++){let a=Math.PI+i*Math.PI/10,x1=cx+Math.cos(a)*(R-8),y1=cy+Math.sin(a)*(R-8),x2=cx+Math.cos(a)*(R+7),y2=cy+Math.sin(a)*(R+7);ctx.strokeStyle='#6c7f8c';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();}
- let v=Number(value||0),norm;
- if(mode==='yaw'){v=((v+180)%360+360)%360-180;norm=(v+180)/360;} else {v=Math.max(-range,Math.min(range,v));norm=(v+range)/(2*range);}
- let a=Math.PI+norm*Math.PI;
- ctx.strokeStyle='#56d88b';ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.cos(a)*(R-10),cy+Math.sin(a)*(R-10));ctx.stroke();
- ctx.fillStyle='#eef4f8';ctx.beginPath();ctx.arc(cx,cy,6,0,Math.PI*2);ctx.fill();
- ctx.font='bold 20px system-ui';ctx.textAlign='center';ctx.fillText(fmt(value,1)+'°',cx,cy+30);
- ctx.font='12px system-ui';ctx.fillStyle='#8fa1ae';ctx.fillText(mode==='yaw'?'−180°                             +180°':'−'+range+'°                               +'+range+'°',cx,18);
+function drawHistory(h){
+ let c=$('xyzChart'),ctx=c.getContext('2d'),[w,hh]=chartBase(c,ctx);let vals=[];h.forEach(d=>['x','y','z'].forEach(k=>{if(d[k]!=null)vals.push(d[k])}));let m=Math.max(.05,...vals.map(Math.abs));plotSeries(ctx,h,'x',-m,m,'#ff4352',w,hh);plotSeries(ctx,h,'y',-m,m,'#16d878',w,hh);plotSeries(ctx,h,'z',-m,m,'#218cff',w,hh);
+ c=$('speedChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);plotSeries(ctx,h,'speed',0,Math.max(.2,...h.map(d=>d.speed||0))*1.15,'#ffd11f',w,hh);
+ c=$('rangeChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);let rv=h.map(d=>d.range).filter(v=>v!=null),rmax=Math.max(.5,...rv)*1.2;plotSeries(ctx,h,'range',0,rmax,'#c98cff',w,hh);
 }
-async function refresh(){try{
- let t=await api('/api/telemetry'); dot.className='dot '+(t.running?'on':'off');runState.textContent=t.running?'Работает':'Остановлено';
- mx.textContent=fmt(t.x_mm,0)+' мм';my.textContent=fmt(t.y_mm,0)+' мм';mz.textContent=fmt(t.z_mm,0)+' мм';mr.textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';mq.textContent=t.quality==null?'—':t.quality;
- roll.textContent=fmt(t.roll_deg,1)+'°';pitch.textContent=fmt(t.pitch_deg,1)+'°';yaw.textContent=fmt(t.yaw_deg,1)+'°';inl.textContent=(t.inliers??'—')+'/'+(t.tracked??'—');arm.textContent=t.armed?'ARMED':'DISARMED';draw(t);drawDrone(t);drawGauge('gRoll',t.roll_deg,45,'angle');drawGauge('gPitch',t.pitch_deg,45,'angle');drawGauge('gYaw',t.yaw_deg,180,'yaw');
- let l=await api('/api/log');log.textContent=l.text||'';log.scrollTop=log.scrollHeight;
- }catch(e){}}
-loadConfig();refresh();refreshFc();setInterval(refresh,700);setInterval(refreshFc,1800);
-</script></body></html>'''
+
+let gl,prog,bufPos,bufCol,locMvp,locPos,locCol;
+function m4mul(a,b){let o=new Float32Array(16);for(let c=0;c<4;c++)for(let r=0;r<4;r++){let v=0;for(let k=0;k<4;k++)v+=a[k*4+r]*b[c*4+k];o[c*4+r]=v}return o}
+function perspective(fov,asp,n,f){let t=1/Math.tan(fov/2);return new Float32Array([t/asp,0,0,0,0,t,0,0,0,0,(f+n)/(n-f),-1,0,0,2*f*n/(n-f),0])}
+function lookAt(e,t,u){let z=norm(sub(e,t)),x=norm(cross(u,z)),y=cross(z,x);return new Float32Array([x[0],y[0],z[0],0,x[1],y[1],z[1],0,x[2],y[2],z[2],0,-dot(x,e),-dot(y,e),-dot(z,e),1])}
+const sub=(a,b)=>a.map((v,i)=>v-b[i]),dot=(a,b)=>a.reduce((s,v,i)=>s+v*b[i],0),cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]],norm=a=>{let l=Math.hypot(...a)||1;return a.map(v=>v/l)}
+function initGL(){
+ let c=$('glCanvas');gl=c.getContext('webgl',{antialias:true,alpha:false});if(!gl)return;
+ let vs=gl.createShader(gl.VERTEX_SHADER);gl.shaderSource(vs,'attribute vec3 p;attribute vec3 c;uniform mat4 m;varying vec3 v;void main(){gl_Position=m*vec4(p,1.0);v=c;gl_PointSize=8.0;}');gl.compileShader(vs);
+ let fs=gl.createShader(gl.FRAGMENT_SHADER);gl.shaderSource(fs,'precision mediump float;varying vec3 v;void main(){gl_FragColor=vec4(v,1.0);}');gl.compileShader(fs);
+ prog=gl.createProgram();gl.attachShader(prog,vs);gl.attachShader(prog,fs);gl.linkProgram(prog);gl.useProgram(prog);
+ locPos=gl.getAttribLocation(prog,'p');locCol=gl.getAttribLocation(prog,'c');locMvp=gl.getUniformLocation(prog,'m');bufPos=gl.createBuffer();bufCol=gl.createBuffer();
+ c.onmousedown=e=>{drag=true;lastX=e.clientX;lastY=e.clientY};window.onmouseup=()=>drag=false;window.onmousemove=e=>{if(!drag)return;viewYaw+=(e.clientX-lastX)*.008;viewPitch=clamp(viewPitch+(e.clientY-lastY)*.008,.1,1.45);lastX=e.clientX;lastY=e.clientY;renderScene()};
+ c.onwheel=e=>{e.preventDefault();viewDist=clamp(viewDist+e.deltaY*.005,3.5,11);renderScene()};
+}
+function addLine(P,C,a,b,col){P.push(...a,...b);C.push(...col,...col)}
+function addCircle(P,C,center,r,col,plane='xy'){let n=28;for(let i=0;i<n;i++){let a=i/n*Math.PI*2,b=(i+1)/n*Math.PI*2,A=[...center],B=[...center];if(plane==='xy'){A[0]+=Math.cos(a)*r;A[1]+=Math.sin(a)*r;B[0]+=Math.cos(b)*r;B[1]+=Math.sin(b)*r}else{A[0]+=Math.cos(a)*r;A[2]+=Math.sin(a)*r;B[0]+=Math.cos(b)*r;B[2]+=Math.sin(b)*r}addLine(P,C,A,B,col)}}
+function rotLocal(p,r,pit,y){let cr=Math.cos(r),sr=Math.sin(r),cp=Math.cos(pit),sp=Math.sin(pit),cy=Math.cos(y),sy=Math.sin(y);let [x,Y,z]=p;let y1=cr*Y-sr*z,z1=sr*Y+cr*z,x1=x;let x2=cp*x1+sp*z1,y2=y1,z2=-sp*x1+cp*z1;return [cy*x2-sy*y2,sy*x2+cy*y2,z2]}
+function renderScene(){
+ if(!gl)return;let c=$('glCanvas'),dpr=devicePixelRatio,w=Math.floor(c.clientWidth*dpr),h=Math.floor(c.clientHeight*dpr);if(c.width!==w||c.height!==h){c.width=w;c.height=h}gl.viewport(0,0,w,h);gl.clearColor(.025,.065,.095,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.enable(gl.DEPTH_TEST);
+ let P=[],C=[];
+ if($('showGrid').checked){for(let i=-10;i<=10;i++){let q=i*.25;addLine(P,C,[-2.5,q,0],[2.5,q,0],[.08,.23,.34]);addLine(P,C,[q,-2.5,0],[q,2.5,0],[.08,.23,.34])}}
+ if($('showAxes').checked){addLine(P,C,[0,0,0],[1.15,0,0],[1,.15,.15]);addLine(P,C,[0,0,0],[0,1.15,0],[.1,1,.25]);addLine(P,C,[0,0,0],[0,0,1.15],[.1,.45,1])}
+ addCircle(P,C,[0,0,.01],.08,[.1,1,.35]);
+ if(latest&&$('showTrail').checked&&(latest.trail||[]).length>1){let tr=latest.trail;for(let i=1;i<tr.length;i++){let a=tr[i-1],b=tr[i];addLine(P,C,[a.x_mm/1000,a.y_mm/1000,-(a.z_mm||0)/1000],[b.x_mm/1000,b.y_mm/1000,-(b.z_mm||0)/1000],[.05,.75,1])}}
+ let pos=latest?[(latest.x_mm||0)/1000,(latest.y_mm||0)/1000,-(latest.z_mm||0)/1000]:[0,0,.2],rr=(latest?.roll_deg||0)*Math.PI/180,pp=(latest?.pitch_deg||0)*Math.PI/180,yy=(latest?.yaw_deg||0)*Math.PI/180;
+ function wp(v){let q=rotLocal(v,rr,pp,yy);return[q[0]+pos[0],q[1]+pos[1],q[2]+pos[2]]}
+ let arm=.32;addLine(P,C,wp([arm,arm,0]),wp([-arm,-arm,0]),[.7,.78,.84]);addLine(P,C,wp([arm,-arm,0]),wp([-arm,arm,0]),[.7,.78,.84]);
+ [[arm,arm],[-arm,-arm],[arm,-arm],[-arm,arm]].forEach((xy,i)=>{let ctr=wp([xy[0],xy[1],.03]),n=30;for(let k=0;k<n;k++){let a=k/n*Math.PI*2,b=(k+1)/n*Math.PI*2,A=wp([xy[0]+Math.cos(a)*.17,xy[1]+Math.sin(a)*.17,.03]),B=wp([xy[0]+Math.cos(b)*.17,xy[1]+Math.sin(b)*.17,.03]);addLine(P,C,A,B,i<2?[.1,.9,.55]:[.25,.55,1])}});
+ let body=[[-.12,-.08,-.05],[.12,-.08,-.05],[.12,.08,-.05],[-.12,.08,-.05],[-.12,-.08,.07],[.12,-.08,.07],[.12,.08,.07],[-.12,.08,.07]],edges=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];edges.forEach(e=>addLine(P,C,wp(body[e[0]]),wp(body[e[1]]),[1,.45,.08]));addLine(P,C,wp([.1,0,.02]),wp([.48,0,.02]),[1,.1,.1]);
+ let a=viewYaw,p=viewPitch;if(viewMode==='top'){a=0;p=.05}else if(viewMode==='front'){a=Math.PI/2;p=.4}else if(viewMode==='side'){a=0;p=.4}
+ let eye=[Math.cos(a)*Math.cos(p)*viewDist,Math.sin(a)*Math.cos(p)*viewDist,Math.sin(p)*viewDist],target=$('followCam').checked?pos:[0,0,.25],V=lookAt(eye,target,[0,0,1]),Pr=perspective(.8,w/h,.05,40),M=m4mul(Pr,V);gl.uniformMatrix4fv(locMvp,false,M);
+ gl.bindBuffer(gl.ARRAY_BUFFER,bufPos);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(P),gl.DYNAMIC_DRAW);gl.enableVertexAttribArray(locPos);gl.vertexAttribPointer(locPos,3,gl.FLOAT,false,0,0);
+ gl.bindBuffer(gl.ARRAY_BUFFER,bufCol);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(C),gl.DYNAMIC_DRAW);gl.enableVertexAttribArray(locCol);gl.vertexAttribPointer(locCol,3,gl.FLOAT,false,0,0);gl.drawArrays(gl.LINES,0,P.length/3);
+}
+function setView(v,el){viewMode=v;document.querySelectorAll('.viewItem').forEach(x=>x.classList.remove('active'));el.classList.add('active');renderScene()}
+function resetView(){viewMode='iso';viewYaw=.75;viewPitch=.65;viewDist=6.4;renderScene()}
+
+async function refresh(){
+ try{let t=await api('/api/telemetry');updateHud(t);let l=await api('/api/log');$('log').textContent=l.text||'';$('log').scrollTop=$('log').scrollHeight}catch(e){}
+}
+setInterval(()=>{$('clock').textContent=new Date().toLocaleTimeString('ru-RU')},1000);
+loadConfig();initGL();refresh();refreshFc();setInterval(refresh,700);setInterval(refreshFc,1800);window.addEventListener('resize',()=>{renderScene();if(latest)drawHistory(latest.history||[])});
+</script>
+</body>
+</html>'''
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
