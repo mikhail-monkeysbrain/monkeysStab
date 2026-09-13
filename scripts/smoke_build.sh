@@ -4,17 +4,20 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 if [[ -z "${MAVLINK_ROOT:-}" ]]; then
-  for d in /usr/local/include/mavlink/v2.0 /usr/include/mavlink/v2.0; do
+  for d in "$ROOT/third_party/mavlink" /usr/local/include/mavlink/v2.0 /usr/include/mavlink/v2.0; do
     if [[ -f "$d/ardupilotmega/mavlink.h" ]]; then
       MAVLINK_ROOT="$d"
       break
     fi
   done
 fi
-MAVLINK_ROOT="${MAVLINK_ROOT:-/usr/local/include/mavlink/v2.0}"
+if [[ -z "${MAVLINK_ROOT:-}" ]]; then
+  bash "$ROOT/scripts/bootstrap_dependencies.sh"
+  MAVLINK_ROOT="$ROOT/third_party/mavlink"
+fi
 
 [[ -f "$MAVLINK_ROOT/ardupilotmega/mavlink.h" ]] || {
-  echo "ОШИБКА: MAVLink headers не найдены. Задайте MAVLINK_ROOT." >&2
+  echo "ОШИБКА: MAVLink headers не найдены: $MAVLINK_ROOT" >&2
   exit 2
 }
 
