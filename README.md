@@ -130,7 +130,7 @@ EK3_FLOW_DELAY = 0
 RNGFND1_TYPE = 10         # MAVLink DISTANCE_SENSOR
 RNGFND1_ORIENT = 25       # вниз
 RNGFND1_MIN = 0.10 m
-RNGFND1_MAX = 8.0 m
+RNGFND1_MAX = 7.0 m
 
 EK3_SRC1_POSXY = 0        # None
 EK3_SRC1_VELXY = 5        # OpticalFlow
