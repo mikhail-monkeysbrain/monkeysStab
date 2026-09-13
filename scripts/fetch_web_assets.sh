@@ -30,8 +30,10 @@ fetch "https://unpkg.com/three@0.169.0/build/three.module.js" "$ASSETS/three.mod
 THREE_RC=$?
 fetch "https://unpkg.com/three@0.169.0/examples/jsm/loaders/GLTFLoader.js" "$ASSETS/GLTFLoader.js"
 GLTF_RC=$?
+fetch "https://unpkg.com/three@0.169.0/examples/jsm/utils/BufferGeometryUtils.js" "$ASSETS/BufferGeometryUtils.js"
+BGU_RC=$?
 
-# GLTFLoader is published with a bare import from 'three'.  The monkeysStab
+# GLTFLoader is published with bare/relative imports that assume the npm
 # web server has no npm resolver, so make the loader fully self-contained.
 # Apply on every launch so an already cached file is repaired as well.
 if [[ -s "$ASSETS/GLTFLoader.js" ]]; then
@@ -47,7 +49,7 @@ PY
 fi
 set -e
 
-if [[ "$MODEL_RC" != 0 || "$VIEWER_RC" != 0 || "$THREE_RC" != 0 || "$GLTF_RC" != 0 ]]; then
+if [[ "$MODEL_RC" != 0 || "$VIEWER_RC" != 0 || "$THREE_RC" != 0 || "$GLTF_RC" != 0 || "$BGU_RC" != 0 ]]; then
   echo "ПРЕДУПРЕЖДЕНИЕ: расширенные 3D assets не загружены. Simple/Light режимы продолжат работать." >&2
   exit 0
 fi
