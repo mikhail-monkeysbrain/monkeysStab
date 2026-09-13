@@ -12,6 +12,11 @@ FC_TOOL=os.path.join(ROOT,"build","fc_param_tool")
 PROFILE_JSON=os.path.join(ROOT,"config","fc_profile.json")
 
 # Параметры, которые являются частью текущего production-контура monkeysStab.
+GEOMETRY_PARAMS=[
+    "FLOW_POS_X","FLOW_POS_Y","FLOW_POS_Z",
+    "RNGFND1_POS_X","RNGFND1_POS_Y","RNGFND1_POS_Z",
+]
+
 PARAMS=[
     "AHRS_EKF_TYPE","EK3_ENABLE",
     "FLOW_TYPE","FLOW_OPTIONS","FLOW_ORIENT_YAW","FLOW_FXSCALER","FLOW_FYSCALER",
@@ -238,6 +243,14 @@ class App(tk.Tk):
         args=self.base()+["set"]
         for p,v in d.items(): args += [p,f"{v:.6f}"]
         try:
+            # Защита геометрии: критический профиль не имеет права менять
+            # FLOW_POS_* и RNGFND1_POS_*. Читаем их до и после записи.
+            geom_before=self.parse(self.run(self.base()+["read"]+GEOMETRY_PARAMS,30))
+            missing_before=[p for p in GEOMETRY_PARAMS if p not in geom_before]
+            if missing_before:
+                raise RuntimeError("Не удалось прочитать геометрию перед записью: "+
+                                   ", ".join(missing_before))
+
             self.status.set("Записываю параметры и проверяю подтверждение FC...")
             self.update_idletasks()
             self.run(args,45)
@@ -248,6 +261,22 @@ class App(tk.Tk):
                 if p not in got or not math.isclose(got[p],v,rel_tol=0,abs_tol=max(1e-6,abs(v)*1e-5)):
                     bad.append(f"{p}: got={got.get(p)} expected={v}")
             if bad: raise RuntimeError("Не подтверждены:\n"+"\n".join(bad))
+
+            geom_after=self.parse(self.run(self.base()+["read"]+GEOMETRY_PARAMS,30))
+            geom_bad=[]
+            for p in GEOMETRY_PARAMS:
+                if p not in geom_after:
+                    geom_bad.append(f"{p}: не прочитан после записи")
+                    continue
+                v0=geom_before[p]; v1=geom_after[p]
+                if not math.isclose(v0,v1,rel_tol=0,abs_tol=1e-6):
+                    geom_bad.append(f"{p}: было {v0:g}, стало {v1:g}")
+            if geom_bad:
+                raise RuntimeError(
+                    "ОШИБКА БЕЗОПАСНОСТИ: геометрия датчиков изменилась:\n"+
+                    "\n".join(geom_bad)
+                )
+
             self.current.update(got); self.show(self.current)
             with open(PROFILE_JSON,"w",encoding="utf-8") as fh:
                 json.dump({
@@ -256,8 +285,12 @@ class App(tk.Tk):
                     "params":d
                 },fh,ensure_ascii=False,indent=2)
                 fh.write("\n")
-            self.status.set("ГОТОВО: параметры записаны, подтверждены FC и сохранены в config/fc_profile.json. Перезагрузите FC.")
-            messagebox.showinfo("Готово","Параметры записаны и подтверждены.\nПрофиль monkeysStab синхронизирован с FC.\nПеред тестом перезагрузите FC.")
+            self.status.set("ГОТОВО: профиль записан; геометрия датчиков проверена и не изменилась. Перезагрузите FC.")
+            messagebox.showinfo("Готово",
+                "Параметры записаны и подтверждены.\n"
+                "Геометрия FLOW_POS_* / RNGFND1_POS_* проверена: НЕ ИЗМЕНИЛАСЬ.\n"
+                "Профиль monkeysStab синхронизирован с FC.\n"
+                "Перед тестом перезагрузите FC.")
         except Exception as e:
             self.status.set("Ошибка записи.")
             messagebox.showerror("Ошибка записи",str(e))
