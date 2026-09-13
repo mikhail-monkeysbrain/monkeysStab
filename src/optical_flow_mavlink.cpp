@@ -77,6 +77,13 @@ void putGuiText(cv::Mat& img,const std::string& text,cv::Point org,
   cv::putText(img,text,org,cv::FONT_HERSHEY_SIMPLEX,scale,color,thickness,cv::LINE_AA);
 }
 
+static std::string jsonNumber(double v){
+  if(!std::isfinite(v)) return "null";
+  std::ostringstream o;
+  o<<std::setprecision(10)<<v;
+  return o.str();
+}
+
 struct LiveWebTelemetryUdp {
   int fd=-1;
   sockaddr_in dst{};
@@ -1328,8 +1335,7 @@ int main(int argc,char** argv){
 
         {
           std::ostringstream js;
-          js<<std::setprecision(10)
-            <<"{\"type\":\"telemetry\""
+          js<<"{\"type\":\"telemetry\""
             <<",\"mono_ns\":"<<now
             <<",\"frame\":"<<frame
             <<",\"valid\":"<<(s.valid?1:0)
@@ -1337,19 +1343,19 @@ int main(int argc,char** argv){
             <<",\"features\":"<<s.features
             <<",\"tracked\":"<<s.tracked
             <<",\"inliers\":"<<s.inliers
-            <<",\"range_m\":"<<lm
-            <<",\"range_age_ms\":"<<lage
+            <<",\"range_m\":"<<jsonNumber(lm)
+            <<",\"range_age_ms\":"<<jsonNumber(lage)
             <<",\"armed\":"<<(arm_ok&&arm_now?"true":"false")
             <<",\"ekf_valid\":"<<(efresh?"true":"false")
-            <<",\"x\":"<<ep.x
-            <<",\"y\":"<<ep.y
-            <<",\"z\":"<<ep.z
-            <<",\"vx\":"<<ep.vx
-            <<",\"vy\":"<<ep.vy
-            <<",\"vz\":"<<ep.vz
-            <<",\"roll_deg\":"<<(fg_ok?fg.roll*180.0/M_PI:0.0)
-            <<",\"pitch_deg\":"<<(fg_ok?fg.pitch*180.0/M_PI:0.0)
-            <<",\"yaw_deg\":"<<(fg_ok?fg.yaw*180.0/M_PI:0.0)
+            <<",\"x\":"<<jsonNumber(ep.x)
+            <<",\"y\":"<<jsonNumber(ep.y)
+            <<",\"z\":"<<jsonNumber(ep.z)
+            <<",\"vx\":"<<jsonNumber(ep.vx)
+            <<",\"vy\":"<<jsonNumber(ep.vy)
+            <<",\"vz\":"<<jsonNumber(ep.vz)
+            <<",\"roll_deg\":"<<jsonNumber(fg_ok?fg.roll*180.0/M_PI:0.0)
+            <<",\"pitch_deg\":"<<jsonNumber(fg_ok?fg.pitch*180.0/M_PI:0.0)
+            <<",\"yaw_deg\":"<<jsonNumber(fg_ok?fg.yaw*180.0/M_PI:0.0)
             <<"}";
           web_live.send(now,js.str());
         }
