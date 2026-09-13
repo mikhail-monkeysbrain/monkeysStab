@@ -20,6 +20,7 @@ GEOMETRY=ROOT/"config"/"mount_geometry.json"
 FC_PROFILE=ROOT/"config"/"fc_profile.json"
 RUN_ROOT=Path(os.environ.get("MONKEYS_RUN_ROOT", str(Path.home()/"monkeysStab_runs")))
 WEB_LOG=RUN_ROOT/"web_runtime.log"
+WEB_ASSETS=ROOT/"web_assets"
 DEFAULTS={
     "focal_scale":0.931,
     "feature_roi":[0.20,0.32,0.80,0.90],
@@ -476,12 +477,27 @@ def log_tail(max_lines=120):
     except Exception:
         return ""
 
+def journal_events():
+    with _lock:
+        base=list(_journal)
+    try:
+        with open(WEB_LOG,"r",encoding="utf-8",errors="replace") as f:
+            lines=f.readlines()[-420:]
+        for line in lines:
+            t=line.rstrip()
+            if not t: continue
+            base.append({"ts":"","level":"RUNTIME","text":t})
+    except Exception:
+        pass
+    return base[-500:]
+
 HTML=r'''<!doctype html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>monkeysStab — UAV Control & Visualizer</title>
+<script type="module" src="/assets/model-viewer.min.js"></script>
 <style>
 *{box-sizing:border-box}
 :root{
@@ -527,6 +543,7 @@ button{cursor:pointer}
 .sceneTitle{position:absolute;left:14px;top:10px;z-index:4;font-weight:800}
 #glCanvas{display:block;width:100%;height:625px;background:
  radial-gradient(circle at 50% 15%,#11304a55,#07121c 52%),#07121c}
+#advancedModel{display:none;width:100%;height:625px;background:radial-gradient(circle at 50% 25%,#17354a,#07121c 65%);--poster-color:transparent}
 .sceneControls{position:absolute;right:12px;top:10px;background:#081521dd;border:1px solid #26475e;border-radius:7px;padding:8px 10px;font-size:12px;z-index:4}
 .sceneControls label{display:block;margin:5px 0;color:#b3c9d7}
 .sceneLegend{position:absolute;left:14px;bottom:12px;display:flex;gap:8px;z-index:4}
@@ -607,6 +624,7 @@ button{cursor:pointer}
   <div class="card sceneCard">
    <div class="sceneTitle">3D — Траектория и ориентация</div>
    <canvas id="glCanvas"></canvas><canvas id="lightCanvas" style="display:none;width:100%;height:625px;background:#07121c"></canvas>
+   <model-viewer id="advancedModel" src="/assets/CesiumDrone.glb" camera-controls interaction-prompt="none" shadow-intensity="1" exposure="1.05" environment-image="neutral"></model-viewer>
    <div class="sceneControls">
     <label><input id="showTrail" type="checkbox" checked> Траектория</label>
     <label><input id="showGrid" type="checkbox" checked> Сетка</label>
@@ -864,11 +882,13 @@ function refreshVisualizationMode(){
  let m=window.visualizationMode||'simple';
  ['Advanced','Simple','Light'].forEach(x=>{let e=$('vm'+x);if(e)e.classList.remove('active')});
  let id=m==='advanced'?'vmAdvanced':m==='light'?'vmLight':'vmSimple';if($(id))$(id).classList.add('active');
- if($('glCanvas')&&$('lightCanvas')){
-  $('glCanvas').style.display=m==='light'?'none':'block';$('lightCanvas').style.display=m==='light'?'block':'none';
+ if($('glCanvas')&&$('lightCanvas')&&$('advancedModel')){
+  $('glCanvas').style.display=m==='simple'?'block':'none';
+  $('lightCanvas').style.display=m==='light'?'block':'none';
+  $('advancedModel').style.display=m==='advanced'?'block':'none';
  }
- if($('visualModeMsg'))$('visualModeMsg').textContent=m==='advanced'?'Расширенный WebGL режим выбран. Полная GLB-модель загружается отдельным asset-слоем.':m==='light'?'Лёгкий 2D режим: WebGL отключён.':'Упрощённый WebGL режим.';
- if(latest){if(m==='light')drawLightScene(latest);else renderScene()}
+ if($('visualModeMsg'))$('visualModeMsg').textContent=m==='advanced'?'Расширенный WebGL: локальная GLB-модель CesiumDrone.':m==='light'?'Лёгкий 2D режим: WebGL отключён.':'Упрощённый WebGL режим.';
+ if(latest){if(m==='light')drawLightScene(latest);else if(m==='advanced')updateAdvancedModel(latest);else renderScene()}
 }
 async function setVisualizationMode(mode){
  try{let j=await api('/api/system/visualization',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});window.visualizationMode=j.runtime.visualization_mode;refreshVisualizationMode()}
@@ -880,6 +900,12 @@ function drawLightScene(t){
  ctx.strokeStyle='#153d58';for(let i=-5;i<=5;i++){let q=i*.2*scale;ctx.beginPath();ctx.moveTo(cx+q,20);ctx.lineTo(cx+q,h-20);ctx.stroke();ctx.beginPath();ctx.moveTo(20,cy+q);ctx.lineTo(w-20,cy+q);ctx.stroke()}
  let tr=t.trail||[];ctx.strokeStyle='#1eaaff';ctx.lineWidth=2;ctx.beginPath();tr.forEach((p,i)=>{let x=cx+(p.y_mm/1000)*scale,y=cy-(p.x_mm/1000)*scale;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y)});ctx.stroke();
  let x=cx+((t.y_mm||0)/1000)*scale,y=cy-((t.x_mm||0)/1000)*scale;ctx.fillStyle='#17d878';ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();ctx.fillStyle='#9fb7c9';ctx.fillText('N ↑   E →',16,22);
+}
+
+function updateAdvancedModel(t){
+ let m=$('advancedModel');if(!m)return;
+ let roll=t.roll_deg||0,pitch=t.pitch_deg||0,yaw=t.yaw_deg||0;
+ m.setAttribute('orientation',pitch.toFixed(2)+'deg '+(-yaw).toFixed(2)+'deg '+(-roll).toFixed(2)+'deg');
 }
 async function start(){try{await api('/api/start',{method:'POST'});}catch(e){alert(e.message)}}
 async function stop(){try{await api('/api/stop',{method:'POST'});}catch(e){alert(e.message)}}
@@ -903,7 +929,7 @@ function updateHud(t){
  $('pitchNeedle').style.left=(50+clamp(t.pitch_deg||0,-45,45)/45*50)+'%';
  let y=((t.yaw_deg||0)+180)%360-180;$('yawNeedle').style.left=(50+y/180*50)+'%';
  if($('tmx')){$('tmx').textContent=fmt(t.x_mm,0)+' мм';$('tmy').textContent=fmt(t.y_mm,0)+' мм';$('tmz').textContent=fmt(t.z_mm,0)+' мм';$('tmr').textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';$('tmq').textContent=t.quality??'—';$('troll').textContent=fmt(t.roll_deg,1)+'°';$('tpitch').textContent=fmt(t.pitch_deg,1)+'°';$('tyaw').textContent=fmt(t.yaw_deg,1)+'°';$('tinl').textContent=(t.inliers??'—')+'/'+(t.tracked??'—');$('tekf').textContent=t.ekf_valid?'VALID':'NO DATA'}
- drawCompass(t.yaw_deg||0);drawHistory(t.history||[]);if((window.visualizationMode||'simple')==='light')drawLightScene(t);else renderScene();
+ drawCompass(t.yaw_deg||0);drawHistory(t.history||[]);let vm=window.visualizationMode||'simple';if(vm==='light')drawLightScene(t);else if(vm==='advanced')updateAdvancedModel(t);else renderScene();
 }
 
 function drawCompass(deg){
@@ -998,6 +1024,13 @@ class H(BaseHTTPRequestHandler):
         try:
             if p=="/":
                 b=HTML.encode();self.send_response(200);self.send_header("Content-Type","text/html; charset=utf-8");self.send_header("Content-Length",str(len(b)));self.end_headers();self.wfile.write(b)
+            elif p.startswith("/assets/"):
+                name=Path(p).name
+                if name not in ("CesiumDrone.glb","model-viewer.min.js","NOTICE.txt"): raise FileNotFoundError(name)
+                fp=WEB_ASSETS/name
+                data=fp.read_bytes()
+                ctype="model/gltf-binary" if name.endswith(".glb") else ("text/javascript; charset=utf-8" if name.endswith(".js") else "text/plain; charset=utf-8")
+                self.send_response(200);self.send_header("Content-Type",ctype);self.send_header("Content-Length",str(len(data)));self.end_headers();self.wfile.write(data)
             elif p=="/api/config":
                 self.send_json({"runtime":load_config(),"geometry":load_json(GEOMETRY,{}),"fc_profile":load_json(FC_PROFILE,{})})
             elif p=="/api/status":
@@ -1016,7 +1049,7 @@ class H(BaseHTTPRequestHandler):
             elif p=="/api/messages":
                 with _lock: self.send_json({"events":list(_messages)})
             elif p=="/api/journal":
-                with _lock: self.send_json({"events":list(_journal)})
+                self.send_json({"events":journal_events()})
             else:self.send_json({"error":"not found"},404)
         except Exception as e:self.send_json({"error":str(e)},500)
     def do_POST(self):
