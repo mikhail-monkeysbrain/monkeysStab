@@ -966,6 +966,7 @@ int main(int argc,char** argv){
     // Trigger only on a high edge; re-arm after both channels return below 1500 us.
     uint64_t rc_zero_seq=0;
     bool rc_zero_latched=false;
+    uint16_t rc6_last_us=0,rc8_last_us=0;
     constexpr uint16_t kRcZeroPressUs=1700;
     constexpr uint16_t kRcZeroReleaseUs=1500;
 
@@ -1330,6 +1331,8 @@ int main(int argc,char** argv){
           if(rc_fresh){
             const uint16_t rc6=rcin.pwm[5];
             const uint16_t rc8=rcin.pwm[7];
+            rc6_last_us=rc6;
+            rc8_last_us=rc8;
             const bool pressed=(rc6>=kRcZeroPressUs)||(rc8>=kRcZeroPressUs);
             const bool released=(rc6<=kRcZeroReleaseUs)&&(rc8<=kRcZeroReleaseUs);
             if(pressed && !rc_zero_latched){
@@ -1486,6 +1489,8 @@ int main(int argc,char** argv){
             <<",\"raw_of_vn\":"<<jsonNumber(web_raw_vn)
             <<",\"raw_of_ve\":"<<jsonNumber(web_raw_ve)
             <<",\"rc_zero_seq\":"<<rc_zero_seq
+            <<",\"rc6_us\":"<<rc6_last_us
+            <<",\"rc8_us\":"<<rc8_last_us
             <<",\"roll_deg\":"<<jsonNumber(fg_ok?fg.roll*180.0/M_PI:0.0)
             <<",\"pitch_deg\":"<<jsonNumber(fg_ok?fg.pitch*180.0/M_PI:0.0)
             <<",\"yaw_deg\":"<<jsonNumber(fg_ok?fg.yaw*180.0/M_PI:0.0)
