@@ -1,0 +1,6 @@
+{
+  "focal_scale": 0.931,
+  "feature_roi": [0.20, 0.32, 0.80, 0.90],
+  "max_features": 500,
+  "local_gui": true
+}
