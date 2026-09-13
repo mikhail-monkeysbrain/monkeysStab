@@ -127,6 +127,7 @@ new GLTFLoader().load('/assets/CesiumDrone.glb',gltf=>{
 },undefined,e=>{console.error('GLB load failed',e);set3dStatus('Ошибка загрузки GLB: '+(e?.message||e),true)});
 
 let enabled=false;
+let yawZeroDeg=null;
 let az=Math.PI*.25, el=Math.PI*.28, dist=4.8;
 let target=new THREE.Vector3(0,0,0);
 let currentPos=new THREE.Vector3();
@@ -190,7 +191,12 @@ function update(t){
 
  const roll=THREE.MathUtils.degToRad(Number(t.roll_deg)||0);
  const pitch=THREE.MathUtils.degToRad(Number(t.pitch_deg)||0);
- const yaw=THREE.MathUtils.degToRad(Number(t.yaw_deg)||0);
+ const yawDeg=Number(t.yaw_deg)||0;
+ if(yawZeroDeg===null) yawZeroDeg=yawDeg;
+ let relYawDeg=yawDeg-yawZeroDeg;
+ while(relYawDeg>180) relYawDeg-=360;
+ while(relYawDeg<-180) relYawDeg+=360;
+ const yaw=THREE.MathUtils.degToRad(relYawDeg);
  const qNed=new THREE.Quaternion().setFromEuler(new THREE.Euler(roll,pitch,yaw,'ZYX'));
  droneRoot.quaternion.copy(qSceneFromNed).multiply(qNed).multiply(qBodyFromModel);
 
@@ -222,7 +228,11 @@ function frame(){
  }
  requestAnimationFrame(frame);
 }
-window.ThreeAdvanced={update,setView,resetView,resize,setEnabled};
+function zeroHeading(yawDeg){
+ yawZeroDeg=Number.isFinite(Number(yawDeg))?Number(yawDeg):null;
+ if(window.latest) update(window.latest);
+}
+window.ThreeAdvanced={update,setView,resetView,resize,setEnabled,zeroHeading};
 resize();
 updateCamera();
 
