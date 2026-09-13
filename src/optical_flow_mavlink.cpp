@@ -932,6 +932,12 @@ int main(int argc,char** argv){
     // AP-model translational displacement, first in body FRD, then rotated to NED.
     double return_body_dx=0.0,return_body_dy=0.0;
     double return_ned_n=0.0,return_ned_e=0.0;
+
+    // Always-on, diagnostic-only optical-flow integral for the Web UI.
+    // It mirrors the proven return-gui RAW NED computation but never feeds FC.
+    double web_raw_n=0.0,web_raw_e=0.0;
+    double web_raw_vn=0.0,web_raw_ve=0.0;
+    bool web_raw_step_valid=false;
     double return_yaw0=0.0;
     bool return_yaw0_set=false;
     bool return_b_marked=false;
@@ -1285,6 +1291,42 @@ int main(int argc,char** argv){
         bool arm_now=false; double arm_age_now=1e9;
         const bool arm_ok=fc.latestArm(&arm_now,&arm_age_now) && arm_age_now<2500.0;
 
+        // Independent RAW Optical Flow diagnostic for Web UI.
+        // Use only accepted flow intervals and the physical camera height.
+        // This is intentionally diagnostic-only and does not alter publisher/EKF.
+        web_raw_step_valid=false;
+        web_raw_vn=web_raw_ve=0.0;
+        if(s.valid && flow_sent && fg_ok && dt>0.0 && dt<0.2){
+          double hcam=0.0;
+          if(bench_true_camera_height>0.0){
+            hcam=bench_true_camera_height;
+          } else if(current_camera_height_valid){
+            hcam=current_camera_height_m;
+          }
+          if(hcam>0.02 && std::isfinite(hcam)){
+            const double native_fx=s.flow_body_x;
+            const double native_fy=s.flow_body_y;
+            const double comp_x=-native_fx + fg.x;
+            const double comp_y=-native_fy + fg.y;
+            const double vbx=(-comp_y)*hcam;
+            const double vby=( comp_x)*hcam;
+
+            const double cr=std::cos(fg.roll),  sr=std::sin(fg.roll);
+            const double cp=std::cos(fg.pitch), sp=std::sin(fg.pitch);
+            const double cy=std::cos(fg.yaw),   sy=std::sin(fg.yaw);
+            const double r00=cy*cp;
+            const double r01=cy*sp*sr-sy*cr;
+            const double r10=sy*cp;
+            const double r11=sy*sp*sr+cy*cr;
+
+            web_raw_vn=r00*vbx + r01*vby;
+            web_raw_ve=r10*vbx + r11*vby;
+            web_raw_n += web_raw_vn*dt;
+            web_raw_e += web_raw_ve*dt;
+            web_raw_step_valid=true;
+          }
+        }
+
         FlowFcTarget csv_ct{}; FlowFcAttTarget csv_ca{}; FlowFcOutputs csv_co{};
         double csv_ct_age=1e9,csv_ca_age=1e9,csv_co_age=1e9;
         fc.latestControl(&csv_ct,&csv_ca,&csv_co,&csv_ct_age,&csv_ca_age,&csv_co_age);
@@ -1353,6 +1395,11 @@ int main(int argc,char** argv){
             <<",\"vx\":"<<jsonNumber(ep.vx)
             <<",\"vy\":"<<jsonNumber(ep.vy)
             <<",\"vz\":"<<jsonNumber(ep.vz)
+            <<",\"raw_of_valid\":"<<(web_raw_step_valid?"true":"false")
+            <<",\"raw_of_n\":"<<jsonNumber(web_raw_n)
+            <<",\"raw_of_e\":"<<jsonNumber(web_raw_e)
+            <<",\"raw_of_vn\":"<<jsonNumber(web_raw_vn)
+            <<",\"raw_of_ve\":"<<jsonNumber(web_raw_ve)
             <<",\"roll_deg\":"<<jsonNumber(fg_ok?fg.roll*180.0/M_PI:0.0)
             <<",\"pitch_deg\":"<<jsonNumber(fg_ok?fg.pitch*180.0/M_PI:0.0)
             <<",\"yaw_deg\":"<<jsonNumber(fg_ok?fg.yaw*180.0/M_PI:0.0)
