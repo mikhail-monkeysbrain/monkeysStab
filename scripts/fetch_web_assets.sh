@@ -33,20 +33,53 @@ GLTF_RC=$?
 fetch "https://unpkg.com/three@0.169.0/examples/jsm/utils/BufferGeometryUtils.js" "$ASSETS/BufferGeometryUtils.js"
 BGU_RC=$?
 
-# GLTFLoader is published with bare/relative imports that assume the npm
-# web server has no npm resolver, so make the loader fully self-contained.
-# Apply on every launch so an already cached file is repaired as well.
-if [[ -s "$ASSETS/GLTFLoader.js" ]]; then
-  python3 - "$ASSETS/GLTFLoader.js" <<'PY'
+# GLTFLoader and BufferGeometryUtils are published for an npm-style module
+# layout.  monkeysStab serves all modules from one /assets directory, so
+# rewrite every import to the local flat asset layout.  This runs on every
+# launch and also repairs already-cached files on the Raspberry Pi.
+python3 - "$ASSETS/GLTFLoader.js" "$ASSETS/BufferGeometryUtils.js" <<'PY'
 from pathlib import Path
 import sys
-p=Path(sys.argv[1])
-s=p.read_text(encoding="utf-8")
-s=s.replace("from 'three';", "from './three.module.js';")
-s=s.replace('from "three";', 'from "./three.module.js";')
-p.write_text(s,encoding="utf-8")
+
+gltf=Path(sys.argv[1])
+bgu=Path(sys.argv[2])
+
+def localize_three(text: str) -> str:
+    text=text.replace("from 'three';", "from './three.module.js';")
+    text=text.replace('from "three";', 'from "./three.module.js";')
+    return text
+
+if gltf.exists():
+    text=localize_three(gltf.read_text(encoding="utf-8"))
+    text=text.replace(
+        "from '../utils/BufferGeometryUtils.js';",
+        "from './BufferGeometryUtils.js';"
+    )
+    text=text.replace(
+        'from "../utils/BufferGeometryUtils.js";',
+        'from "./BufferGeometryUtils.js";'
+    )
+    gltf.write_text(text,encoding="utf-8")
+
+if bgu.exists():
+    text=localize_three(bgu.read_text(encoding="utf-8"))
+    bgu.write_text(text,encoding="utf-8")
+
+# Fail loudly if a published import remains unresolved.
+bad=[]
+if gltf.exists():
+    text=gltf.read_text(encoding="utf-8")
+    for token in ("from 'three'", 'from "three"', "../utils/BufferGeometryUtils.js"):
+        if token in text:
+            bad.append("GLTFLoader.js: "+token)
+if bgu.exists():
+    text=bgu.read_text(encoding="utf-8")
+    for token in ("from 'three'", 'from "three"'):
+        if token in text:
+            bad.append("BufferGeometryUtils.js: "+token)
+if bad:
+    raise SystemExit("Неразрешённые ES imports: "+", ".join(bad))
 PY
-fi
 set -e
 
 if [[ "$MODEL_RC" != 0 || "$VIEWER_RC" != 0 || "$THREE_RC" != 0 || "$GLTF_RC" != 0 || "$BGU_RC" != 0 ]]; then
