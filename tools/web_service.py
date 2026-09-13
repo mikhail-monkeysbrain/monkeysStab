@@ -497,7 +497,6 @@ HTML=r'''<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>monkeysStab — UAV Control & Visualizer</title>
-<script type="module" src="/assets/model-viewer.min.js"></script>
 <style>
 *{box-sizing:border-box}
 :root{
@@ -546,7 +545,11 @@ button{cursor:pointer}
 #advancedScene{display:none;position:absolute;inset:0;width:100%;height:625px;background:#07121c;z-index:1}
 #advancedScene canvas{display:block;width:100%;height:100%;touch-action:none}
 #advanced3dStatus{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:6;padding:10px 14px;border:1px solid #31516a;border-radius:7px;background:#071522e8;color:#9fb8ca;font-size:13px;pointer-events:none}
-.modelThumb{width:100%;height:100%;background:transparent!important;--poster-color:transparent;pointer-events:none}
+.modelThumb{position:absolute;inset:10px 18px 18px;pointer-events:none}
+.modelThumb:before,.modelThumb:after{content:"";position:absolute;left:50%;top:50%;width:66px;height:5px;background:#8ba6b8;border-radius:4px;transform-origin:center}
+.modelThumb:before{transform:translate(-50%,-50%) rotate(28deg)}
+.modelThumb:after{transform:translate(-50%,-50%) rotate(-28deg)}
+.modelThumb i{position:absolute;left:50%;top:50%;width:28px;height:16px;border-radius:50%;background:#52a8d8;transform:translate(-50%,-50%);box-shadow:-30px -15px 0 -5px #9abdce,30px -15px 0 -5px #9abdce,-30px 15px 0 -5px #9abdce,30px 15px 0 -5px #9abdce}
 .viewItem{position:relative;overflow:hidden}
 .viewItem span{position:absolute;left:0;right:0;bottom:4px;text-align:center;z-index:3;text-shadow:0 1px 3px #000;background:#07121aaa;padding:2px 0}
 .sceneControls{position:absolute;right:12px;top:10px;background:#081521dd;border:1px solid #26475e;border-radius:7px;padding:8px 10px;font-size:12px;z-index:4}
@@ -670,10 +673,10 @@ button{cursor:pointer}
   <div class="card">
    <h3>Виды модели</h3>
    <div class="viewGrid">
-    <div class="viewItem active" onclick="setView('iso',this)"><model-viewer class="modelThumb" src="/assets/CesiumDrone.glb" camera-orbit="45deg 70deg 2.8m" interaction-prompt="none" environment-image="neutral"></model-viewer><span>Изометрия</span></div>
-    <div class="viewItem" onclick="setView('side',this)"><model-viewer class="modelThumb" src="/assets/CesiumDrone.glb" camera-orbit="90deg 90deg 2.8m" interaction-prompt="none" environment-image="neutral"></model-viewer><span>Сбоку</span></div>
-    <div class="viewItem" onclick="setView('front',this)"><model-viewer class="modelThumb" src="/assets/CesiumDrone.glb" camera-orbit="0deg 90deg 2.8m" interaction-prompt="none" environment-image="neutral"></model-viewer><span>Спереди</span></div>
-    <div class="viewItem" onclick="setView('top',this)"><model-viewer class="modelThumb" src="/assets/CesiumDrone.glb" camera-orbit="0deg 0deg 2.8m" interaction-prompt="none" environment-image="neutral"></model-viewer><span>Сверху</span></div>
+    <div class="viewItem active" onclick="setView('iso',this)"><div class="modelThumb"><i></i></div><span>Изометрия</span></div>
+    <div class="viewItem" onclick="setView('side',this)"><div class="modelThumb" style="transform:scaleY(.55)"><i></i></div><span>Сбоку</span></div>
+    <div class="viewItem" onclick="setView('front',this)"><div class="modelThumb" style="transform:scaleX(.65)"><i></i></div><span>Спереди</span></div>
+    <div class="viewItem" onclick="setView('top',this)"><div class="modelThumb" style="transform:rotate(45deg)"><i></i></div><span>Сверху</span></div>
    </div>
   </div>
   <div class="card">
@@ -811,7 +814,7 @@ window.addEventListener('unhandledrejection',e=>{
    st.textContent='3D module error: '+String(e.reason||'unknown');
  }
 });
-let latest=null,fcLatest=null;
+let latest=null,fcLatest=null,lastChartPaint=0;
 let viewMode='iso',viewYaw=.75,viewPitch=.65,viewDist=6.4;
 let drag=false,lastX=0,lastY=0;
 
@@ -962,7 +965,10 @@ function updateHud(t){
  $('pitchNeedle').style.left=(50+clamp(t.pitch_deg||0,-45,45)/45*50)+'%';
  let y=((t.yaw_deg||0)+180)%360-180;$('yawNeedle').style.left=(50+y/180*50)+'%';
  if($('tmx')){$('tmx').textContent=fmt(t.x_mm,0)+' мм';$('tmy').textContent=fmt(t.y_mm,0)+' мм';$('tmz').textContent=fmt(t.z_mm,0)+' мм';$('tmr').textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';$('tmq').textContent=t.quality??'—';$('troll').textContent=fmt(t.roll_deg,1)+'°';$('tpitch').textContent=fmt(t.pitch_deg,1)+'°';$('tyaw').textContent=fmt(t.yaw_deg,1)+'°';$('tinl').textContent=(t.inliers??'—')+'/'+(t.tracked??'—');$('tekf').textContent=t.ekf_valid?'VALID':'NO DATA'}
- drawCompass(t.yaw_deg||0);drawHistory(t.history||[]);let vm=window.visualizationMode||'simple';if(vm==='light')drawLightScene(t);else if(vm==='advanced')updateAdvancedModel(t);else renderScene()
+ drawCompass(t.yaw_deg||0);
+ const now=performance.now();
+ if(now-lastChartPaint>1000){drawHistory(t.history||[]);lastChartPaint=now;}
+ let vm=window.visualizationMode||'simple';if(vm==='light')drawLightScene(t);else if(vm==='advanced')updateAdvancedModel(t);else renderScene()
 }
 
 function drawCompass(deg){
@@ -991,9 +997,9 @@ function drawHistory(h){
  let c=$('xyzChart'),ctx=c.getContext('2d'),[w,hh]=chartBase(c,ctx);let vals=[];h.forEach(d=>['x','y','z'].forEach(k=>{if(d[k]!=null)vals.push(d[k])}));let m=Math.max(.05,...vals.map(Math.abs));plotSeries(ctx,h,'x',-m,m,'#ff4352',w,hh);plotSeries(ctx,h,'y',-m,m,'#16d878',w,hh);plotSeries(ctx,h,'z',-m,m,'#218cff',w,hh);
  c=$('speedChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);plotSeries(ctx,h,'speed',0,Math.max(.2,...h.map(d=>d.speed||0))*1.15,'#ffd11f',w,hh);
  c=$('rangeChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);let rv=h.map(d=>d.range).filter(v=>v!=null),rmax=Math.max(.5,...rv)*1.2;plotSeries(ctx,h,'range',0,rmax,'#c98cff',w,hh);
- if($('tXyzChart')){c=$('tXyzChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);plotSeries(ctx,h,'x',-m,m,'#ff4352',w,hh);plotSeries(ctx,h,'y',-m,m,'#16d878',w,hh);plotSeries(ctx,h,'z',-m,m,'#218cff',w,hh)}
- if($('tSpeedChart')){c=$('tSpeedChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);plotSeries(ctx,h,'speed',0,Math.max(.2,...h.map(d=>d.speed||0))*1.15,'#ffd11f',w,hh)}
- if($('tRangeChart')){c=$('tRangeChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);plotSeries(ctx,h,'range',0,rmax,'#c98cff',w,hh)}
+ if($('view-telemetry')?.classList.contains('activeView')&&$('tXyzChart')){c=$('tXyzChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);plotSeries(ctx,h,'x',-m,m,'#ff4352',w,hh);plotSeries(ctx,h,'y',-m,m,'#16d878',w,hh);plotSeries(ctx,h,'z',-m,m,'#218cff',w,hh)}
+ if($('view-telemetry')?.classList.contains('activeView')&&$('tSpeedChart')){c=$('tSpeedChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);plotSeries(ctx,h,'speed',0,Math.max(.2,...h.map(d=>d.speed||0))*1.15,'#ffd11f',w,hh)}
+ if($('view-telemetry')?.classList.contains('activeView')&&$('tRangeChart')){c=$('tRangeChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);plotSeries(ctx,h,'range',0,rmax,'#c98cff',w,hh)}
 }
 
 let gl,prog,bufPos,bufCol,locMvp,locPos,locCol;
@@ -1036,17 +1042,17 @@ function setView(v,el){viewMode=v;document.querySelectorAll('.viewItem').forEach
 function resetView(){viewMode='iso';viewYaw=.75;viewPitch=.65;viewDist=6.4;if(window.visualizationMode==='advanced'&&window.ThreeAdvanced){window.ThreeAdvanced.resetView()}else renderScene()}
 
 async function refresh(){
- try{let t=await api('/api/telemetry');updateHud(t);await refreshMessages()}catch(e){}
+ try{let t=await api('/api/telemetry');updateHud(t)}catch(e){}
 }
 setInterval(()=>{$('clock').textContent=new Date().toLocaleTimeString('ru-RU')},1000);
-loadConfig();initGL();refresh();refreshFc();refreshJournal();setInterval(refresh,700);setInterval(refreshFc,1800);setInterval(refreshJournal,2500);window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';if(vm==='light'&&latest)drawLightScene(latest);else if(vm==='advanced'&&window.ThreeAdvanced)window.ThreeAdvanced.resize();else renderScene();if(latest)drawHistory(latest.history||[])});
+loadConfig();initGL();refresh();refreshMessages();refreshFc();refreshJournal();setInterval(refresh,700);setInterval(refreshMessages,1800);setInterval(refreshFc,1800);setInterval(refreshJournal,3000);window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';if(vm==='light'&&latest)drawLightScene(latest);else if(vm==='advanced'&&window.ThreeAdvanced)window.ThreeAdvanced.resize();else renderScene();if(latest)drawHistory(latest.history||[])});
 </script>
 <script>
 (async()=>{
  const st=document.getElementById('advanced3dStatus');
  try{
    if(st){st.style.display='block';st.style.color='#9fb8ca';st.textContent='Загрузка модуля расширенного 3D…';}
-   await import('/assets/advanced_scene.js?rev=7');
+   await import('/assets/advanced_scene.js?rev=8');
  }catch(e){
    console.error('Advanced 3D module failed',e);
    if(st){
