@@ -257,6 +257,22 @@ def telemetry():
                     "y_mm":(py-zy)*1000.0,
                     "z_mm":(pz-zz)*1000.0 if pz is not None and zz is not None else None,
                 })
+    history=[]
+    if rows:
+        t0=fnum(rows[0],"mono_ns",0) or 0
+        for rr in rows:
+            tt=(fnum(rr,"mono_ns",t0)-t0)/1e9 if t0 else 0.0
+            hx=fnum(rr,"ekf_x_ned"); hy=fnum(rr,"ekf_y_ned"); hz=fnum(rr,"ekf_z_ned")
+            hvx=fnum(rr,"ekf_vx_ned",0) or 0; hvy=fnum(rr,"ekf_vy_ned",0) or 0; hvz=fnum(rr,"ekf_vz_ned",0) or 0
+            history.append({
+                "t":tt,
+                "x":(hx-zx) if hx is not None and zx is not None else None,
+                "y":(hy-zy) if hy is not None and zy is not None else None,
+                "z":(hz-zz) if hz is not None and zz is not None else None,
+                "speed":math.sqrt(hvx*hvx+hvy*hvy+hvz*hvz),
+                "range":fnum(rr,"luna_m"),
+            })
+
     return {
         "available":True,
         "running":running(),
@@ -280,6 +296,7 @@ def telemetry():
         "pitch_deg":math.degrees(fnum(last,"fc_pitch",0) or 0),
         "yaw_deg":math.degrees(fnum(last,"fc_yaw",0) or 0),
         "trail":trail,
+        "history":history,
     }
 
 def set_zero():
