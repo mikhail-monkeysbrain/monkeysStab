@@ -498,6 +498,7 @@ HTML=r'''<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>monkeysStab — UAV Control & Visualizer</title>
 <script type="module" src="/assets/model-viewer.min.js"></script>
+<script type="importmap">{"imports":{"three":"/assets/three.module.js"}}</script>
 <style>
 *{box-sizing:border-box}
 :root{
@@ -543,7 +544,8 @@ button{cursor:pointer}
 .sceneTitle{position:absolute;left:14px;top:10px;z-index:4;font-weight:800}
 #glCanvas{display:block;width:100%;height:625px;background:
  radial-gradient(circle at 50% 15%,#11304a55,#07121c 52%),#07121c}
-#advancedModel{display:none;position:absolute;inset:0;width:100%;height:625px;background:transparent!important;--poster-color:transparent;z-index:2;pointer-events:none;transform-origin:50% 50%}
+#advancedScene{display:none;position:absolute;inset:0;width:100%;height:625px;background:#07121c;z-index:1}
+#advancedScene canvas{display:block;width:100%;height:100%;touch-action:none}
 .modelThumb{width:100%;height:100%;background:transparent!important;--poster-color:transparent;pointer-events:none}
 .viewItem{position:relative;overflow:hidden}
 .viewItem span{position:absolute;left:0;right:0;bottom:4px;text-align:center;z-index:3;text-shadow:0 1px 3px #000;background:#07121aaa;padding:2px 0}
@@ -627,7 +629,7 @@ button{cursor:pointer}
   <div class="card sceneCard">
    <div class="sceneTitle">3D — Траектория и ориентация</div>
    <canvas id="glCanvas"></canvas><canvas id="lightCanvas" style="display:none;width:100%;height:625px;background:#07121c"></canvas>
-   <model-viewer id="advancedModel" src="/assets/CesiumDrone.glb" camera-controls interaction-prompt="none" shadow-intensity="1" exposure="1.05" environment-image="neutral"></model-viewer>
+   <div id="advancedScene"></div>
    <div class="sceneControls">
     <label><input id="showTrail" type="checkbox" checked> Траектория</label>
     <label><input id="showGrid" type="checkbox" checked> Сетка</label>
@@ -900,13 +902,14 @@ function refreshVisualizationMode(){
  let m=window.visualizationMode||'simple';
  ['Advanced','Simple','Light'].forEach(x=>{let e=$('vm'+x);if(e)e.classList.remove('active')});
  let id=m==='advanced'?'vmAdvanced':m==='light'?'vmLight':'vmSimple';if($(id))$(id).classList.add('active');
- if($('glCanvas')&&$('lightCanvas')&&$('advancedModel')){
-  $('glCanvas').style.display=(m==='light')?'none':'block';
+ if($('glCanvas')&&$('lightCanvas')&&$('advancedScene')){
+  $('glCanvas').style.display=m==='simple'?'block':'none';
   $('lightCanvas').style.display=m==='light'?'block':'none';
-  $('advancedModel').style.display=m==='advanced'?'block':'none';
+  $('advancedScene').style.display=m==='advanced'?'block':'none';
+  if(window.ThreeAdvanced) window.ThreeAdvanced.setEnabled(m==='advanced');
  }
  if($('visualModeMsg'))$('visualModeMsg').textContent=m==='advanced'?'Расширенный WebGL: локальная GLB-модель CesiumDrone.':m==='light'?'Лёгкий 2D режим: WebGL отключён.':'Упрощённый WebGL режим.';
- if(latest){if(m==='light')drawLightScene(latest);else{renderScene();if(m==='advanced')updateAdvancedModel(latest)}}
+ if(latest){if(m==='light')drawLightScene(latest);else if(m==='advanced')updateAdvancedModel(latest);else renderScene()}
 }
 async function setVisualizationMode(mode){
  try{let j=await api('/api/system/visualization',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});window.visualizationMode=j.runtime.visualization_mode;refreshVisualizationMode()}
@@ -921,28 +924,7 @@ function drawLightScene(t){
 }
 
 function updateAdvancedModel(t){
- let m=$('advancedModel');if(!m)return;
- let roll=Number(t.roll_deg||0),pitch=Number(t.pitch_deg||0),yaw=Number(t.yaw_deg||0);
-
- // model-viewer uses X/Y/Z Euler orientation. Convert FC FRD attitude so:
- // roll -> model X, yaw -> model Y (up), pitch -> model Z with sign correction.
- m.orientation=roll.toFixed(2)+'deg '+(-yaw).toFixed(2)+'deg '+pitch.toFixed(2)+'deg';
-
- // Keep camera fixed to the selected dashboard view. The aircraft attitude changes,
- // not the camera.
- const orbits={
-   iso:'45deg 70deg 2.8m',
-   side:'90deg 90deg 2.8m',
-   front:'0deg 90deg 2.8m',
-   top:'0deg 0deg 2.8m'
- };
- m.setAttribute('camera-orbit',orbits[viewMode]||orbits.iso);
-
- // Project NED position into a conservative screen translation so the detailed
- // model moves with the trajectory while the WebGL grid remains the reference.
- let sx=clamp((t.y_mm||0)/1000,-1.5,1.5), sy=clamp((t.x_mm||0)/1000,-1.5,1.5), sz=clamp((t.z_mm||0)/1000,-1.0,1.0);
- let px=sx*105, py=-sy*78 + sz*45;
- m.style.transform='translate('+px.toFixed(1)+'px,'+py.toFixed(1)+'px) scale(.58)';
+ if(window.ThreeAdvanced) window.ThreeAdvanced.update(t);
 }
 async function start(){try{await api('/api/start',{method:'POST'});}catch(e){alert(e.message)}}
 async function stop(){try{await api('/api/stop',{method:'POST'});}catch(e){alert(e.message)}}
@@ -966,7 +948,7 @@ function updateHud(t){
  $('pitchNeedle').style.left=(50+clamp(t.pitch_deg||0,-45,45)/45*50)+'%';
  let y=((t.yaw_deg||0)+180)%360-180;$('yawNeedle').style.left=(50+y/180*50)+'%';
  if($('tmx')){$('tmx').textContent=fmt(t.x_mm,0)+' мм';$('tmy').textContent=fmt(t.y_mm,0)+' мм';$('tmz').textContent=fmt(t.z_mm,0)+' мм';$('tmr').textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';$('tmq').textContent=t.quality??'—';$('troll').textContent=fmt(t.roll_deg,1)+'°';$('tpitch').textContent=fmt(t.pitch_deg,1)+'°';$('tyaw').textContent=fmt(t.yaw_deg,1)+'°';$('tinl').textContent=(t.inliers??'—')+'/'+(t.tracked??'—');$('tekf').textContent=t.ekf_valid?'VALID':'NO DATA'}
- drawCompass(t.yaw_deg||0);drawHistory(t.history||[]);let vm=window.visualizationMode||'simple';if(vm==='light')drawLightScene(t);else{renderScene();if(vm==='advanced')updateAdvancedModel(t)}
+ drawCompass(t.yaw_deg||0);drawHistory(t.history||[]);let vm=window.visualizationMode||'simple';if(vm==='light')drawLightScene(t);else if(vm==='advanced')updateAdvancedModel(t);else renderScene()
 }
 
 function drawCompass(deg){
@@ -1036,14 +1018,200 @@ function renderScene(){
  gl.bindBuffer(gl.ARRAY_BUFFER,bufPos);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(P),gl.DYNAMIC_DRAW);gl.enableVertexAttribArray(locPos);gl.vertexAttribPointer(locPos,3,gl.FLOAT,false,0,0);
  gl.bindBuffer(gl.ARRAY_BUFFER,bufCol);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(C),gl.DYNAMIC_DRAW);gl.enableVertexAttribArray(locCol);gl.vertexAttribPointer(locCol,3,gl.FLOAT,false,0,0);gl.drawArrays(gl.LINES,0,P.length/3);
 }
-function setView(v,el){viewMode=v;document.querySelectorAll('.viewItem').forEach(x=>x.classList.remove('active'));el.classList.add('active');renderScene();if(latest&&window.visualizationMode==='advanced')updateAdvancedModel(latest)}
-function resetView(){viewMode='iso';viewYaw=.75;viewPitch=.65;viewDist=6.4;renderScene();if(latest&&window.visualizationMode==='advanced')updateAdvancedModel(latest)}
+function setView(v,el){viewMode=v;document.querySelectorAll('.viewItem').forEach(x=>x.classList.remove('active'));el.classList.add('active');if(window.visualizationMode==='advanced'&&window.ThreeAdvanced){window.ThreeAdvanced.setView(v)}else renderScene()}
+function resetView(){viewMode='iso';viewYaw=.75;viewPitch=.65;viewDist=6.4;if(window.visualizationMode==='advanced'&&window.ThreeAdvanced){window.ThreeAdvanced.resetView()}else renderScene()}
 
 async function refresh(){
  try{let t=await api('/api/telemetry');updateHud(t);await refreshMessages()}catch(e){}
 }
 setInterval(()=>{$('clock').textContent=new Date().toLocaleTimeString('ru-RU')},1000);
-loadConfig();initGL();refresh();refreshFc();refreshJournal();setInterval(refresh,700);setInterval(refreshFc,1800);setInterval(refreshJournal,2500);window.addEventListener('resize',()=>{if((window.visualizationMode||'simple')==='light'&&latest)drawLightScene(latest);else renderScene();if(latest)drawHistory(latest.history||[])});
+loadConfig();initGL();refresh();refreshFc();refreshJournal();setInterval(refresh,700);setInterval(refreshFc,1800);setInterval(refreshJournal,2500);window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';if(vm==='light'&&latest)drawLightScene(latest);else if(vm==='advanced'&&window.ThreeAdvanced)window.ThreeAdvanced.resize();else renderScene();if(latest)drawHistory(latest.history||[])});
+</script>
+<script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from '/assets/GLTFLoader.js';
+
+const host=document.getElementById('advancedScene');
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x07121c);
+scene.fog=new THREE.FogExp2(0x07121c,0.055);
+
+const camera=new THREE.PerspectiveCamera(48,1,0.03,60);
+const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+host.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xb9ddff,0x102030,1.65));
+const sun=new THREE.DirectionalLight(0xffffff,2.0);
+sun.position.set(3,6,2);
+sun.castShadow=true;
+scene.add(sun);
+
+const grid=new THREE.GridHelper(5,20,0x1979a8,0x103b55);
+grid.position.y=0;
+grid.material.transparent=true;
+grid.material.opacity=.78;
+scene.add(grid);
+
+const axes=new THREE.Group();
+function axisLine(a,b,color){
+ const g=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...a),new THREE.Vector3(...b)]);
+ const m=new THREE.LineBasicMaterial({color});
+ axes.add(new THREE.Line(g,m));
+}
+axisLine([0,0,0],[1.2,0,0],0x28ef5e);   // East +X
+axisLine([0,0,0],[0,1.2,0],0x2f8cff);   // Up +Y
+axisLine([0,0,0],[0,0,-1.2],0xff4050);  // North -Z
+scene.add(axes);
+
+const homeMat=new THREE.MeshBasicMaterial({color:0x12e96f,side:THREE.DoubleSide});
+const home=new THREE.Mesh(new THREE.RingGeometry(.065,.085,48),homeMat);
+home.rotation.x=-Math.PI/2;
+home.position.y=.003;
+scene.add(home);
+
+const trailMat=new THREE.LineBasicMaterial({color:0x1ab7ff});
+let trailGeom=new THREE.BufferGeometry();
+let trailLine=new THREE.Line(trailGeom,trailMat);
+scene.add(trailLine);
+
+const droneRoot=new THREE.Group();
+scene.add(droneRoot);
+let droneModel=null;
+
+// Body-FRD -> scene basis: NED [N,E,D] -> Three [E,-D,-N].
+const sceneFromNed=new THREE.Matrix4().set(
+ 0, 1, 0, 0,
+ 0, 0,-1, 0,
+-1, 0, 0, 0,
+ 0, 0, 0, 1
+);
+const qSceneFromNed=new THREE.Quaternion().setFromRotationMatrix(sceneFromNed);
+
+// CesiumDrone is authored Y-up. Treat local +Z as vehicle forward and +X as right.
+// This fixed basis maps model coordinates into body FRD before FC attitude is applied.
+const bodyFromModel=new THREE.Matrix4().set(
+ 0, 0, 1, 0,
+ 1, 0, 0, 0,
+ 0,-1, 0, 0,
+ 0, 0, 0, 1
+);
+const qBodyFromModel=new THREE.Quaternion().setFromRotationMatrix(bodyFromModel);
+
+new GLTFLoader().load('/assets/CesiumDrone.glb',gltf=>{
+ droneModel=gltf.scene;
+ droneModel.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true}});
+ const box=new THREE.Box3().setFromObject(droneModel);
+ const size=new THREE.Vector3(); box.getSize(size);
+ const center=new THREE.Vector3(); box.getCenter(center);
+ droneModel.position.sub(center);
+ const span=Math.max(size.x,size.y,size.z)||1;
+ const targetSpan=.48; // physical display span ~48 cm on the metre grid
+ droneModel.scale.setScalar(targetSpan/span);
+ droneRoot.add(droneModel);
+},undefined,e=>console.error('GLB load failed',e));
+
+let enabled=false;
+let az=Math.PI*.25, el=Math.PI*.28, dist=4.8;
+let target=new THREE.Vector3(0,0,0);
+let currentPos=new THREE.Vector3();
+let dragging=false,lastX=0,lastY=0;
+
+function updateCamera(){
+ const follow=document.getElementById('followCam')?.checked;
+ const t=follow?currentPos:target;
+ const ce=Math.cos(el);
+ camera.position.set(
+   t.x + dist*ce*Math.sin(az),
+   t.y + dist*Math.sin(el),
+   t.z + dist*ce*Math.cos(az)
+ );
+ camera.lookAt(t);
+}
+function resize(){
+ const w=Math.max(2,host.clientWidth),h=Math.max(2,host.clientHeight);
+ renderer.setSize(w,h,false);
+ camera.aspect=w/h;
+ camera.updateProjectionMatrix();
+}
+function setView(v){
+ if(v==='top'){az=0;el=Math.PI/2-.02;dist=4.1}
+ else if(v==='front'){az=0;el=.20;dist=4.7}
+ else if(v==='side'){az=Math.PI/2;el=.20;dist=4.7}
+ else {az=Math.PI*.25;el=Math.PI*.28;dist=4.8}
+ updateCamera();
+}
+function resetView(){setView('iso')}
+
+renderer.domElement.addEventListener('pointerdown',e=>{
+ if(!enabled)return;
+ dragging=true;lastX=e.clientX;lastY=e.clientY;
+ renderer.domElement.setPointerCapture(e.pointerId);
+});
+renderer.domElement.addEventListener('pointermove',e=>{
+ if(!dragging||!enabled)return;
+ az-=(e.clientX-lastX)*.008;
+ el=THREE.MathUtils.clamp(el+(e.clientY-lastY)*.008,.05,Math.PI/2-.03);
+ lastX=e.clientX;lastY=e.clientY;
+ updateCamera();
+});
+renderer.domElement.addEventListener('pointerup',e=>{
+ dragging=false;
+ try{renderer.domElement.releasePointerCapture(e.pointerId)}catch(_){}
+});
+renderer.domElement.addEventListener('wheel',e=>{
+ if(!enabled)return;
+ e.preventDefault();
+ dist=THREE.MathUtils.clamp(dist+e.deltaY*.004,1.8,12);
+ updateCamera();
+},{passive:false});
+
+function update(t){
+ const n=(Number(t.x_mm)||0)/1000;
+ const e=(Number(t.y_mm)||0)/1000;
+ const d=(Number(t.z_mm)||0)/1000;
+ currentPos.set(e,-d,-n);
+ droneRoot.position.copy(currentPos);
+
+ const roll=THREE.MathUtils.degToRad(Number(t.roll_deg)||0);
+ const pitch=THREE.MathUtils.degToRad(Number(t.pitch_deg)||0);
+ const yaw=THREE.MathUtils.degToRad(Number(t.yaw_deg)||0);
+ const qNed=new THREE.Quaternion().setFromEuler(new THREE.Euler(roll,pitch,yaw,'ZYX'));
+ droneRoot.quaternion.copy(qSceneFromNed).multiply(qNed).multiply(qBodyFromModel);
+
+ const pts=(t.trail||[]).map(p=>new THREE.Vector3(
+   (Number(p.y_mm)||0)/1000,
+   -(Number(p.z_mm)||0)/1000,
+   -(Number(p.x_mm)||0)/1000
+ ));
+ trailGeom.dispose();
+ trailGeom=new THREE.BufferGeometry().setFromPoints(pts.length?pts:[new THREE.Vector3()]);
+ trailLine.geometry=trailGeom;
+
+ trailLine.visible=document.getElementById('showTrail')?.checked!==false;
+ grid.visible=document.getElementById('showGrid')?.checked!==false;
+ axes.visible=document.getElementById('showAxes')?.checked!==false;
+ updateCamera();
+}
+function setEnabled(v){
+ enabled=!!v;
+ resize();
+ updateCamera();
+}
+function frame(){
+ if(enabled){
+   trailLine.visible=document.getElementById('showTrail')?.checked!==false;
+   grid.visible=document.getElementById('showGrid')?.checked!==false;
+   axes.visible=document.getElementById('showAxes')?.checked!==false;
+   renderer.render(scene,camera);
+ }
+ requestAnimationFrame(frame);
+}
+window.ThreeAdvanced={update,setView,resetView,resize,setEnabled};
+resize();updateCamera();frame();
 </script>
 </body>
 </html>'''
@@ -1065,7 +1233,7 @@ class H(BaseHTTPRequestHandler):
                 b=HTML.encode();self.send_response(200);self.send_header("Content-Type","text/html; charset=utf-8");self.send_header("Content-Length",str(len(b)));self.end_headers();self.wfile.write(b)
             elif p.startswith("/assets/"):
                 name=Path(p).name
-                if name not in ("CesiumDrone.glb","model-viewer.min.js","NOTICE.txt"): raise FileNotFoundError(name)
+                if name not in ("CesiumDrone.glb","model-viewer.min.js","three.module.js","GLTFLoader.js","NOTICE.txt"): raise FileNotFoundError(name)
                 fp=WEB_ASSETS/name
                 data=fp.read_bytes()
                 ctype="model/gltf-binary" if name.endswith(".glb") else ("text/javascript; charset=utf-8" if name.endswith(".js") else "text/plain; charset=utf-8")
