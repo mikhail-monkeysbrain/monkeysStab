@@ -78,7 +78,9 @@ def validate_config(d):
     }
 
 def save_config(d):
-    d=validate_config(d)
+    merged=load_config()
+    merged.update(d)
+    d=validate_config(merged)
     tmp=CONFIG.with_suffix(".json.tmp")
     with open(tmp,"w",encoding="utf-8") as f:
         json.dump(d,f,ensure_ascii=False,indent=2)
@@ -291,6 +293,18 @@ def fc_control(*args):
     if not text: raise RuntimeError("FC не вернул состояние")
     try: return json.loads(text[-1])
     except Exception: raise RuntimeError("Некорректный ответ FC: "+text[-1])
+
+def stop_statustext_monitor():
+    global _statustext_proc
+    p=_statustext_proc
+    _statustext_proc=None
+    if p is not None and p.poll() is None:
+        try:p.terminate()
+        except Exception:pass
+        try:p.wait(timeout=2)
+        except Exception:
+            try:p.kill()
+            except Exception:pass
 
 def start_runtime():
     global _proc,_log_handle
@@ -807,6 +821,15 @@ class H(BaseHTTPRequestHandler):
                 self.send_json({"text":log_tail()})
             elif p=="/api/fc":
                 self.send_json(fc_control("status"))
+            elif p=="/api/fc/params":
+                names=profile_param_names()
+                self.send_json({"values":read_fc_params(names),"profile":load_json(FC_PROFILE,{})})
+            elif p=="/api/geometry":
+                self.send_json({"values":read_fc_params(GEOMETRY_PARAMS),"local":load_json(GEOMETRY,{})})
+            elif p=="/api/messages":
+                with _lock: self.send_json({"events":list(_messages)})
+            elif p=="/api/journal":
+                with _lock: self.send_json({"events":list(_journal)})
             else:self.send_json({"error":"not found"},404)
         except Exception as e:self.send_json({"error":str(e)},500)
     def do_POST(self):
@@ -818,13 +841,24 @@ class H(BaseHTTPRequestHandler):
             elif p=="/api/start": self.send_json(start_runtime())
             elif p=="/api/stop": self.send_json(stop_runtime())
             elif p=="/api/zero": set_zero();self.send_json({"ok":True})
-            elif p=="/api/fc/arm": self.send_json(fc_control("arm"))
-            elif p=="/api/fc/disarm": self.send_json(fc_control("disarm"))
+            elif p=="/api/fc/arm":
+                out=fc_control("arm");log_event("WARN","ARM подтверждён FC");self.send_json(out)
+            elif p=="/api/fc/disarm":
+                out=fc_control("disarm");log_event("INFO","DISARM подтверждён FC");self.send_json(out)
             elif p=="/api/fc/mode":
                 mode=str(self.body_json().get("mode","")).lower()
                 if mode not in ("stabilize","poshold","loiter"):
                     raise ValueError("Разрешены только Stabilize, PosHold и Loiter")
-                self.send_json(fc_control("mode",mode))
+                out=fc_control("mode",mode);log_event("INFO","Режим FC -> "+mode);self.send_json(out)
+            elif p=="/api/fc/params":
+                self.send_json({"ok":True,"values":set_profile_params(self.body_json().get("values",{}))})
+            elif p=="/api/geometry":
+                self.send_json({"ok":True,"values":set_geometry(self.body_json().get("values",{}))})
+            elif p=="/api/system/visualization":
+                mode=str(self.body_json().get("mode","simple"))
+                if mode not in ("advanced","simple","light"): raise ValueError("Недопустимый режим визуализации")
+                cfg=save_config({"visualization_mode":mode});log_event("INFO","Визуализация -> "+mode)
+                self.send_json({"ok":True,"runtime":cfg})
             else:self.send_json({"error":"not found"},404)
         except Exception as e:self.send_json({"error":str(e)},400)
 
@@ -852,10 +886,13 @@ if __name__=="__main__":
     print("="*70,flush=True)
     try:
         ensure_router()
+        start_statustext_monitor()
+        log_event("INFO","Web UI запущен")
         print("MAVLink router: ГОТОВ, Mission Planner UDP 14550",flush=True)
         ThreadingHTTPServer((a.host,a.port),H).serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         if running(): stop_runtime()
+        stop_statustext_monitor()
         stop_router()
