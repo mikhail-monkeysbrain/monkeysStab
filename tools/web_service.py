@@ -28,7 +28,11 @@ DEFAULTS={
 _lock=threading.RLock()
 _proc=None
 _log_handle=None
+_router_proc=None
+_router_log_handle=None
+_router_started_here=False
 _zero={"x":None,"y":None,"z":None}
+FC_ENDPOINT="tcp://127.0.0.1:5760"
 
 def load_json(path, fallback):
     try:
@@ -78,6 +82,74 @@ def running():
     with _lock:
         return _proc is not None and _proc.poll() is None
 
+def tcp_ready(host="127.0.0.1",port=5760):
+    try:
+        with socket.create_connection((host,port),timeout=0.35):
+            return True
+    except OSError:
+        return False
+
+def ensure_router():
+    global _router_proc,_router_log_handle,_router_started_here
+    with _lock:
+        if tcp_ready():
+            return
+        RUN_ROOT.mkdir(parents=True,exist_ok=True)
+        router_log=RUN_ROOT/"mavlink_router_web.log"
+        _router_log_handle=open(router_log,"a",encoding="utf-8",buffering=1)
+        _router_log_handle.write("\n===== WEB ROUTER START %s =====\n"%time.strftime("%Y-%m-%d %H:%M:%S"))
+        env=os.environ.copy()
+        env["MONKEYS_FC_TCP_PORT"]="5760"
+        _router_proc=subprocess.Popen(
+            ["bash",str(ROOT/"scripts"/"run_mavlink_wifi.sh")],
+            cwd=str(ROOT),env=env,
+            stdout=_router_log_handle,stderr=subprocess.STDOUT,
+            start_new_session=True,text=True
+        )
+        _router_started_here=True
+    deadline=time.time()+6.0
+    while time.time()<deadline:
+        if tcp_ready(): return
+        if _router_proc.poll() is not None:
+            raise RuntimeError("MAVLink router завершился при запуске")
+        time.sleep(0.1)
+    raise RuntimeError("MAVLink router не открыл tcp://127.0.0.1:5760")
+
+def stop_router():
+    global _router_proc,_router_log_handle,_router_started_here
+    with _lock:
+        if not _router_started_here or _router_proc is None:
+            return
+        p=_router_proc
+        _router_proc=None
+        _router_started_here=False
+    if p.poll() is None:
+        try: os.killpg(p.pid,signal.SIGTERM)
+        except ProcessLookupError: pass
+        try: p.wait(timeout=4)
+        except subprocess.TimeoutExpired:
+            try: os.killpg(p.pid,signal.SIGKILL)
+            except ProcessLookupError: pass
+    if _router_log_handle:
+        try:_router_log_handle.close()
+        except Exception:pass
+        _router_log_handle=None
+
+def fc_control(*args):
+    ensure_router()
+    env=os.environ.copy()
+    env["MONKEYS_FC"]=FC_ENDPOINT
+    cp=subprocess.run(
+        ["bash",str(ROOT/"scripts"/"fc_control.sh"),*args],
+        cwd=str(ROOT),env=env,text=True,capture_output=True,timeout=12
+    )
+    if cp.returncode!=0:
+        raise RuntimeError((cp.stderr or cp.stdout or "команда FC завершилась с ошибкой").strip())
+    text=cp.stdout.strip().splitlines()
+    if not text: raise RuntimeError("FC не вернул состояние")
+    try: return json.loads(text[-1])
+    except Exception: raise RuntimeError("Некорректный ответ FC: "+text[-1])
+
 def start_runtime():
     global _proc,_log_handle
     with _lock:
@@ -86,8 +158,10 @@ def start_runtime():
         RUN_ROOT.mkdir(parents=True,exist_ok=True)
         _log_handle=open(WEB_LOG,"a",encoding="utf-8",buffering=1)
         _log_handle.write("\n===== WEB START %s =====\n"%time.strftime("%Y-%m-%d %H:%M:%S"))
+        ensure_router()
         env=os.environ.copy()
         env["MONKEYS_LOCAL_GUI"]="0"
+        env["MONKEYS_FC"]=FC_ENDPOINT
         _proc=subprocess.Popen(
             ["bash",str(ROOT/"scripts"/"run_system.sh")],
             cwd=str(ROOT), env=env,
@@ -268,7 +342,20 @@ pre{height:190px;overflow:auto;background:#0c1115;border-radius:8px;padding:10px
 <button class="primary" onclick="start()">ЗАПУСТИТЬ ДЛЯ ПОЛЁТА</button>
 <button class="danger" onclick="stop()">ОСТАНОВИТЬ</button>
 <button class="soft" onclick="zero()">НОВАЯ ТОЧКА 0</button>
-<div class="small">Web START не ARM-ит FC и не переключает режим полёта.</div>
+<div class="small">Запуск runtime сам по себе не ARM-ит FC и не переключает режим.</div>
+</div>
+<div class="card" style="margin-top:16px">
+<h3>Полётный контроллер</h3>
+<div class="status"><span id="fcDot" class="dot off"></span><b id="fcState">FC: нет связи</b></div>
+<div style="margin-bottom:8px"><b>Режим: <span id="fcMode">—</span></b></div>
+<button class="primary" onclick="armFc()">ARM</button>
+<button class="danger" onclick="disarmFc()">DISARM</button>
+<div style="margin-top:8px">
+<button class="soft" onclick="setMode('stabilize','Stabilize')">STABILIZE</button>
+<button class="soft" onclick="setMode('poshold','PosHold')">POSHOLD</button>
+<button class="soft" onclick="setMode('loiter','Loiter')">LOITER</button>
+</div>
+<div id="fcMsg" class="small">Команды подтверждаются по HEARTBEAT FC.</div>
 </div>
 <div class="card" style="margin-top:16px">
 <h3>Стартовые параметры</h3>
@@ -331,6 +418,28 @@ await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json
 async function start(){try{await api('/api/start',{method:'POST'});}catch(e){alert(e.message)}}
 async function stop(){try{await api('/api/stop',{method:'POST'});}catch(e){alert(e.message)}}
 async function zero(){try{await api('/api/zero',{method:'POST'});}catch(e){alert(e.message)}}
+async function armFc(){
+ if(!confirm('ARM: разрешить запуск моторов? Аппарат должен быть подготовлен к безопасному запуску.'))return;
+ try{let j=await api('/api/fc/arm',{method:'POST'});fcMsg.textContent='ARM подтверждён FC';showFc(j)}catch(e){fcMsg.textContent='ARM отклонён: '+e.message;alert(e.message)}
+}
+async function disarmFc(){
+ if(!confirm('DISARM: отключить моторы? В полёте обычный DISARM может быть запрещён ArduPilot.'))return;
+ try{let j=await api('/api/fc/disarm',{method:'POST'});fcMsg.textContent='DISARM подтверждён FC';showFc(j)}catch(e){fcMsg.textContent='DISARM отклонён: '+e.message;alert(e.message)}
+}
+async function setMode(id,name){
+ if(!confirm('Переключить режим на '+name+'?'))return;
+ try{let j=await api('/api/fc/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:id})});fcMsg.textContent='Режим '+name+' подтверждён FC';showFc(j)}catch(e){fcMsg.textContent='Смена режима отклонена: '+e.message;alert(e.message)}
+}
+function showFc(j){
+ fcDot.className='dot on';
+ fcState.textContent=j.armed?'ARMED':'DISARMED';
+ fcState.className=j.armed?'bad':'good';
+ fcMode.textContent=j.mode+(j.mode==='Other'?' ('+j.custom_mode+')':'');
+}
+async function refreshFc(){
+ try{let j=await api('/api/fc');showFc(j)}
+ catch(e){fcDot.className='dot off';fcState.textContent='FC: нет связи';fcState.className='bad';fcMode.textContent='—'}
+}
 function draw(t){
  let c=plot,ctx=c.getContext('2d'),w=c.width,h=c.height;ctx.clearRect(0,0,w,h);
  ctx.fillStyle='#0c1115';ctx.fillRect(0,0,w,h);
@@ -392,7 +501,7 @@ async function refresh(){try{
  roll.textContent=fmt(t.roll_deg,1)+'°';pitch.textContent=fmt(t.pitch_deg,1)+'°';yaw.textContent=fmt(t.yaw_deg,1)+'°';inl.textContent=(t.inliers??'—')+'/'+(t.tracked??'—');arm.textContent=t.armed?'ARMED':'DISARMED';draw(t);drawDrone(t);drawGauge('gRoll',t.roll_deg,45,'angle');drawGauge('gPitch',t.pitch_deg,45,'angle');drawGauge('gYaw',t.yaw_deg,180,'yaw');
  let l=await api('/api/log');log.textContent=l.text||'';log.scrollTop=log.scrollHeight;
  }catch(e){}}
-loadConfig();refresh();setInterval(refresh,700);
+loadConfig();refresh();refreshFc();setInterval(refresh,700);setInterval(refreshFc,1800);
 </script></body></html>'''
 
 class H(BaseHTTPRequestHandler):
@@ -418,6 +527,8 @@ class H(BaseHTTPRequestHandler):
                 self.send_json(telemetry())
             elif p=="/api/log":
                 self.send_json({"text":log_tail()})
+            elif p=="/api/fc":
+                self.send_json(fc_control("status"))
             else:self.send_json({"error":"not found"},404)
         except Exception as e:self.send_json({"error":str(e)},500)
     def do_POST(self):
@@ -429,6 +540,13 @@ class H(BaseHTTPRequestHandler):
             elif p=="/api/start": self.send_json(start_runtime())
             elif p=="/api/stop": self.send_json(stop_runtime())
             elif p=="/api/zero": set_zero();self.send_json({"ok":True})
+            elif p=="/api/fc/arm": self.send_json(fc_control("arm"))
+            elif p=="/api/fc/disarm": self.send_json(fc_control("disarm"))
+            elif p=="/api/fc/mode":
+                mode=str(self.body_json().get("mode","")).lower()
+                if mode not in ("stabilize","poshold","loiter"):
+                    raise ValueError("Разрешены только Stabilize, PosHold и Loiter")
+                self.send_json(fc_control("mode",mode))
             else:self.send_json({"error":"not found"},404)
         except Exception as e:self.send_json({"error":str(e)},400)
 
@@ -452,11 +570,14 @@ if __name__=="__main__":
     print("monkeysStab WEB")
     print(f"Локально: http://127.0.0.1:{a.port}")
     for ip in ips(): print(f"С компьютера в той же сети: http://{ip}:{a.port}")
-    print("Web-интерфейс не ARM-ит FC и не переключает режим полёта.")
+    print("Web-интерфейс: runtime + FC ARM/DISARM + Stabilize/PosHold/Loiter.")
     print("="*70,flush=True)
     try:
+        ensure_router()
+        print("MAVLink router: ГОТОВ, Mission Planner UDP 14550",flush=True)
         ThreadingHTTPServer((a.host,a.port),H).serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         if running(): stop_runtime()
+        stop_router()
