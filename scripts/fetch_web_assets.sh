@@ -30,6 +30,21 @@ fetch "https://unpkg.com/three@0.169.0/build/three.module.js" "$ASSETS/three.mod
 THREE_RC=$?
 fetch "https://unpkg.com/three@0.169.0/examples/jsm/loaders/GLTFLoader.js" "$ASSETS/GLTFLoader.js"
 GLTF_RC=$?
+
+# GLTFLoader is published with a bare import from 'three'.  The monkeysStab
+# web server has no npm resolver, so make the loader fully self-contained.
+# Apply on every launch so an already cached file is repaired as well.
+if [[ -s "$ASSETS/GLTFLoader.js" ]]; then
+  python3 - "$ASSETS/GLTFLoader.js" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1])
+s=p.read_text(encoding="utf-8")
+s=s.replace("from 'three';", "from './three.module.js';")
+s=s.replace('from "three";', 'from "./three.module.js";')
+p.write_text(s,encoding="utf-8")
+PY
+fi
 set -e
 
 if [[ "$MODEL_RC" != 0 || "$VIEWER_RC" != 0 || "$THREE_RC" != 0 || "$GLTF_RC" != 0 ]]; then
