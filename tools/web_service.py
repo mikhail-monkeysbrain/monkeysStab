@@ -130,15 +130,15 @@ def tail_rows(path, max_rows=180):
     if not path or not path.exists():
         return []
     try:
-        with open(path,"r",encoding="utf-8",errors="replace") as f:
-            header_line=f.readline().strip()
+        with open(path,"rb") as f:
+            header_line=f.readline().decode("utf-8","replace").strip()
             if not header_line: return []
             header=next(csv.reader([header_line]))
             f.seek(0,os.SEEK_END)
             size=f.tell()
             back=min(size, 512*1024)
-            f.seek(size-back)
-            chunk=f.read()
+            f.seek(size-back,os.SEEK_SET)
+            chunk=f.read().decode("utf-8","replace")
         lines=chunk.splitlines()
         if back < size and lines: lines=lines[1:]
         data=[]
