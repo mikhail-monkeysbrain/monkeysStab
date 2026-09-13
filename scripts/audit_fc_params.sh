@@ -5,10 +5,16 @@ DEVICE="${MONKEYS_FC:-/dev/ttyAMA0}"
 BAUD="${MONKEYS_FC_BAUD:-460800}"
 SYSID="${MONKEYS_FC_SYSID:-1}"
 COMPID="${MONKEYS_FC_COMPID:-1}"
-MAVLINK_ROOT="${MAVLINK_ROOT:-/usr/local/include/mavlink/v2.0}"
-
-[[ -f "$MAVLINK_ROOT/ardupilotmega/mavlink.h" ]] || {
-  echo "ОШИБКА: MAVLink headers не найдены в $MAVLINK_ROOT" >&2
+if [[ -z "${MAVLINK_ROOT:-}" ]]; then
+  for d in "$ROOT/third_party/mavlink" /usr/local/include/mavlink/v2.0 /usr/include/mavlink/v2.0; do
+    if [[ -f "$d/ardupilotmega/mavlink.h" ]]; then
+      MAVLINK_ROOT="$d"
+      break
+    fi
+  done
+fi
+[[ -f "${MAVLINK_ROOT:-}/ardupilotmega/mavlink.h" ]] || {
+  echo "ОШИБКА: MAVLink headers не найдены. Сначала запустите scripts/bootstrap_dependencies.sh или задайте MAVLINK_ROOT." >&2
   exit 2
 }
 
