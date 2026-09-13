@@ -1,0 +1,11 @@
+build/
+*.o
+*.log
+*.csv
+*.bin
+*.mjpg
+*.mjpgbin
+runs/
+.vscode/
+.idea/
+__pycache__/
