@@ -895,7 +895,7 @@ async function setVisualizationMode(mode){
  catch(e){alert(e.message)}
 }
 function drawLightScene(t){
- let c=$('lightCanvas');if(!c)return,ctx=c.getContext('2d');let d=devicePixelRatio,w=c.width=c.clientWidth*d,h=c.height=c.clientHeight*d;ctx.scale(d,d);w=c.clientWidth;h=c.clientHeight;
+ let c=$('lightCanvas');if(!c)return;let ctx=c.getContext('2d');let d=devicePixelRatio,w=c.width=c.clientWidth*d,h=c.height=c.clientHeight*d;ctx.scale(d,d);w=c.clientWidth;h=c.clientHeight;
  ctx.fillStyle='#07121c';ctx.fillRect(0,0,w,h);let cx=w/2,cy=h/2,scale=Math.min(w,h)/2.5;
  ctx.strokeStyle='#153d58';for(let i=-5;i<=5;i++){let q=i*.2*scale;ctx.beginPath();ctx.moveTo(cx+q,20);ctx.lineTo(cx+q,h-20);ctx.stroke();ctx.beginPath();ctx.moveTo(20,cy+q);ctx.lineTo(w-20,cy+q);ctx.stroke()}
  let tr=t.trail||[];ctx.strokeStyle='#1eaaff';ctx.lineWidth=2;ctx.beginPath();tr.forEach((p,i)=>{let x=cx+(p.y_mm/1000)*scale,y=cy-(p.x_mm/1000)*scale;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y)});ctx.stroke();
