@@ -5,7 +5,7 @@ cd "$ROOT"
 
 CAMERA="${MONKEYS_CAMERA:-/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arducam_OV9281_USB_Camera_UC762-video-index0}"
 LUNA="${MONKEYS_LUNA:-/dev/ttyAMA2}"
-FC="${MONKEYS_FC:-/dev/ttyAMA0}"
+FC="${MONKEYS_FC:-tcp://127.0.0.1:5760}"
 CAMERA_YAML="${MONKEYS_CAMERA_YAML:-$ROOT/config/ov9281_current_mount.yaml}"
 FOCAL_SCALE="${MONKEYS_FOCAL_SCALE:-0.931}"
 FEATURE_ROI="${MONKEYS_FEATURE_ROI:-0.20 0.32 0.80 0.90}"
@@ -41,7 +41,9 @@ bash "$ROOT/scripts/audit_fc_params.sh"
 
 [[ -e "$CAMERA" ]] || { echo "ОШИБКА: камера не найдена: $CAMERA" >&2; exit 2; }
 [[ -e "$LUNA" ]] || { echo "ОШИБКА: TF-Luna не найден: $LUNA" >&2; exit 2; }
-[[ -e "$FC" ]] || { echo "ОШИБКА: FC не найден: $FC" >&2; exit 2; }
+if [[ "$FC" != tcp://* ]]; then
+  [[ -e "$FC" ]] || { echo "ОШИБКА: FC не найден: $FC" >&2; exit 2; }
+fi
 [[ -f "$CAMERA_YAML" ]] || { echo "ОШИБКА: camera YAML не найден: $CAMERA_YAML" >&2; exit 2; }
 [[ -f "$MAVLINK_ROOT/ardupilotmega/mavlink.h" ]] || { echo "ОШИБКА: MAVLink headers не найдены: $MAVLINK_ROOT" >&2; exit 2; }
 [[ -f "$ROOT/src/optical_flow_mavlink.cpp" ]] || {
