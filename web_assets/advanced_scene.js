@@ -201,7 +201,7 @@ function update(t){
  const n=(Number(t.x_mm)||0)/1000;
  const e=(Number(t.y_mm)||0)/1000;
  const d=(Number(t.z_mm)||0)/1000;
- currentPos.set(n,-d,e);
+ currentPos.set(-n,-d,e);
  droneRoot.position.copy(currentPos);
 
  const roll=THREE.MathUtils.degToRad(Number(t.roll_deg)||0);
@@ -216,7 +216,7 @@ function update(t){
  droneRoot.quaternion.copy(qSceneFromNed).multiply(qNed).multiply(qBodyFromModel);
 
  const pts=(t.trail||[]).map(p=>new THREE.Vector3(
-   (Number(p.x_mm)||0)/1000,
+   -(Number(p.x_mm)||0)/1000,
    -(Number(p.z_mm)||0)/1000,
    (Number(p.y_mm)||0)/1000
  ));
