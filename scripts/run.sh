@@ -10,8 +10,17 @@ CAMERA_YAML="${MONKEYS_CAMERA_YAML:-$ROOT/config/ov9281_current_mount.yaml}"
 FOCAL_SCALE="${MONKEYS_FOCAL_SCALE:-0.931}"
 FEATURE_ROI="${MONKEYS_FEATURE_ROI:-0.20 0.32 0.80 0.90}"
 MAX_FEATURES="${MONKEYS_MAX_FEATURES:-500}"
-CAMERA_Z_M="${MONKEYS_CAMERA_Z_M:-0.050}"
-RANGE_Z_M="${MONKEYS_RANGE_Z_M:-0.055}"
+GEOMETRY_JSON="${MONKEYS_GEOMETRY_JSON:-$ROOT/config/mount_geometry.json}"
+[[ -f "$GEOMETRY_JSON" ]] || { echo "ОШИБКА: geometry config не найден: $GEOMETRY_JSON" >&2; exit 2; }
+read -r CFG_CAMERA_Z CFG_RANGE_Z < <(python3 - "$GEOMETRY_JSON" <<'PY'
+import json,sys
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    g=json.load(f)
+print(g["camera"]["z"], g["rangefinder"]["z"])
+PY
+)
+CAMERA_Z_M="${MONKEYS_CAMERA_Z_M:-$CFG_CAMERA_Z}"
+RANGE_Z_M="${MONKEYS_RANGE_Z_M:-$CFG_RANGE_Z}"
 if [[ -z "${MAVLINK_ROOT:-}" ]]; then
   for d in "$ROOT/third_party/mavlink" /usr/local/include/mavlink/v2.0 /usr/include/mavlink/v2.0; do
     if [[ -f "$d/ardupilotmega/mavlink.h" ]]; then
