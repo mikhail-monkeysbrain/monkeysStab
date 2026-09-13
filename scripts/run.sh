@@ -24,6 +24,7 @@ if [[ -z "${MAVLINK_ROOT:-}" ]]; then
   bash "$ROOT/scripts/bootstrap_dependencies.sh"
   MAVLINK_ROOT="$ROOT/third_party/mavlink"
 fi
+export MAVLINK_ROOT
 RUN_ROOT="${MONKEYS_RUN_ROOT:-$HOME/monkeysStab_runs}"
 
 bash "$ROOT/scripts/audit_geometry.sh"
