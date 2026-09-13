@@ -99,24 +99,20 @@ const bodyFromModel=new THREE.Matrix4().set(
 );
 const qBodyFromModel=new THREE.Quaternion().setFromRotationMatrix(bodyFromModel);
 
-set3dStatus('Загрузка 3D-модели…');
-new GLTFLoader().load('/assets/CesiumDrone.glb',gltf=>{
+set3dStatus('Загрузка GTKima QuadCopter…');
+const loader=new GLTFLoader();
+
+function installDroneModel(gltf,sourceName){
  droneModel=gltf.scene;
  droneModel.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true}});
- // First determine the raw model size and choose the display scale.
- // IMPORTANT: do not apply the raw bounding-box center as Object3D.position
- // before scaling. Object3D.position is not multiplied by its own scale, which
- // would leave a large residual offset after shrinking the GLB.
  let box=new THREE.Box3().setFromObject(droneModel);
  const rawSize=new THREE.Vector3(); box.getSize(rawSize);
  const span=Math.max(rawSize.x,rawSize.y,rawSize.z)||1;
- const targetSpan=.48; // displayed aircraft span ~48 cm on the metre grid
+ const targetSpan=.48;
  const scale=targetSpan/span;
  droneModel.scale.setScalar(scale);
  droneModel.updateMatrixWorld(true);
 
- // Recompute the bounding box after scaling, then move the scaled visual
- // centroid exactly onto droneRoot (the FC telemetry reference point).
  box=new THREE.Box3().setFromObject(droneModel);
  const scaledCenter=new THREE.Vector3(); box.getCenter(scaledCenter);
  droneModel.position.sub(scaledCenter);
@@ -124,7 +120,21 @@ new GLTFLoader().load('/assets/CesiumDrone.glb',gltf=>{
 
  droneRoot.add(droneModel);
  set3dStatus('');
-},undefined,e=>{console.error('GLB load failed',e);set3dStatus('Ошибка загрузки GLB: '+(e?.message||e),true)});
+ console.info('Drone model loaded:',sourceName);
+}
+
+loader.load('/assets/GTKimaQuadcopter.glb',gltf=>{
+ installDroneModel(gltf,'GTKima Low poly QuadCopter Drone');
+},undefined,gtkErr=>{
+ console.warn('GTKima model unavailable, fallback to CesiumDrone',gtkErr);
+ set3dStatus('GTKimaQuadcopter.glb не найден — используется резервная модель');
+ loader.load('/assets/CesiumDrone.glb',gltf=>{
+ installDroneModel(gltf,'CesiumDrone fallback');
+ },undefined,e=>{
+   console.error('Fallback GLB load failed',e);
+   set3dStatus('Ошибка загрузки 3D-модели: '+(e?.message||e),true);
+ });
+});
 
 let enabled=false;
 let renderPending=false;
