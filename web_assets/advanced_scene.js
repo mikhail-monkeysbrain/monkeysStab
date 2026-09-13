@@ -60,6 +60,14 @@ scene.add(trailLine);
 
 const droneRoot=new THREE.Group();
 scene.add(droneRoot);
+
+// Exact FC telemetry reference point. This marker stays at droneRoot origin,
+// allowing visual verification that the model centroid matches X/Y/Z.
+const referenceMarker=new THREE.Mesh(
+  new THREE.SphereGeometry(.018,16,12),
+  new THREE.MeshBasicMaterial({color:0xffffff})
+);
+droneRoot.add(referenceMarker);
 let droneModel=null;
 
 // NED -> Three scene:
@@ -95,17 +103,25 @@ set3dStatus('Загрузка 3D-модели…');
 new GLTFLoader().load('/assets/CesiumDrone.glb',gltf=>{
  droneModel=gltf.scene;
  droneModel.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true}});
- const box=new THREE.Box3().setFromObject(droneModel);
- const size=new THREE.Vector3(); box.getSize(size);
- const center=new THREE.Vector3(); box.getCenter(center);
- droneModel.position.sub(center);
- const span=Math.max(size.x,size.y,size.z)||1;
- const targetSpan=.48; // physical display span ~48 cm on the metre grid
+ // First determine the raw model size and choose the display scale.
+ // IMPORTANT: do not apply the raw bounding-box center as Object3D.position
+ // before scaling. Object3D.position is not multiplied by its own scale, which
+ // would leave a large residual offset after shrinking the GLB.
+ let box=new THREE.Box3().setFromObject(droneModel);
+ const rawSize=new THREE.Vector3(); box.getSize(rawSize);
+ const span=Math.max(rawSize.x,rawSize.y,rawSize.z)||1;
+ const targetSpan=.48; // displayed aircraft span ~48 cm on the metre grid
  const scale=targetSpan/span;
  droneModel.scale.setScalar(scale);
+ droneModel.updateMatrixWorld(true);
 
- // The FC position is the vehicle reference point, not the landing gear.
- // Keep the centered GLB origin exactly at the telemetry X/Y/Z point.
+ // Recompute the bounding box after scaling, then move the scaled visual
+ // centroid exactly onto droneRoot (the FC telemetry reference point).
+ box=new THREE.Box3().setFromObject(droneModel);
+ const scaledCenter=new THREE.Vector3(); box.getCenter(scaledCenter);
+ droneModel.position.sub(scaledCenter);
+ droneModel.updateMatrixWorld(true);
+
  droneRoot.add(droneModel);
  set3dStatus('');
 },undefined,e=>{console.error('GLB load failed',e);set3dStatus('Ошибка загрузки GLB: '+(e?.message||e),true)});
