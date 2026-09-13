@@ -96,6 +96,14 @@ def running():
     with _lock:
         return _proc is not None and _proc.poll() is None
 
+def runtime_exit_info():
+    with _lock:
+        p=_proc
+    if p is None or p.poll() is None:
+        return None
+    tail=log_tail(45)
+    return {"returncode":p.returncode,"log_tail":tail}
+
 def log_event(level,text):
     with _lock:
         _journal.append({
@@ -329,8 +337,23 @@ def start_runtime():
             stdout=_log_handle, stderr=subprocess.STDOUT,
             start_new_session=True, text=True
         )
-        log_event("INFO","Flight runtime запущен")
-        return {"ok":True,"pid":_proc.pid}
+        pid=_proc.pid
+    # Let fast preflight/audit failures surface to the caller instead of
+    # silently returning to "Остановлен".
+    deadline=time.time()+1.2
+    while time.time()<deadline:
+        if _proc.poll() is not None:
+            info=runtime_exit_info() or {}
+            msg="Flight runtime завершился при запуске"
+            if info.get("returncode") is not None:
+                msg+=f" (code {info['returncode']})"
+            if info.get("log_tail"):
+                msg+="\n"+info["log_tail"]
+            log_event("ERROR",msg)
+            raise RuntimeError(msg)
+        time.sleep(0.08)
+    log_event("INFO","Flight runtime запущен")
+    return {"ok":True,"pid":pid}
 
 def stop_runtime():
     global _proc,_log_handle,_active_csv
@@ -426,7 +449,7 @@ def telemetry():
     path=latest_run_csv()
     rows=tail_rows(path,180) if path else []
     if not rows:
-        return {"available":False,"running":live,"trail":[],"history":[],"source_age_ms":None}
+        return {"available":False,"running":live,"trail":[],"history":[],"source_age_ms":None,"runtime_exit":runtime_exit_info()}
     source_age_ms=None
     try: source_age_ms=max(0.0,(time.time()-path.stat().st_mtime)*1000.0)
     except Exception: pass
@@ -650,6 +673,7 @@ button{cursor:pointer}
    <div id="saveMsg" style="font-size:11px;color:#7798ae;margin-top:5px"></div>
    <button class="startBig" onclick="start()">▶ ЗАПУСТИТЬ СИСТЕМУ</button>
    <button class="stopBig" onclick="stop()">■ ОСТАНОВИТЬ</button>
+   <div id="runtimeError" style="display:none;margin-top:8px;padding:8px;border:1px solid #8b3038;border-radius:5px;background:#271018;color:#ff7b86;font:11px/1.35 ui-monospace,monospace;white-space:pre-wrap;max-height:180px;overflow:auto"></div>
   </div>
 
   <div class="card">
@@ -977,8 +1001,16 @@ function drawLightScene(t){
 function updateAdvancedModel(t){
  if(window.ThreeAdvanced) window.ThreeAdvanced.update(t);
 }
-async function start(){try{await api('/api/start',{method:'POST'});}catch(e){alert(e.message)}}
-async function stop(){try{await api('/api/stop',{method:'POST'});}catch(e){alert(e.message)}}
+async function start(){
+ let box=$('runtimeError');box.style.display='none';box.textContent='';
+ try{
+  await api('/api/start',{method:'POST'});
+  setTimeout(refresh,300);
+ }catch(e){
+  box.style.display='block';box.textContent=e.message;alert('Не удалось запустить flight runtime. Причина показана под кнопкой запуска.');
+ }
+}
+async function stop(){try{await api('/api/stop',{method:'POST'});setTimeout(refresh,150);}catch(e){alert(e.message)}}
 async function zero(){try{await api('/api/zero',{method:'POST'});if(window.ThreeAdvanced&&latest)window.ThreeAdvanced.zeroHeading(latest.yaw_deg);}catch(e){alert(e.message)}}
 async function armFc(){if(!confirm('ARM: разрешить запуск моторов?'))return;try{showFc(await api('/api/fc/arm',{method:'POST'}))}catch(e){alert(e.message)}}
 async function disarmFc(){if(!confirm('DISARM: отключить моторы?'))return;try{showFc(await api('/api/fc/disarm',{method:'POST'}))}catch(e){alert(e.message)}}
@@ -996,6 +1028,11 @@ function updateHud(t){
    $('mx').textContent='—';$('my').textContent='—';$('mz').textContent='—';$('mr').textContent='—';$('mq').textContent='—';
    $('frame').textContent='—';$('inl').textContent='—';$('ekf').textContent='—';
    $('sceneXYZ').textContent=t.running?'Ожидание live CSV текущего запуска…':'Runtime остановлен — live данные отсутствуют';
+   let box=$('runtimeError');
+   if(t.runtime_exit&&t.runtime_exit.log_tail){
+     box.style.display='block';
+     box.textContent='Runtime завершён (code '+t.runtime_exit.returncode+')\n'+t.runtime_exit.log_tail;
+   }
    clearCharts();
    return;
  }
