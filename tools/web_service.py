@@ -43,6 +43,7 @@ _router_started_here=False
 _statustext_proc=None
 _statustext_thread=None
 _zero={"x":None,"y":None,"z":None}
+_raw_zero={"n":None,"e":None}
 _journal=deque(maxlen=500)
 _messages=deque(maxlen=500)
 _ws_clients=set()
@@ -151,10 +152,25 @@ def live_payload(raw):
         x=float(raw.get("x",0.0));y=float(raw.get("y",0.0));z=float(raw.get("z",0.0))
     except Exception:
         x=y=z=0.0
+    raw_n=raw.get("raw_of_n")
+    raw_e=raw.get("raw_of_e")
+    try:
+        raw_n=float(raw_n) if raw_n is not None else None
+        raw_e=float(raw_e) if raw_e is not None else None
+    except Exception:
+        raw_n=raw_e=None
+
     with _lock:
         if _zero["x"] is None:
             _zero["x"],_zero["y"],_zero["z"]=x,y,z
         zx,zy,zz=_zero["x"],_zero["y"],_zero["z"]
+        if raw_n is not None and raw_e is not None and _raw_zero["n"] is None:
+            _raw_zero["n"],_raw_zero["e"]=raw_n,raw_e
+        rzn,rze=_raw_zero["n"],_raw_zero["e"]
+    raw_rel_n=(raw_n-rzn) if raw_n is not None and rzn is not None else None
+    raw_rel_e=(raw_e-rze) if raw_e is not None and rze is not None else None
+    ekf_rel_x=x-zx
+    ekf_rel_y=y-zy
     out={
         "type":"telemetry",
         "available":True,
@@ -170,9 +186,16 @@ def live_payload(raw):
         "range_age_ms":raw.get("range_age_ms"),
         "armed":bool(raw.get("armed",False)),
         "ekf_valid":bool(raw.get("ekf_valid",False)),
-        "x_mm":(x-zx)*1000.0,
-        "y_mm":(y-zy)*1000.0,
+        "x_mm":ekf_rel_x*1000.0,
+        "y_mm":ekf_rel_y*1000.0,
         "z_mm":(z-zz)*1000.0,
+        "ekf_drift_mm":math.hypot(ekf_rel_x,ekf_rel_y)*1000.0,
+        "raw_of_valid":bool(raw.get("raw_of_valid",False)),
+        "raw_of_n_mm":raw_rel_n*1000.0 if raw_rel_n is not None else None,
+        "raw_of_e_mm":raw_rel_e*1000.0 if raw_rel_e is not None else None,
+        "raw_of_drift_mm":math.hypot(raw_rel_n,raw_rel_e)*1000.0 if raw_rel_n is not None and raw_rel_e is not None else None,
+        "raw_of_vn":raw.get("raw_of_vn"),
+        "raw_of_ve":raw.get("raw_of_ve"),
         "vx":raw.get("vx",0.0),"vy":raw.get("vy",0.0),"vz":raw.get("vz",0.0),
         "roll_deg":raw.get("roll_deg",0.0),
         "pitch_deg":raw.get("pitch_deg",0.0),
@@ -507,6 +530,7 @@ def start_runtime():
             _live_latest=None
             _live_last_wall=0.0
             _zero["x"]=_zero["y"]=_zero["z"]=None
+            _raw_zero["n"]=_raw_zero["e"]=None
         _runtime_started_wall=time.time()
         _active_csv=None
         _proc=subprocess.Popen(
@@ -654,7 +678,16 @@ def set_zero():
         raw_y=(zy or 0.0)+float(cur.get("y_mm",0.0))/1000.0
         raw_z=(zz or 0.0)+float(cur.get("z_mm",0.0))/1000.0
         _zero["x"],_zero["y"],_zero["z"]=raw_x,raw_y,raw_z
+        rn=cur.get("raw_of_n_mm")
+        re=cur.get("raw_of_e_mm")
+        if rn is not None and re is not None:
+            # Current cumulative raw values = previous zero + current relative values.
+            _raw_zero["n"]=(_raw_zero["n"] or 0.0)+float(rn)/1000.0
+            _raw_zero["e"]=(_raw_zero["e"] or 0.0)+float(re)/1000.0
         cur["x_mm"]=cur["y_mm"]=cur["z_mm"]=0.0
+        cur["ekf_drift_mm"]=0.0
+        if rn is not None and re is not None:
+            cur["raw_of_n_mm"]=0.0;cur["raw_of_e_mm"]=0.0;cur["raw_of_drift_mm"]=0.0
         _live_latest=cur
     ws_broadcast({"type":"zero"})
 
@@ -838,6 +871,18 @@ button{cursor:pointer}
    <div class="metric"><span>Z</span><b id="mz">—</b></div>
    <div class="metric"><span>TF-Luna</span><b id="mr">—</b></div>
    <div class="metric"><span>Flow quality</span><b id="mq">—</b></div>
+  </div>
+
+  <div class="card" style="margin-top:10px">
+   <h3>Дрейф от HOME — EKF vs RAW Optical Flow</h3>
+   <div class="kv" style="grid-template-columns:155px 1fr 155px 1fr 155px 1fr">
+    <span>EKF ΔN / ΔE</span><span id="ekfNE">—</span>
+    <span>EKF |XY|</span><span id="ekfDrift">—</span>
+    <span>EKF vN / vE</span><span id="ekfVel">—</span>
+    <span>RAW OF ΔN / ΔE</span><span id="rawNE">—</span>
+    <span>RAW OF |XY|</span><span id="rawDrift">—</span>
+    <span>RAW OF vN / vE</span><span id="rawVel">—</span>
+   </div>
   </div>
 
   <div class="bottomCharts">
@@ -1164,6 +1209,7 @@ function updateHud(t){
    $('footerRuntime').textContent=t.running?'запускается…':'остановлен';
    $('mx').textContent='—';$('my').textContent='—';$('mz').textContent='—';$('mr').textContent='—';$('mq').textContent='—';
    $('frame').textContent='—';$('inl').textContent='—';$('ekf').textContent='—';
+   ['ekfNE','ekfDrift','ekfVel','rawNE','rawDrift','rawVel'].forEach(id=>{if($(id))$(id).textContent='—'});
    $('sceneXYZ').textContent=t.running?'Ожидание WebSocket телеметрии…':'Runtime остановлен — live данные отсутствуют';
    let box=$('runtimeError');
    if(t.runtime_exit&&t.runtime_exit.log_tail){
@@ -1177,6 +1223,12 @@ function updateHud(t){
  $('mx').textContent=fmt(t.x_mm,0)+' мм';$('my').textContent=fmt(t.y_mm,0)+' мм';$('mz').textContent=fmt(t.z_mm,0)+' мм';$('mr').textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';$('mq').textContent=t.quality??'—';
  $('roll').textContent=fmt(t.roll_deg,1)+'°';$('pitch').textContent=fmt(t.pitch_deg,1)+'°';$('yaw').textContent=fmt(t.yaw_deg,1)+'°';
  $('inl').textContent=(t.inliers??'—')+'/'+(t.tracked??'—');$('frame').textContent=t.frame??'—';$('ekf').textContent=t.ekf_valid?'VALID':'NO DATA';
+ if($('ekfNE'))$('ekfNE').textContent=fmt(t.x_mm,1)+' / '+fmt(t.y_mm,1)+' мм';
+ if($('ekfDrift'))$('ekfDrift').textContent=fmt(t.ekf_drift_mm,1)+' мм';
+ if($('ekfVel'))$('ekfVel').textContent=fmt((t.vx||0)*1000,1)+' / '+fmt((t.vy||0)*1000,1)+' мм/с';
+ if($('rawNE'))$('rawNE').textContent=t.raw_of_n_mm==null?'—':fmt(t.raw_of_n_mm,1)+' / '+fmt(t.raw_of_e_mm,1)+' мм';
+ if($('rawDrift'))$('rawDrift').textContent=t.raw_of_drift_mm==null?'—':fmt(t.raw_of_drift_mm,1)+' мм';
+ if($('rawVel'))$('rawVel').textContent=t.raw_of_vn==null?'—':fmt(t.raw_of_vn*1000,1)+' / '+fmt(t.raw_of_ve*1000,1)+' мм/с';
  $('sceneXYZ').textContent='X '+fmt((t.x_mm||0)/1000,3)+' · Y '+fmt((t.y_mm||0)/1000,3)+' · Z '+fmt((t.z_mm||0)/1000,3)+' m';
  $('rollNeedle').style.left=(50+clamp(t.roll_deg||0,-45,45)/45*50)+'%';
  $('pitchNeedle').style.left=(50+clamp(t.pitch_deg||0,-45,45)/45*50)+'%';
