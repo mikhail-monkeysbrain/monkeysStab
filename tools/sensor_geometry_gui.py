@@ -70,12 +70,9 @@ class GeometryGui(tk.Tk):
             table.columnconfigure(c, weight=1)
 
         ttk.Label(table, text="Датчик", font=("DejaVu Sans", 11, "bold")).grid(row=0,column=0,sticky="w",**pad)
-        ttk.Label(table, text="X, мм
-(+ вперёд)", justify="center").grid(row=0,column=1,**pad)
-        ttk.Label(table, text="Y, мм
-(+ вправо)", justify="center").grid(row=0,column=2,**pad)
-        ttk.Label(table, text="Z, мм
-(+ вниз)", justify="center").grid(row=0,column=3,**pad)
+        ttk.Label(table, text="X, мм\\n(+ вперёд)", justify="center").grid(row=0,column=1,**pad)
+        ttk.Label(table, text="Y, мм\\n(+ вправо)", justify="center").grid(row=0,column=2,**pad)
+        ttk.Label(table, text="Z, мм\\n(+ вниз)", justify="center").grid(row=0,column=3,**pad)
 
         self._sensor_row(table, 1, "OV9281 / камера", "cam")
         self._sensor_row(table, 2, "TF-Luna / дальномер", "rng")
