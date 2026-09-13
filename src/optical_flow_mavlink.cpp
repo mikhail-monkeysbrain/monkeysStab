@@ -158,6 +158,12 @@ struct FlowFcOutputs {
   bool valid=false;
 };
 
+struct FlowFcRc {
+  std::array<uint16_t,18> pwm{};
+  int64_t recv_ns=0;
+  bool valid=false;
+};
+
 struct FlowFc {
   int fd=-1;
   std::thread th;
@@ -168,6 +174,7 @@ struct FlowFc {
   FlowFcTarget target{};
   FlowFcAttTarget att_target{};
   FlowFcOutputs outputs{};
+  FlowFcRc rc{};
   uint64_t local_count=0;
   uint64_t ekf_count=0;
   uint64_t gyro_count=0;
@@ -302,6 +309,7 @@ struct FlowFc {
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_POSITION_TARGET_LOCAL_NED,20);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_ATTITUDE_TARGET,20);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_SERVO_OUTPUT_RAW,20);
+      requestRate(fd,sys,comp,MAVLINK_MSG_ID_RC_CHANNELS,20);
 
       while(g_running){
         pollfd p{fd,POLLIN,0};
@@ -373,6 +381,13 @@ struct FlowFc {
               att_target.pitch=std::asin(std::clamp(sinp,-1.0,1.0));
               att_target.yaw=std::atan2(siny,cosy);
               att_target.thrust=q.thrust; att_target.recv_ns=monoNs(); att_target.valid=true;
+            } else if(m.msgid==MAVLINK_MSG_ID_RC_CHANNELS){
+              mavlink_rc_channels_t q{}; mavlink_msg_rc_channels_decode(&m,&q);
+              std::lock_guard<std::mutex> l(mu);
+              rc.pwm={q.chan1_raw,q.chan2_raw,q.chan3_raw,q.chan4_raw,q.chan5_raw,q.chan6_raw,
+                      q.chan7_raw,q.chan8_raw,q.chan9_raw,q.chan10_raw,q.chan11_raw,q.chan12_raw,
+                      q.chan13_raw,q.chan14_raw,q.chan15_raw,q.chan16_raw,q.chan17_raw,q.chan18_raw};
+              rc.recv_ns=monoNs(); rc.valid=true;
             } else if(m.msgid==MAVLINK_MSG_ID_SERVO_OUTPUT_RAW){
               mavlink_servo_output_raw_t q{}; mavlink_msg_servo_output_raw_decode(&m,&q);
               std::lock_guard<std::mutex> l(mu);
@@ -475,6 +490,14 @@ struct FlowFc {
       if(sample_count)*sample_count=0;
     }
     if(age_ms)*age_ms=(monoNs()-gyro.recv_ns)*1e-6;
+    return true;
+  }
+
+  bool latestRc(FlowFcRc* out,double* age_ms=nullptr){
+    std::lock_guard<std::mutex> l(mu);
+    if(!rc.valid)return false;
+    *out=rc;
+    if(age_ms)*age_ms=(monoNs()-rc.recv_ns)*1e-6;
     return true;
   }
 
@@ -938,6 +961,14 @@ int main(int argc,char** argv){
     double web_raw_n=0.0,web_raw_e=0.0;
     double web_raw_vn=0.0,web_raw_ve=0.0;
     bool web_raw_step_valid=false;
+
+    // RC6/RC8 act as a hardware HOME/zero button for monkeysStab.
+    // Trigger only on a high edge; re-arm after both channels return below 1500 us.
+    uint64_t rc_zero_seq=0;
+    bool rc_zero_latched=false;
+    constexpr uint16_t kRcZeroPressUs=1700;
+    constexpr uint16_t kRcZeroReleaseUs=1500;
+
     double return_yaw0=0.0;
     bool return_yaw0_set=false;
     bool return_b_marked=false;
@@ -1291,6 +1322,60 @@ int main(int argc,char** argv){
         bool arm_now=false; double arm_age_now=1e9;
         const bool arm_ok=fc.latestArm(&arm_now,&arm_age_now) && arm_age_now<2500.0;
 
+        // RC6 or RC8: one HOME/zero event per physical press.
+        // Read RC input channels, never SERVO outputs.
+        {
+          FlowFcRc rcin{}; double rc_age_ms=1e9;
+          const bool rc_fresh=fc.latestRc(&rcin,&rc_age_ms) && rc_age_ms<500.0;
+          if(rc_fresh){
+            const uint16_t rc6=rcin.pwm[5];
+            const uint16_t rc8=rcin.pwm[7];
+            const bool pressed=(rc6>=kRcZeroPressUs)||(rc8>=kRcZeroPressUs);
+            const bool released=(rc6<=kRcZeroReleaseUs)&&(rc8<=kRcZeroReleaseUs);
+            if(pressed && !rc_zero_latched){
+              rc_zero_latched=true;
+              ++rc_zero_seq;
+
+              // Reset local diagnostic reference points immediately as well.
+              web_raw_n=web_raw_e=0.0;
+              web_raw_vn=web_raw_ve=0.0;
+              web_raw_step_valid=false;
+
+              if(rotation_gui && efresh){
+                traj3d_n0=ep.x; traj3d_e0=ep.y; traj3d_z0=ep.z;
+                traj3d_preview_n0=ep.x; traj3d_preview_e0=ep.y; traj3d_preview_z0=ep.z;
+                traj3d_preview_origin_set=true;
+                traj3d_origin_set=true;
+                traj3d.clear();
+                traj3d.emplace_back(0.0,0.0,0.0);
+                traj3d_prev=cv::Vec3d(0,0,0);
+                traj3d_prev_set=true;
+                traj3d_path_total=0.0;
+                traj3d_path_axis=cv::Vec3d(0,0,0);
+                traj3d_peak_abs=cv::Vec3d(0,0,0);
+              }
+
+              if(return_gui && efresh){
+                return_target_n=ep.x; return_target_e=ep.y;
+                return_target_set=true; return_trail.clear();
+                return_raw_x=return_raw_y=0.0;
+                return_body_dx=return_body_dy=0.0;
+                return_ned_n=return_ned_e=0.0;
+                return_b_marked=false;
+                return_home_marked=false;
+                if(fg_ok){return_yaw0=fg.yaw;return_yaw0_set=true;}
+                pending_return_event=1;
+              }
+
+              std::cerr<<"RC HOME ZERO: RC6="<<rc6<<" RC8="<<rc8
+                       <<" seq="<<rc_zero_seq
+                       <<" current position accepted as 0/0/0\n";
+            } else if(released){
+              rc_zero_latched=false;
+            }
+          }
+        }
+
         // Independent RAW Optical Flow diagnostic for Web UI.
         // Use only accepted flow intervals and the physical camera height.
         // This is intentionally diagnostic-only and does not alter publisher/EKF.
@@ -1400,6 +1485,7 @@ int main(int argc,char** argv){
             <<",\"raw_of_e\":"<<jsonNumber(web_raw_e)
             <<",\"raw_of_vn\":"<<jsonNumber(web_raw_vn)
             <<",\"raw_of_ve\":"<<jsonNumber(web_raw_ve)
+            <<",\"rc_zero_seq\":"<<rc_zero_seq
             <<",\"roll_deg\":"<<jsonNumber(fg_ok?fg.roll*180.0/M_PI:0.0)
             <<",\"pitch_deg\":"<<jsonNumber(fg_ok?fg.pitch*180.0/M_PI:0.0)
             <<",\"yaw_deg\":"<<jsonNumber(fg_ok?fg.yaw*180.0/M_PI:0.0)
