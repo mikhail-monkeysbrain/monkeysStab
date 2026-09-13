@@ -540,6 +540,15 @@ button{cursor:pointer}
 .viewGrid{display:grid;grid-template-columns:1fr 1fr;gap:7px}.viewItem{height:80px;border:1px solid #294b63;border-radius:5px;background:#08141e;display:flex;align-items:end;justify-content:center;padding:6px;color:#9fb9cb;font-size:11px}.viewItem.active{border-color:#18a8ff;box-shadow:inset 0 0 0 1px #18a8ff55}
 .bottomCharts{display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:10px;margin-top:10px}.chartCard{padding:10px}.chartCard h3{margin-bottom:4px}.chart{width:100%;height:170px;display:block;background:#08131d;border-radius:5px}
 .logCard{grid-column:1/-1}.logHead{display:flex;justify-content:space-between;align-items:center}.log{height:120px;background:#07121a;border:1px solid #122a3c;border-radius:5px;padding:8px;overflow:auto;white-space:pre-wrap;font:12px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;color:#9cb5c8}
+.appView{display:none}.appView.activeView{display:block}
+.viewPage{max-width:1500px;margin:auto;padding:16px}
+.pageGrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.tabs{display:flex;gap:7px;margin-bottom:12px}.tabBtn{border:1px solid #294b63;background:#0b1b28;color:#9fbbcf;padding:9px 15px;border-radius:6px;font-weight:800}.tabBtn.active{background:#0d73b7;color:white;border-color:#20a9ff}
+.tabPane{display:none}.tabPane.active{display:block}
+.paramTable{width:100%;border-collapse:collapse;font-size:13px}.paramTable th,.paramTable td{border-bottom:1px solid #173247;padding:8px;text-align:left}.paramTable th{color:#8eacc1}.paramTable input{width:140px;background:#07141e;color:#e9f3fb;border:1px solid #2a4b62;border-radius:5px;padding:7px}
+.actionBar{display:flex;gap:8px;margin:10px 0;flex-wrap:wrap}
+.systemModes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.systemMode{border:1px solid #284a61;background:#081620;padding:18px;border-radius:9px;cursor:pointer}.systemMode.active{border-color:#18a8ff;box-shadow:inset 0 0 0 1px #18a8ff55}.systemMode h3{margin-top:0}.systemMode p{color:#8da9bd;font-size:13px}
+.eventList{height:620px;overflow:auto;background:#07121a;border:1px solid #173247;border-radius:6px}.eventRow{display:grid;grid-template-columns:90px 70px 1fr;gap:10px;padding:7px 10px;border-bottom:1px solid #10283a;font:12px/1.4 ui-monospace,monospace}.eventRow .ts{color:#7296af}.eventRow .INFO{color:#1faaff}.eventRow .WARN{color:#ffc52d}.eventRow .ERROR{color:#ff5865}
 .footer{height:38px;border-top:1px solid #16364d;display:flex;align-items:center;justify-content:space-between;padding:0 16px;color:#7798ae;font-size:12px}
 .badge{display:inline-flex;align-items:center;gap:5px}
 @media(max-width:1250px){.main{grid-template-columns:255px 1fr}.right{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr 1fr}.sceneCard{min-height:520px}#glCanvas{height:520px}.bottomCharts{grid-template-columns:1fr}.topStatus{display:none}}
@@ -550,12 +559,12 @@ button{cursor:pointer}
 <div class="topbar">
  <div class="brand"><div class="logo"></div><div><b>monkeysStab</b><small>UAV Control & Visualizer</small></div></div>
  <div class="nav">
-  <button class="active" onclick="goSection('flight',this)">▲ ПОЛЁТ</button><button onclick="goSection('settings',this)">⚙ НАСТРОЙКИ</button><button onclick="goSection('telemetry',this)">∿ ТЕЛЕМЕТРИЯ</button><button onclick="goSection('journal',this)">▤ ЖУРНАЛ</button><button onclick="goSection('system',this)">⚙ СИСТЕМА</button>
+  <button class="active" onclick="showView('flight',this)">▲ ПОЛЁТ</button><button onclick="showView('settings',this)">⚙ НАСТРОЙКИ</button><button onclick="showView('telemetry',this)">∿ ТЕЛЕМЕТРИЯ</button><button onclick="showView('journal',this)">▤ ЖУРНАЛ</button><button onclick="showView('system',this)">⚙ СИСТЕМА</button>
  </div>
  <div class="topStatus"><span><i id="linkDot" class="okdot baddot"></i>СВЯЗЬ: <b id="linkText">НЕТ</b></span><span id="clock">--:--:--</span></div>
 </div>
 
-<div class="main" id="flight">
+<section id="view-flight" class="appView activeView"><div class="main">
  <div class="col left">
   <div class="card">
    <h3>Полётный контроллер</h3>
@@ -570,7 +579,7 @@ button{cursor:pointer}
    <div id="fcMsg" style="margin-top:8px;color:#7798ae;font-size:11px">Команды подтверждаются FC.</div>
   </div>
 
-  <div class="card" id="settings">
+  <div class="card">
    <h3>Стартовые параметры</h3>
    <div class="field"><span>Focal scale</span><input id="focal" type="number" min=".5" max="2" step=".001"></div>
    <div class="field"><span>ROI x0</span><input id="r0" type="number" step=".01"></div>
@@ -616,12 +625,12 @@ button{cursor:pointer}
    <div class="metric"><span>Flow quality</span><b id="mq">—</b></div>
   </div>
 
-  <div class="bottomCharts" id="telemetry">
+  <div class="bottomCharts">
    <div class="card chartCard"><h3>X / Y / Z (м)</h3><canvas id="xyzChart" class="chart"></canvas></div>
    <div class="card chartCard"><h3>Скорость (м/с)</h3><canvas id="speedChart" class="chart"></canvas></div>
    <div class="card chartCard"><h3>TF-Luna (м)</h3><canvas id="rangeChart" class="chart"></canvas></div>
-   <div class="card logCard" id="journal">
-    <div class="logHead"><h3>Журнал</h3><button class="miniBtn" onclick="document.getElementById('log').textContent=''">Очистить окно</button></div>
+   <div class="card logCard">
+    <div class="logHead"><h3>Messages FC / Mission Planner</h3><span style="color:#7898ae;font-size:11px">MAVLink STATUSTEXT</span></div>
     <div id="log" class="log"></div>
    </div>
   </div>
@@ -655,9 +664,95 @@ button{cursor:pointer}
    </div>
   </div>
  </div>
-</div>
+</div></section>
 
-<div class="footer" id="system">
+<section id="view-settings" class="appView">
+ <div class="viewPage">
+  <h2>Настройки</h2>
+  <div class="tabs">
+   <button class="tabBtn active" onclick="showSettingsTab('runtime',this)">Стартовые параметры</button>
+   <button class="tabBtn" onclick="showSettingsTab('fc',this)">Параметры FC</button>
+   <button class="tabBtn" onclick="showSettingsTab('geometry',this)">Геометрия</button>
+  </div>
+  <div id="settings-runtime" class="tabPane active">
+   <div class="card" style="max-width:720px">
+    <h3>Параметры Optical Flow runtime</h3>
+    <div class="field"><span>Focal scale</span><input id="sfocal" type="number" min=".5" max="2" step=".001"></div>
+    <div class="field"><span>ROI x0</span><input id="sr0" type="number" step=".01"></div>
+    <div class="field"><span>ROI y0</span><input id="sr1" type="number" step=".01"></div>
+    <div class="field"><span>ROI x1</span><input id="sr2" type="number" step=".01"></div>
+    <div class="field"><span>ROI y1</span><input id="sr3" type="number" step=".01"></div>
+    <div class="field"><span>Feature points</span><input id="sfeatures" type="number" min="100" max="1000"></div>
+    <button class="btn blue" onclick="saveRuntimeSettings()">СОХРАНИТЬ</button>
+    <span id="runtimeSettingsMsg" style="margin-left:8px;color:#86a7bf"></span>
+   </div>
+  </div>
+  <div id="settings-fc" class="tabPane">
+   <div class="card">
+    <h3>Критические параметры FC</h3>
+    <p style="color:#89a7bc">Читаются непосредственно из ArduPilot. Запись разрешена только при DISARMED и остановленном flight runtime.</p>
+    <div class="actionBar"><button class="btn blue" onclick="loadFcParams()">ПРОЧИТАТЬ ИЗ FC</button><button class="btn green" onclick="writeFcParams()">ЗАПИСАТЬ И ПРОВЕРИТЬ</button></div>
+    <table class="paramTable"><thead><tr><th>Параметр</th><th>FC</th><th>Новое значение</th></tr></thead><tbody id="fcParamRows"></tbody></table>
+    <div id="fcParamMsg" style="margin-top:10px;color:#86a7bf"></div>
+   </div>
+  </div>
+  <div id="settings-geometry" class="tabPane">
+   <div class="card" style="max-width:900px">
+    <h3>Геометрия OV9281 + TF-Luna</h3>
+    <p style="color:#89a7bc">FRD относительно центра IMU: X вперёд, Y вправо, Z вниз. Ввод в миллиметрах.</p>
+    <div class="actionBar"><button class="btn blue" onclick="loadGeometry()">ПРОЧИТАТЬ ИЗ FC</button><button class="btn green" onclick="writeGeometry()">ЗАПИСАТЬ В FC И CONFIG</button></div>
+    <table class="paramTable"><thead><tr><th>Датчик</th><th>X, мм</th><th>Y, мм</th><th>Z, мм</th></tr></thead>
+     <tbody>
+      <tr><td>OV9281</td><td><input id="gx0"></td><td><input id="gy0"></td><td><input id="gz0"></td></tr>
+      <tr><td>TF-Luna</td><td><input id="grx"></td><td><input id="gry"></td><td><input id="grz"></td></tr>
+     </tbody>
+    </table>
+    <div id="geometryMsg" style="margin-top:10px;color:#86a7bf"></div>
+   </div>
+  </div>
+ </div>
+</section>
+
+<section id="view-telemetry" class="appView">
+ <div class="viewPage">
+  <h2>Телеметрия</h2>
+  <div class="metrics">
+   <div class="metric"><span>X</span><b id="tmx">—</b></div><div class="metric"><span>Y</span><b id="tmy">—</b></div><div class="metric"><span>Z</span><b id="tmz">—</b></div><div class="metric"><span>TF-Luna</span><b id="tmr">—</b></div><div class="metric"><span>Quality</span><b id="tmq">—</b></div>
+  </div>
+  <div class="pageGrid" style="margin-top:12px">
+   <div class="card"><h3>X / Y / Z</h3><canvas id="tXyzChart" class="chart" style="height:300px"></canvas></div>
+   <div class="card"><h3>Скорость</h3><canvas id="tSpeedChart" class="chart" style="height:300px"></canvas></div>
+   <div class="card"><h3>TF-Luna</h3><canvas id="tRangeChart" class="chart" style="height:300px"></canvas></div>
+   <div class="card"><h3>Ориентация</h3><div class="kv"><span>Roll</span><span id="troll">—</span><span>Pitch</span><span id="tpitch">—</span><span>Yaw</span><span id="tyaw">—</span><span>Inliers</span><span id="tinl">—</span><span>EKF</span><span id="tekf">—</span></div></div>
+  </div>
+ </div>
+</section>
+
+<section id="view-journal" class="appView">
+ <div class="viewPage">
+  <h2>Журнал Web UI / Runtime</h2>
+  <p style="color:#86a7bf">До 500 последних событий приложения. Сообщения ArduPilot STATUSTEXT находятся на view «Полёт».</p>
+  <div id="journalEvents" class="eventList"></div>
+ </div>
+</section>
+
+<section id="view-system" class="appView">
+ <div class="viewPage">
+  <h2>Система</h2>
+  <div class="card">
+   <h3>Режим визуализации</h3>
+   <div class="systemModes">
+    <div id="vmAdvanced" class="systemMode" onclick="setVisualizationMode('advanced')"><h3>Расширенное 3D</h3><p>WebGL с полноценной 3D-моделью БПЛА. Максимальная визуальная детализация.</p></div>
+    <div id="vmSimple" class="systemMode" onclick="setVisualizationMode('simple')"><h3>Упрощённое 3D</h3><p>Текущий лёгкий WebGL-каркас, сетка, траектория и ориентация.</p></div>
+    <div id="vmLight" class="systemMode" onclick="setVisualizationMode('light')"><h3>Лёгкое 2D</h3><p>Без 3D. Только XY-график, траектория и числовые показатели.</p></div>
+   </div>
+   <div id="visualModeMsg" style="margin-top:12px;color:#86a7bf"></div>
+  </div>
+  <div class="card" style="margin-top:12px"><h3>Сеть</h3><div class="kv"><span>MAVLink router</span><span>TCP 127.0.0.1:5760</span><span>Mission Planner</span><span>UDP 14550</span><span>Web UI</span><span>TCP 8080</span></div></div>
+ </div>
+</section>
+
+<div class="footer">
  <div>● &nbsp; monkeysStab Web UI &nbsp; | &nbsp; Raspberry Pi 5</div>
  <div>MAVLink router: <b id="routerStatus" style="color:#16d979">OK</b> &nbsp; | &nbsp; Mission Planner: UDP 14550 &nbsp; | &nbsp; Runtime: <b id="footerRuntime">остановлен</b></div>
 </div>
