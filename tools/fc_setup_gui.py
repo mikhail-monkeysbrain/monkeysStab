@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import math
 import os
 import subprocess
@@ -8,6 +9,7 @@ from tkinter import messagebox, ttk
 
 ROOT=os.path.abspath(os.path.join(os.path.dirname(__file__),".."))
 FC_TOOL=os.path.join(ROOT,"build","fc_param_tool")
+PROFILE_JSON=os.path.join(ROOT,"config","fc_profile.json")
 
 # Параметры, которые являются частью текущего production-контура monkeysStab.
 PARAMS=[
@@ -242,8 +244,15 @@ class App(tk.Tk):
                     bad.append(f"{p}: got={got.get(p)} expected={v}")
             if bad: raise RuntimeError("Не подтверждены:\n"+"\n".join(bad))
             self.current.update(got); self.show(self.current)
-            self.status.set("ГОТОВО: критические параметры записаны и повторно подтверждены FC. Перезагрузите FC.")
-            messagebox.showinfo("Готово","Параметры записаны и подтверждены.\nПеред тестом перезагрузите FC.")
+            with open(PROFILE_JSON,"w",encoding="utf-8") as fh:
+                json.dump({
+                    "profile":"fixed_mount_optical_flow",
+                    "description":"Текущий проверенный профиль monkeysStab без гироподвеса",
+                    "params":d
+                },fh,ensure_ascii=False,indent=2)
+                fh.write("\n")
+            self.status.set("ГОТОВО: параметры записаны, подтверждены FC и сохранены в config/fc_profile.json. Перезагрузите FC.")
+            messagebox.showinfo("Готово","Параметры записаны и подтверждены.\nПрофиль monkeysStab синхронизирован с FC.\nПеред тестом перезагрузите FC.")
         except Exception as e:
             self.status.set("Ошибка записи.")
             messagebox.showerror("Ошибка записи",str(e))
