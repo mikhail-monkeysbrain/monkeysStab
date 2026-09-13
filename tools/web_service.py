@@ -2,6 +2,7 @@
 import csv
 import json
 import math
+import re
 import os
 import signal
 import socket
@@ -9,6 +10,7 @@ import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections import deque
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -23,6 +25,7 @@ DEFAULTS={
     "feature_roi":[0.20,0.32,0.80,0.90],
     "max_features":500,
     "local_gui":True,
+    "visualization_mode":"simple",
 }
 
 _lock=threading.RLock()
@@ -31,8 +34,13 @@ _log_handle=None
 _router_proc=None
 _router_log_handle=None
 _router_started_here=False
+_statustext_proc=None
+_statustext_thread=None
 _zero={"x":None,"y":None,"z":None}
+_journal=deque(maxlen=500)
+_messages=deque(maxlen=500)
 FC_ENDPOINT="tcp://127.0.0.1:5760"
+GEOMETRY_PARAMS=["FLOW_POS_X","FLOW_POS_Y","FLOW_POS_Z","RNGFND1_POS_X","RNGFND1_POS_Y","RNGFND1_POS_Z"]
 
 def load_json(path, fallback):
     try:
@@ -66,6 +74,7 @@ def validate_config(d):
         "feature_roi":roi,
         "max_features":mf,
         "local_gui":bool(d.get("local_gui",True)),
+        "visualization_mode":str(d.get("visualization_mode","simple")) if str(d.get("visualization_mode","simple")) in ("advanced","simple","light") else "simple",
     }
 
 def save_config(d):
@@ -81,6 +90,138 @@ def running():
     global _proc
     with _lock:
         return _proc is not None and _proc.poll() is None
+
+def log_event(level,text):
+    with _lock:
+        _journal.append({
+            "ts":time.strftime("%Y-%m-%d %H:%M:%S"),
+            "level":str(level).upper(),
+            "text":str(text),
+        })
+
+def fc_param_cli(*args,timeout=35):
+    ensure_router()
+    env=os.environ.copy()
+    env["MONKEYS_FC"]=FC_ENDPOINT
+    cp=subprocess.run(
+        ["bash",str(ROOT/"scripts"/"fc_params_cli.sh"),*map(str,args)],
+        cwd=str(ROOT),env=env,text=True,capture_output=True,timeout=timeout
+    )
+    if cp.returncode!=0:
+        raise RuntimeError((cp.stderr or cp.stdout or "ошибка PARAM").strip())
+    return cp.stdout
+
+def parse_param_values(text):
+    out={}
+    for line in text.splitlines():
+        if "=" not in line or line.startswith("TARGET "): continue
+        k,v=line.split("=",1)
+        try: out[k.strip()]=float(v.strip().split()[0])
+        except Exception: pass
+    return out
+
+def read_fc_params(names):
+    if not names:return {}
+    return parse_param_values(fc_param_cli("read",*names))
+
+def profile_param_names():
+    p=load_json(FC_PROFILE,{})
+    return list((p.get("params") or {}).keys())
+
+def set_profile_params(values):
+    if running(): raise RuntimeError("Остановите flight runtime перед изменением параметров FC")
+    st=fc_control("status")
+    if st.get("armed"): raise RuntimeError("FC должен быть DISARMED")
+    allowed=set(profile_param_names())
+    clean={}
+    for k,v in values.items():
+        if k not in allowed: raise ValueError("Параметр не разрешён: "+str(k))
+        fv=float(v)
+        if not math.isfinite(fv): raise ValueError("Некорректное значение "+k)
+        clean[k]=fv
+    if not clean: raise ValueError("Нет параметров для записи")
+    geom_before=read_fc_params(GEOMETRY_PARAMS)
+    args=["set"]
+    for k,v in clean.items(): args += [k,f"{v:.6f}"]
+    fc_param_cli(*args,timeout=50)
+    got=read_fc_params(list(clean.keys()))
+    bad=[k for k,v in clean.items() if k not in got or not math.isclose(got[k],v,rel_tol=0,abs_tol=max(1e-6,abs(v)*1e-5))]
+    if bad: raise RuntimeError("Не подтверждены: "+", ".join(bad))
+    geom_after=read_fc_params(GEOMETRY_PARAMS)
+    changed=[k for k in GEOMETRY_PARAMS if k in geom_before and k in geom_after and not math.isclose(geom_before[k],geom_after[k],rel_tol=0,abs_tol=1e-6)]
+    if changed: raise RuntimeError("ОШИБКА БЕЗОПАСНОСТИ: изменилась геометрия: "+", ".join(changed))
+    prof=load_json(FC_PROFILE,{})
+    prof.setdefault("params",{}).update(got)
+    tmp=FC_PROFILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(prof,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    os.replace(tmp,FC_PROFILE)
+    log_event("INFO","Параметры FC записаны: "+", ".join(clean.keys()))
+    return got
+
+def save_local_geometry(vals):
+    cfg=load_json(GEOMETRY,{"frame":"FRD","units":"m","reference":"FC_IMU","camera":{"name":"OV9281"},"rangefinder":{"name":"TF-Luna"}})
+    cfg.setdefault("camera",{})["name"]="OV9281";cfg.setdefault("rangefinder",{})["name"]="TF-Luna"
+    cfg["camera"].update({"x":vals["FLOW_POS_X"],"y":vals["FLOW_POS_Y"],"z":vals["FLOW_POS_Z"]})
+    cfg["rangefinder"].update({"x":vals["RNGFND1_POS_X"],"y":vals["RNGFND1_POS_Y"],"z":vals["RNGFND1_POS_Z"]})
+    tmp=GEOMETRY.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cfg,ensure_ascii=False,indent=2)+"\n",encoding="utf-8");os.replace(tmp,GEOMETRY)
+    yp=ROOT/"config"/"ov9281_current_mount.yaml"
+    text=yp.read_text(encoding="utf-8")
+    x,y,z=vals["FLOW_POS_X"],vals["FLOW_POS_Y"],vals["FLOW_POS_Z"]
+    block=("data: [ 0.000000000, -1.000000000,  0.000000000,  {x:.6f},\n"
+           "       -1.000000000,  0.000000000,  0.000000000,  {yflu:.6f},\n"
+           "        0.000000000,  0.000000000, -1.000000000,  {zflu:.6f},\n"
+           "        0.000000000,  0.000000000,  0.000000000,  1.0000 ]").format(x=x,yflu=-y,zflu=-z)
+    text2,n=re.subn(r"data:\s*\[.*?1\.0000\s*\]",block,text,count=1,flags=re.S)
+    if n!=1: raise RuntimeError("Не удалось обновить T_BS.data в camera YAML")
+    yp.write_text(text2,encoding="utf-8")
+
+def set_geometry(values):
+    if running(): raise RuntimeError("Остановите flight runtime перед изменением геометрии")
+    st=fc_control("status")
+    if st.get("armed"): raise RuntimeError("FC должен быть DISARMED")
+    clean={}
+    for k in GEOMETRY_PARAMS:
+        if k not in values: raise ValueError("Не заполнено "+k)
+        v=float(values[k])
+        if not math.isfinite(v) or abs(v)>2.0: raise ValueError(k+": допустимо ±2 м")
+        clean[k]=v
+    args=["set"]
+    for k in GEOMETRY_PARAMS: args += [k,f"{clean[k]:.6f}"]
+    fc_param_cli(*args,timeout=50)
+    got=read_fc_params(GEOMETRY_PARAMS)
+    bad=[k for k in GEOMETRY_PARAMS if k not in got or not math.isclose(got[k],clean[k],rel_tol=0,abs_tol=max(1e-6,abs(clean[k])*1e-5))]
+    if bad: raise RuntimeError("Геометрия не подтверждена: "+", ".join(bad))
+    save_local_geometry(got)
+    log_event("INFO","Геометрия датчиков записана и синхронизирована")
+    return got
+
+def start_statustext_monitor():
+    global _statustext_proc,_statustext_thread
+    if _statustext_proc is not None and _statustext_proc.poll() is None:return
+    ensure_router()
+    env=os.environ.copy();env["MONKEYS_FC"]=FC_ENDPOINT
+    _statustext_proc=subprocess.Popen(
+        ["bash",str(ROOT/"scripts"/"fc_statustext_monitor.sh")],
+        cwd=str(ROOT),env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
+        bufsize=1
+    )
+    def reader():
+        if not _statustext_proc.stdout:return
+        for line in _statustext_proc.stdout:
+            try:
+                j=json.loads(line)
+                txt=str(j.get("text","")).strip()
+                if not txt:continue
+                with _lock:_messages.append({
+                    "ts":time.strftime("%H:%M:%S"),
+                    "severity":int(j.get("severity",6)),
+                    "text":txt,
+                })
+            except Exception:
+                pass
+    _statustext_thread=threading.Thread(target=reader,daemon=True)
+    _statustext_thread.start()
 
 def tcp_ready(host="127.0.0.1",port=5760):
     try:
@@ -107,6 +248,7 @@ def ensure_router():
             start_new_session=True,text=True
         )
         _router_started_here=True
+        log_event("INFO","MAVLink router запущен")
     deadline=time.time()+6.0
     while time.time()<deadline:
         if tcp_ready(): return
@@ -168,6 +310,7 @@ def start_runtime():
             stdout=_log_handle, stderr=subprocess.STDOUT,
             start_new_session=True, text=True
         )
+        log_event("INFO","Flight runtime запущен")
         return {"ok":True,"pid":_proc.pid}
 
 def stop_runtime():
@@ -190,6 +333,7 @@ def stop_runtime():
             try: _log_handle.close()
             except Exception: pass
             _log_handle=None
+        log_event("INFO","Flight runtime остановлен")
         return {"ok":True}
 
 def latest_run_csv():
