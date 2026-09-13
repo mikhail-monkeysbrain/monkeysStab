@@ -543,7 +543,10 @@ button{cursor:pointer}
 .sceneTitle{position:absolute;left:14px;top:10px;z-index:4;font-weight:800}
 #glCanvas{display:block;width:100%;height:625px;background:
  radial-gradient(circle at 50% 15%,#11304a55,#07121c 52%),#07121c}
-#advancedModel{display:none;width:100%;height:625px;background:radial-gradient(circle at 50% 25%,#17354a,#07121c 65%);--poster-color:transparent}
+#advancedModel{display:none;position:absolute;inset:0;width:100%;height:625px;background:transparent!important;--poster-color:transparent;z-index:2;pointer-events:none;transform-origin:50% 50%}
+.modelThumb{width:100%;height:100%;background:transparent!important;--poster-color:transparent;pointer-events:none}
+.viewItem{position:relative;overflow:hidden}
+.viewItem span{position:absolute;left:0;right:0;bottom:4px;text-align:center;z-index:3;text-shadow:0 1px 3px #000;background:#07121aaa;padding:2px 0}
 .sceneControls{position:absolute;right:12px;top:10px;background:#081521dd;border:1px solid #26475e;border-radius:7px;padding:8px 10px;font-size:12px;z-index:4}
 .sceneControls label{display:block;margin:5px 0;color:#b3c9d7}
 .sceneLegend{position:absolute;left:14px;bottom:12px;display:flex;gap:8px;z-index:4}
@@ -665,10 +668,10 @@ button{cursor:pointer}
   <div class="card">
    <h3>Виды модели</h3>
    <div class="viewGrid">
-    <div class="viewItem active" onclick="setView('iso',this)">Изометрия</div>
-    <div class="viewItem" onclick="setView('side',this)">Сбоку</div>
-    <div class="viewItem" onclick="setView('front',this)">Спереди</div>
-    <div class="viewItem" onclick="setView('top',this)">Сверху</div>
+    <div class="viewItem active" onclick="setView('iso',this)"><model-viewer class="modelThumb" src="/assets/CesiumDrone.glb" camera-orbit="45deg 70deg 2.8m" interaction-prompt="none" environment-image="neutral"></model-viewer><span>Изометрия</span></div>
+    <div class="viewItem" onclick="setView('side',this)"><model-viewer class="modelThumb" src="/assets/CesiumDrone.glb" camera-orbit="90deg 90deg 2.8m" interaction-prompt="none" environment-image="neutral"></model-viewer><span>Сбоку</span></div>
+    <div class="viewItem" onclick="setView('front',this)"><model-viewer class="modelThumb" src="/assets/CesiumDrone.glb" camera-orbit="0deg 90deg 2.8m" interaction-prompt="none" environment-image="neutral"></model-viewer><span>Спереди</span></div>
+    <div class="viewItem" onclick="setView('top',this)"><model-viewer class="modelThumb" src="/assets/CesiumDrone.glb" camera-orbit="0deg 0deg 2.8m" interaction-prompt="none" environment-image="neutral"></model-viewer><span>Сверху</span></div>
    </div>
   </div>
   <div class="card">
@@ -883,12 +886,12 @@ function refreshVisualizationMode(){
  ['Advanced','Simple','Light'].forEach(x=>{let e=$('vm'+x);if(e)e.classList.remove('active')});
  let id=m==='advanced'?'vmAdvanced':m==='light'?'vmLight':'vmSimple';if($(id))$(id).classList.add('active');
  if($('glCanvas')&&$('lightCanvas')&&$('advancedModel')){
-  $('glCanvas').style.display=m==='simple'?'block':'none';
+  $('glCanvas').style.display=(m==='light')?'none':'block';
   $('lightCanvas').style.display=m==='light'?'block':'none';
   $('advancedModel').style.display=m==='advanced'?'block':'none';
  }
  if($('visualModeMsg'))$('visualModeMsg').textContent=m==='advanced'?'Расширенный WebGL: локальная GLB-модель CesiumDrone.':m==='light'?'Лёгкий 2D режим: WebGL отключён.':'Упрощённый WebGL режим.';
- if(latest){if(m==='light')drawLightScene(latest);else if(m==='advanced')updateAdvancedModel(latest);else renderScene()}
+ if(latest){if(m==='light')drawLightScene(latest);else{renderScene();if(m==='advanced')updateAdvancedModel(latest)}}
 }
 async function setVisualizationMode(mode){
  try{let j=await api('/api/system/visualization',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});window.visualizationMode=j.runtime.visualization_mode;refreshVisualizationMode()}
@@ -904,8 +907,27 @@ function drawLightScene(t){
 
 function updateAdvancedModel(t){
  let m=$('advancedModel');if(!m)return;
- let roll=t.roll_deg||0,pitch=t.pitch_deg||0,yaw=t.yaw_deg||0;
- m.setAttribute('orientation',pitch.toFixed(2)+'deg '+(-yaw).toFixed(2)+'deg '+(-roll).toFixed(2)+'deg');
+ let roll=Number(t.roll_deg||0),pitch=Number(t.pitch_deg||0),yaw=Number(t.yaw_deg||0);
+
+ // model-viewer uses X/Y/Z Euler orientation. Convert FC FRD attitude so:
+ // roll -> model X, yaw -> model Y (up), pitch -> model Z with sign correction.
+ m.orientation=roll.toFixed(2)+'deg '+(-yaw).toFixed(2)+'deg '+pitch.toFixed(2)+'deg';
+
+ // Keep camera fixed to the selected dashboard view. The aircraft attitude changes,
+ // not the camera.
+ const orbits={
+   iso:'45deg 70deg 2.8m',
+   side:'90deg 90deg 2.8m',
+   front:'0deg 90deg 2.8m',
+   top:'0deg 0deg 2.8m'
+ };
+ m.setAttribute('camera-orbit',orbits[viewMode]||orbits.iso);
+
+ // Project NED position into a conservative screen translation so the detailed
+ // model moves with the trajectory while the WebGL grid remains the reference.
+ let sx=clamp((t.y_mm||0)/1000,-1.5,1.5), sy=clamp((t.x_mm||0)/1000,-1.5,1.5), sz=clamp((t.z_mm||0)/1000,-1.0,1.0);
+ let px=sx*105, py=-sy*78 + sz*45;
+ m.style.transform='translate('+px.toFixed(1)+'px,'+py.toFixed(1)+'px) scale(.58)';
 }
 async function start(){try{await api('/api/start',{method:'POST'});}catch(e){alert(e.message)}}
 async function stop(){try{await api('/api/stop',{method:'POST'});}catch(e){alert(e.message)}}
@@ -929,7 +951,7 @@ function updateHud(t){
  $('pitchNeedle').style.left=(50+clamp(t.pitch_deg||0,-45,45)/45*50)+'%';
  let y=((t.yaw_deg||0)+180)%360-180;$('yawNeedle').style.left=(50+y/180*50)+'%';
  if($('tmx')){$('tmx').textContent=fmt(t.x_mm,0)+' мм';$('tmy').textContent=fmt(t.y_mm,0)+' мм';$('tmz').textContent=fmt(t.z_mm,0)+' мм';$('tmr').textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';$('tmq').textContent=t.quality??'—';$('troll').textContent=fmt(t.roll_deg,1)+'°';$('tpitch').textContent=fmt(t.pitch_deg,1)+'°';$('tyaw').textContent=fmt(t.yaw_deg,1)+'°';$('tinl').textContent=(t.inliers??'—')+'/'+(t.tracked??'—');$('tekf').textContent=t.ekf_valid?'VALID':'NO DATA'}
- drawCompass(t.yaw_deg||0);drawHistory(t.history||[]);let vm=window.visualizationMode||'simple';if(vm==='light')drawLightScene(t);else if(vm==='advanced')updateAdvancedModel(t);else renderScene();
+ drawCompass(t.yaw_deg||0);drawHistory(t.history||[]);let vm=window.visualizationMode||'simple';if(vm==='light')drawLightScene(t);else{renderScene();if(vm==='advanced')updateAdvancedModel(t)}
 }
 
 function drawCompass(deg){
@@ -989,16 +1011,18 @@ function renderScene(){
  if(latest&&$('showTrail').checked&&(latest.trail||[]).length>1){let tr=latest.trail;for(let i=1;i<tr.length;i++){let a=tr[i-1],b=tr[i];addLine(P,C,[a.x_mm/1000,a.y_mm/1000,-(a.z_mm||0)/1000],[b.x_mm/1000,b.y_mm/1000,-(b.z_mm||0)/1000],[.05,.75,1])}}
  let pos=latest?[(latest.x_mm||0)/1000,(latest.y_mm||0)/1000,-(latest.z_mm||0)/1000]:[0,0,.2],rr=(latest?.roll_deg||0)*Math.PI/180,pp=(latest?.pitch_deg||0)*Math.PI/180,yy=(latest?.yaw_deg||0)*Math.PI/180;
  function wp(v){let q=rotLocal(v,rr,pp,yy);return[q[0]+pos[0],q[1]+pos[1],q[2]+pos[2]]}
- let arm=.32;addLine(P,C,wp([arm,arm,0]),wp([-arm,-arm,0]),[.7,.78,.84]);addLine(P,C,wp([arm,-arm,0]),wp([-arm,arm,0]),[.7,.78,.84]);
- [[arm,arm],[-arm,-arm],[arm,-arm],[-arm,arm]].forEach((xy,i)=>{let ctr=wp([xy[0],xy[1],.03]),n=30;for(let k=0;k<n;k++){let a=k/n*Math.PI*2,b=(k+1)/n*Math.PI*2,A=wp([xy[0]+Math.cos(a)*.17,xy[1]+Math.sin(a)*.17,.03]),B=wp([xy[0]+Math.cos(b)*.17,xy[1]+Math.sin(b)*.17,.03]);addLine(P,C,A,B,i<2?[.1,.9,.55]:[.25,.55,1])}});
- let body=[[-.12,-.08,-.05],[.12,-.08,-.05],[.12,.08,-.05],[-.12,.08,-.05],[-.12,-.08,.07],[.12,-.08,.07],[.12,.08,.07],[-.12,.08,.07]],edges=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];edges.forEach(e=>addLine(P,C,wp(body[e[0]]),wp(body[e[1]]),[1,.45,.08]));addLine(P,C,wp([.1,0,.02]),wp([.48,0,.02]),[1,.1,.1]);
+ if((window.visualizationMode||'simple')!=='advanced'){
+   let arm=.32;addLine(P,C,wp([arm,arm,0]),wp([-arm,-arm,0]),[.7,.78,.84]);addLine(P,C,wp([arm,-arm,0]),wp([-arm,arm,0]),[.7,.78,.84]);
+   [[arm,arm],[-arm,-arm],[arm,-arm],[-arm,arm]].forEach((xy,i)=>{let n=30;for(let k=0;k<n;k++){let a=k/n*Math.PI*2,b=(k+1)/n*Math.PI*2,A=wp([xy[0]+Math.cos(a)*.17,xy[1]+Math.sin(a)*.17,.03]),B=wp([xy[0]+Math.cos(b)*.17,xy[1]+Math.sin(b)*.17,.03]);addLine(P,C,A,B,i<2?[.1,.9,.55]:[.25,.55,1])}});
+   let body=[[-.12,-.08,-.05],[.12,-.08,-.05],[.12,.08,-.05],[-.12,.08,-.05],[-.12,-.08,.07],[.12,-.08,.07],[.12,.08,.07],[-.12,.08,.07]],edges=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];edges.forEach(e=>addLine(P,C,wp(body[e[0]]),wp(body[e[1]]),[1,.45,.08]));addLine(P,C,wp([.1,0,.02]),wp([.48,0,.02]),[1,.1,.1]);
+ }
  let a=viewYaw,p=viewPitch;if(viewMode==='top'){a=0;p=.05}else if(viewMode==='front'){a=Math.PI/2;p=.4}else if(viewMode==='side'){a=0;p=.4}
  let eye=[Math.cos(a)*Math.cos(p)*viewDist,Math.sin(a)*Math.cos(p)*viewDist,Math.sin(p)*viewDist],target=$('followCam').checked?pos:[0,0,.25],V=lookAt(eye,target,[0,0,1]),Pr=perspective(.8,w/h,.05,40),M=m4mul(Pr,V);gl.uniformMatrix4fv(locMvp,false,M);
  gl.bindBuffer(gl.ARRAY_BUFFER,bufPos);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(P),gl.DYNAMIC_DRAW);gl.enableVertexAttribArray(locPos);gl.vertexAttribPointer(locPos,3,gl.FLOAT,false,0,0);
  gl.bindBuffer(gl.ARRAY_BUFFER,bufCol);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(C),gl.DYNAMIC_DRAW);gl.enableVertexAttribArray(locCol);gl.vertexAttribPointer(locCol,3,gl.FLOAT,false,0,0);gl.drawArrays(gl.LINES,0,P.length/3);
 }
-function setView(v,el){viewMode=v;document.querySelectorAll('.viewItem').forEach(x=>x.classList.remove('active'));el.classList.add('active');renderScene()}
-function resetView(){viewMode='iso';viewYaw=.75;viewPitch=.65;viewDist=6.4;renderScene()}
+function setView(v,el){viewMode=v;document.querySelectorAll('.viewItem').forEach(x=>x.classList.remove('active'));el.classList.add('active');renderScene();if(latest&&window.visualizationMode==='advanced')updateAdvancedModel(latest)}
+function resetView(){viewMode='iso';viewYaw=.75;viewPitch=.65;viewDist=6.4;renderScene();if(latest&&window.visualizationMode==='advanced')updateAdvancedModel(latest)}
 
 async function refresh(){
  try{let t=await api('/api/telemetry');updateHud(t);await refreshMessages()}catch(e){}
