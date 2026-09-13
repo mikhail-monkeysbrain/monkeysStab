@@ -247,9 +247,15 @@ button{border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:point
 .status{display:flex;gap:10px;align-items:center;margin-bottom:12px}.dot{width:12px;height:12px;border-radius:50%;background:#777}.on{background:#45c878}.off{background:#e05b65}
 .metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:10px}.metric{background:#10171d;border-radius:8px;padding:10px}.metric b{display:block;font-size:20px}.metric span{color:#8fa1ae;font-size:12px}
 canvas{width:100%;height:560px;background:#0c1115;border-radius:10px}
+.visualRow{display:grid;grid-template-columns:1.45fr .75fr;gap:12px;margin-top:12px}
+#drone3d{height:360px}
+.inclinometers{display:grid;grid-template-columns:1fr;gap:10px}
+.gaugeWrap{background:#10171d;border-radius:10px;padding:8px}
+.gaugeWrap b{display:block;text-align:center;margin-bottom:4px}
+.gauge{width:100%;height:102px;background:#0c1115;border-radius:8px}
 pre{height:190px;overflow:auto;background:#0c1115;border-radius:8px;padding:10px;white-space:pre-wrap;font-size:12px}
 .small{font-size:12px;color:#93a5b2}.good{color:#56d88b}.bad{color:#f06b75}
-@media(max-width:900px){.grid{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}canvas{height:420px}}
+@media(max-width:900px){.grid{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}canvas{height:420px}.visualRow{grid-template-columns:1fr}#drone3d{height:320px}.inclinometers{grid-template-columns:repeat(3,1fr)}}
 </style>
 </head>
 <body><div class="wrap">
@@ -288,6 +294,20 @@ pre{height:190px;overflow:auto;background:#0c1115;border-radius:8px;padding:10px
 <div class="metric"><span>Flow quality</span><b id="mq">—</b></div>
 </div>
 <canvas id="plot" width="1000" height="650"></canvas>
+<div class="visualRow">
+  <div>
+    <h3>3D ориентация БПЛА</h3>
+    <canvas id="drone3d" width="900" height="500"></canvas>
+  </div>
+  <div>
+    <h3>Инклинометр</h3>
+    <div class="inclinometers">
+      <div class="gaugeWrap"><b>ROLL</b><canvas id="gRoll" class="gauge" width="320" height="120"></canvas></div>
+      <div class="gaugeWrap"><b>PITCH</b><canvas id="gPitch" class="gauge" width="320" height="120"></canvas></div>
+      <div class="gaugeWrap"><b>YAW</b><canvas id="gYaw" class="gauge" width="320" height="120"></canvas></div>
+    </div>
+  </div>
+</div>
 <div class="metrics" style="margin-top:10px">
 <div class="metric"><span>Roll</span><b id="roll">—</b></div>
 <div class="metric"><span>Pitch</span><b id="pitch">—</b></div>
@@ -322,10 +342,54 @@ function draw(t){
  if(t.trail&&t.trail.length){ctx.strokeStyle='#4da3ff';ctx.lineWidth=3;ctx.beginPath();t.trail.forEach((p,i)=>{let x=cx+p.y_mm*scale,y=cy-p.x_mm*scale;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)});ctx.stroke();
  let p=t.trail[t.trail.length-1],x=cx+p.y_mm*scale,y=cy-p.x_mm*scale;ctx.fillStyle='#56d88b';ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();}
 }
+
+function rot3(p,roll,pitch,yaw){
+ const cr=Math.cos(roll),sr=Math.sin(roll),cp=Math.cos(pitch),sp=Math.sin(pitch),cy=Math.cos(yaw),sy=Math.sin(yaw);
+ let x=p[0],y=p[1],z=p[2];
+ let x1=x, y1=cr*y-sr*z, z1=sr*y+cr*z;
+ let x2=cp*x1+sp*z1, y2=y1, z2=-sp*x1+cp*z1;
+ return [cy*x2-sy*y2, sy*x2+cy*y2, z2];
+}
+function project3(p,w,h){
+ const d=5.5, s=Math.min(w,h)*0.23, z=d-p[2];
+ return [w/2 + p[1]*s/z, h/2 - p[0]*s/z];
+}
+function drawDrone(t){
+ let c=drone3d,ctx=c.getContext('2d'),w=c.width,h=c.height;
+ ctx.clearRect(0,0,w,h);ctx.fillStyle='#0c1115';ctx.fillRect(0,0,w,h);
+ let r=(t.roll_deg||0)*Math.PI/180,p=(t.pitch_deg||0)*Math.PI/180,y=(t.yaw_deg||0)*Math.PI/180;
+ ctx.strokeStyle='#26343d';ctx.lineWidth=1;
+ for(let i=-5;i<=5;i++){let a=project3([i*.35,-1.8,-1.1],w,h),b=project3([i*.35,1.8,-1.1],w,h);ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();
+ let c1=project3([-1.8,i*.35,-1.1],w,h),d1=project3([1.8,i*.35,-1.1],w,h);ctx.beginPath();ctx.moveTo(...c1);ctx.lineTo(...d1);ctx.stroke();}
+ const arm=1.25,z=0;
+ const pts={f:[arm,0,z],b:[-arm,0,z],l:[0,-arm,z],rr:[0,arm,z],c:[0,0,z]};
+ function rp(v){return project3(rot3(v,r,p,y),w,h)}
+ function line(a,b,color,width){let A=rp(a),B=rp(b);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();ctx.moveTo(...A);ctx.lineTo(...B);ctx.stroke()}
+ line([arm,0,0],[-arm,0,0],'#4da3ff',9);line([0,-arm,0],[0,arm,0],'#8ea1ad',9);
+ for(const q of [[arm,0,0],[-arm,0,0],[0,-arm,0],[0,arm,0]]){let P=rp(q);ctx.fillStyle='#56d88b';ctx.beginPath();ctx.arc(P[0],P[1],18,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#dbe7ee';ctx.lineWidth=3;ctx.beginPath();ctx.arc(P[0],P[1],28,0,Math.PI*2);ctx.stroke();}
+ let C=rp([0,0,0]);ctx.fillStyle='#dbe7ee';ctx.beginPath();ctx.arc(C[0],C[1],16,0,Math.PI*2);ctx.fill();
+ let F=rp([1.55,0,0]);ctx.fillStyle='#ffb14d';ctx.beginPath();ctx.moveTo(F[0],F[1]);let f1=rp([1.15,-.18,0]),f2=rp([1.15,.18,0]);ctx.lineTo(f1[0],f1[1]);ctx.lineTo(f2[0],f2[1]);ctx.closePath();ctx.fill();
+ ctx.fillStyle='#9fb0bd';ctx.font='17px system-ui';ctx.fillText('нос',Math.min(w-55,F[0]+10),Math.max(24,F[1]-6));
+ ctx.fillText('roll '+fmt(t.roll_deg,1)+'°   pitch '+fmt(t.pitch_deg,1)+'°   yaw '+fmt(t.yaw_deg,1)+'°',20,28);
+}
+function drawGauge(id,value,range,mode){
+ let c=document.getElementById(id),ctx=c.getContext('2d'),w=c.width,h=c.height;
+ ctx.clearRect(0,0,w,h);ctx.fillStyle='#0c1115';ctx.fillRect(0,0,w,h);
+ let cx=w/2,cy=h*.70,R=Math.min(w*.42,h*.58);
+ ctx.strokeStyle='#33434e';ctx.lineWidth=10;ctx.beginPath();ctx.arc(cx,cy,R,Math.PI,2*Math.PI);ctx.stroke();
+ for(let i=0;i<=10;i++){let a=Math.PI+i*Math.PI/10,x1=cx+Math.cos(a)*(R-8),y1=cy+Math.sin(a)*(R-8),x2=cx+Math.cos(a)*(R+7),y2=cy+Math.sin(a)*(R+7);ctx.strokeStyle='#6c7f8c';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();}
+ let v=Number(value||0),norm;
+ if(mode==='yaw'){v=((v+180)%360+360)%360-180;norm=(v+180)/360;} else {v=Math.max(-range,Math.min(range,v));norm=(v+range)/(2*range);}
+ let a=Math.PI+norm*Math.PI;
+ ctx.strokeStyle='#56d88b';ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.cos(a)*(R-10),cy+Math.sin(a)*(R-10));ctx.stroke();
+ ctx.fillStyle='#eef4f8';ctx.beginPath();ctx.arc(cx,cy,6,0,Math.PI*2);ctx.fill();
+ ctx.font='bold 20px system-ui';ctx.textAlign='center';ctx.fillText(fmt(value,1)+'°',cx,cy+30);
+ ctx.font='12px system-ui';ctx.fillStyle='#8fa1ae';ctx.fillText(mode==='yaw'?'−180°                             +180°':'−'+range+'°                               +'+range+'°',cx,18);
+}
 async function refresh(){try{
  let t=await api('/api/telemetry'); dot.className='dot '+(t.running?'on':'off');runState.textContent=t.running?'Работает':'Остановлено';
  mx.textContent=fmt(t.x_mm,0)+' мм';my.textContent=fmt(t.y_mm,0)+' мм';mz.textContent=fmt(t.z_mm,0)+' мм';mr.textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';mq.textContent=t.quality==null?'—':t.quality;
- roll.textContent=fmt(t.roll_deg,1)+'°';pitch.textContent=fmt(t.pitch_deg,1)+'°';yaw.textContent=fmt(t.yaw_deg,1)+'°';inl.textContent=(t.inliers??'—')+'/'+(t.tracked??'—');arm.textContent=t.armed?'ARMED':'DISARMED';draw(t);
+ roll.textContent=fmt(t.roll_deg,1)+'°';pitch.textContent=fmt(t.pitch_deg,1)+'°';yaw.textContent=fmt(t.yaw_deg,1)+'°';inl.textContent=(t.inliers??'—')+'/'+(t.tracked??'—');arm.textContent=t.armed?'ARMED':'DISARMED';draw(t);drawDrone(t);drawGauge('gRoll',t.roll_deg,45,'angle');drawGauge('gPitch',t.pitch_deg,45,'angle');drawGauge('gYaw',t.yaw_deg,180,'yaw');
  let l=await api('/api/log');log.textContent=l.text||'';log.scrollTop=log.scrollHeight;
  }catch(e){}}
 loadConfig();refresh();setInterval(refresh,700);
