@@ -1,6 +1,6 @@
 // monkeysStab — robust MAVLink PARAM read utility for MatekH743 on /dev/ttyAMA0.
 // It intentionally does NOT wait for HEARTBEAT. sysid/compid are explicit and
-// PARAM_VALUE is the acknowledgement. This tool is read-only in monkeysStab.
+// PARAM_VALUE is the acknowledgement. Supports robust read and verified set.
 #include "ardupilotmega/mavlink.h"
 #include <fcntl.h>
 #include <poll.h>
@@ -100,9 +100,37 @@ static bool read_param(int fd,uint8_t target_sys,uint8_t target_comp,const std::
   return false;
 }
 
+static void send_param_set(int fd,uint8_t target_sys,uint8_t target_comp,
+                           const std::string& name,float value){
+  mavlink_message_t m{};
+  mavlink_msg_param_set_pack(191,199,&m,target_sys,target_comp,
+                             name.c_str(),value,MAV_PARAM_TYPE_REAL32);
+  uint8_t b[MAVLINK_MAX_PACKET_LEN];
+  auto n=mavlink_msg_to_send_buffer(b,&m);
+  write_all(fd,b,n);
+}
+
+static bool set_param_verified(int fd,uint8_t target_sys,uint8_t target_comp,
+                               const std::string& name,float value,
+                               mavlink_param_value_t* out){
+  for(int attempt=0;attempt<5;attempt++){
+    send_param_set(fd,target_sys,target_comp,name,value);
+    mavlink_param_value_t p{};
+    if(!wait_param_value(fd,target_sys,name,&p,1200))continue;
+    const float tol=std::max(1.0e-6f,std::fabs(value)*1.0e-5f);
+    if(std::fabs(p.param_value-value)<=tol){
+      if(out)*out=p;
+      return true;
+    }
+  }
+  return false;
+}
+
 int main(int argc,char** argv){
   if(argc<7){
-    std::cerr<<"Использование: "<<argv[0]<<" <device> <baud> <sysid> <compid> read NAME [NAME...]\n";
+    std::cerr<<"Использование:\n"
+             <<"  "<<argv[0]<<" <device> <baud> <sysid> <compid> read NAME [NAME...]\n"
+             <<"  "<<argv[0]<<" <device> <baud> <sysid> <compid> set NAME VALUE [NAME VALUE...]\n";
     return 2;
   }
   const std::string dev=argv[1];
@@ -110,14 +138,29 @@ int main(int argc,char** argv){
   const uint8_t sys=(uint8_t)std::stoi(argv[3]);
   const uint8_t comp=(uint8_t)std::stoi(argv[4]);
   const std::string mode=argv[5];
-  if(mode!="read")die("monkeysStab param utility is read-only; expected mode=read");
   int fd=open_serial(dev,baud);
   std::cout<<"TARGET FC sys="<<(int)sys<<" comp="<<(int)comp<<"\n";
-  for(int i=6;i<argc;i++){
-    mavlink_param_value_t p{};
-    if(!read_param(fd,sys,comp,argv[i],&p))die(std::string("параметр не прочитан: ")+argv[i]);
-    std::cout<<argv[i]<<"="<<p.param_value<<"\n";
+
+  if(mode=="read"){
+    for(int i=6;i<argc;i++){
+      mavlink_param_value_t p{};
+      if(!read_param(fd,sys,comp,argv[i],&p))die(std::string("параметр не прочитан: ")+argv[i]);
+      std::cout<<argv[i]<<"="<<p.param_value<<"\n";
+    }
+  } else if(mode=="set"){
+    if((argc-6)%2!=0)die("для set нужны пары NAME VALUE");
+    for(int i=6;i<argc;i+=2){
+      const std::string name=argv[i];
+      const float value=std::stof(argv[i+1]);
+      mavlink_param_value_t p{};
+      if(!set_param_verified(fd,sys,comp,name,value,&p))
+        die("параметр не записан/не подтверждён: "+name);
+      std::cout<<name<<"="<<p.param_value<<" VERIFIED\n";
+    }
+  } else {
+    die("неизвестный режим: "+mode);
   }
+
   ::close(fd);
   return 0;
 }
