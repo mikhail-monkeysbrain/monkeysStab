@@ -42,9 +42,9 @@ function axisLine(a,b,color){
  const m=new THREE.LineBasicMaterial({color});
  axes.add(new THREE.Line(g,m));
 }
-axisLine([0,0,0],[1.2,0,0],0x28ef5e);   // East +X
-axisLine([0,0,0],[0,1.2,0],0x2f8cff);   // Up +Y
-axisLine([0,0,0],[0,0,-1.2],0xff4050);  // North -Z
+axisLine([0,0,0],[1.2,0,0],0xff4050);   // X / North
+axisLine([0,0,0],[0,1.2,0],0x2f8cff);   // Up
+axisLine([0,0,0],[0,0,1.2],0x28ef5e);   // Y / East
 scene.add(axes);
 
 const homeMat=new THREE.MeshBasicMaterial({color:0x12e96f,side:THREE.DoubleSide});
@@ -61,12 +61,18 @@ scene.add(trailLine);
 const droneRoot=new THREE.Group();
 scene.add(droneRoot);
 let droneModel=null;
+let modelZeroLift=0;
 
-// Body-FRD -> scene basis: NED [N,E,D] -> Three [E,-D,-N].
+// NED -> Three scene:
+//   N (FC X / North) -> scene +X
+//   E (FC Y / East)  -> scene +Z
+//   D (FC Z / Down)  -> scene -Y
+// This keeps the ground plane at scene Y=0 and makes yaw=0 point the nose
+// exactly along the visible +X axis.
 const sceneFromNed=new THREE.Matrix4().set(
- 0, 1, 0, 0,
+ 1, 0, 0, 0,
  0, 0,-1, 0,
--1, 0, 0, 0,
+ 0, 1, 0, 0,
  0, 0, 0, 1
 );
 const qSceneFromNed=new THREE.Quaternion().setFromRotationMatrix(sceneFromNed);
@@ -96,7 +102,13 @@ new GLTFLoader().load('/assets/CesiumDrone.glb',gltf=>{
  droneModel.position.sub(center);
  const span=Math.max(size.x,size.y,size.z)||1;
  const targetSpan=.48; // physical display span ~48 cm on the metre grid
- droneModel.scale.setScalar(targetSpan/span);
+ const scale=targetSpan/span;
+ droneModel.scale.setScalar(scale);
+
+ // At telemetry Z=0 the aircraft must not be half-buried in the grid.
+ // Since the mesh is centered above, lift its reference point by half of
+ // the scaled model height so the lowest point is approximately on Y=0.
+ modelZeroLift=(size.y*scale)*0.5;
  droneRoot.add(droneModel);
  set3dStatus('');
 },undefined,e=>{console.error('GLB load failed',e);set3dStatus('Ошибка загрузки GLB: '+(e?.message||e),true)});
@@ -160,8 +172,8 @@ function update(t){
  const n=(Number(t.x_mm)||0)/1000;
  const e=(Number(t.y_mm)||0)/1000;
  const d=(Number(t.z_mm)||0)/1000;
- currentPos.set(e,-d,-n);
- droneRoot.position.copy(currentPos);
+ currentPos.set(n,-d,e);
+ droneRoot.position.set(currentPos.x,currentPos.y+modelZeroLift,currentPos.z);
 
  const roll=THREE.MathUtils.degToRad(Number(t.roll_deg)||0);
  const pitch=THREE.MathUtils.degToRad(Number(t.pitch_deg)||0);
@@ -170,9 +182,9 @@ function update(t){
  droneRoot.quaternion.copy(qSceneFromNed).multiply(qNed).multiply(qBodyFromModel);
 
  const pts=(t.trail||[]).map(p=>new THREE.Vector3(
-   (Number(p.y_mm)||0)/1000,
+   (Number(p.x_mm)||0)/1000,
    -(Number(p.z_mm)||0)/1000,
-   -(Number(p.x_mm)||0)/1000
+   (Number(p.y_mm)||0)/1000
  ));
  trailGeom.dispose();
  trailGeom=new THREE.BufferGeometry().setFromPoints(pts.length?pts:[new THREE.Vector3()]);
