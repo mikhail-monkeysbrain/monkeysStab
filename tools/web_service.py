@@ -189,6 +189,7 @@ def start_live_udp_listener():
         return
     _live_udp_stop.clear()
     def run():
+        global _live_udp_rx,_live_udp_bad
         sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
         sock.bind(("127.0.0.1",LIVE_UDP_PORT))
