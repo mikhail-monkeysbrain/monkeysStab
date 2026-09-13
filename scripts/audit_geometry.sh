@@ -5,6 +5,7 @@ DEVICE="${MONKEYS_FC:-/dev/ttyAMA0}"
 BAUD="${MONKEYS_FC_BAUD:-460800}"
 SYSID="${MONKEYS_FC_SYSID:-1}"
 COMPID="${MONKEYS_FC_COMPID:-1}"
+GEOMETRY_JSON="${MONKEYS_GEOMETRY_JSON:-$ROOT/config/mount_geometry.json}"
 if [[ -z "${MAVLINK_ROOT:-}" ]]; then
   for d in "$ROOT/third_party/mavlink" /usr/local/include/mavlink/v2.0 /usr/include/mavlink/v2.0; do
     if [[ -f "$d/ardupilotmega/mavlink.h" ]]; then
@@ -33,18 +34,21 @@ echo "======================================================================"
 echo "$OUT"
 echo
 
-python3 - "$OUT" <<'PY'
-import math,sys
+python3 - "$OUT" "$GEOMETRY_JSON" <<'PY'
+import json,math,sys
 vals={}
 for line in sys.argv[1].splitlines():
     if "=" not in line: continue
     k,v=line.split("=",1)
     try: vals[k.strip()]=float(v.strip())
     except ValueError: pass
+with open(sys.argv[2], "r", encoding="utf-8") as f:
+    g=json.load(f)
+c=g["camera"]; r=g["rangefinder"]
 expected={
  "INS_POS1_X":0.0,"INS_POS1_Y":0.0,"INS_POS1_Z":0.0,
- "FLOW_POS_X":0.0625,"FLOW_POS_Y":0.0,"FLOW_POS_Z":0.0500,
- "RNGFND1_POS_X":0.0855,"RNGFND1_POS_Y":0.0,"RNGFND1_POS_Z":0.0550,
+ "FLOW_POS_X":float(c["x"]),"FLOW_POS_Y":float(c["y"]),"FLOW_POS_Z":float(c["z"]),
+ "RNGFND1_POS_X":float(r["x"]),"RNGFND1_POS_Y":float(r["y"]),"RNGFND1_POS_Z":float(r["z"]),
 }
 failed=[]
 for k,e in expected.items():
