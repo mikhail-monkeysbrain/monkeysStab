@@ -51,6 +51,8 @@ _live_latest=None
 _live_last_wall=0.0
 _live_udp_thread=None
 _live_udp_stop=threading.Event()
+_live_udp_rx=0
+_live_udp_bad=0
 LIVE_UDP_PORT=int(os.environ.get("MONKEYS_WEB_TELEMETRY_UDP_PORT","8766"))
 FC_ENDPOINT="tcp://127.0.0.1:5760"
 GEOMETRY_PARAMS=["FLOW_POS_X","FLOW_POS_Y","FLOW_POS_Z","RNGFND1_POS_X","RNGFND1_POS_Y","RNGFND1_POS_Z"]
@@ -182,7 +184,7 @@ def live_payload(raw):
     return out
 
 def start_live_udp_listener():
-    global _live_udp_thread
+    global _live_udp_thread,_live_udp_rx,_live_udp_bad
     if _live_udp_thread and _live_udp_thread.is_alive():
         return
     _live_udp_stop.clear()
@@ -203,9 +205,12 @@ def start_live_udp_listener():
                 try:
                     raw=json.loads(data.decode("utf-8"))
                     if raw.get("type")!="telemetry":continue
+                    _live_udp_rx+=1
                     ws_broadcast(live_payload(raw))
                 except Exception as e:
-                    log_event("WARN","Live telemetry packet error: "+str(e))
+                    _live_udp_bad+=1
+                    if _live_udp_bad<=5 or _live_udp_bad%100==0:
+                        log_event("WARN","Live telemetry packet error: "+str(e))
         finally:
             sock.close()
     _live_udp_thread=threading.Thread(target=run,daemon=True,name="web-live-udp")
@@ -1320,7 +1325,7 @@ async function refreshRuntimeStatus(){
    if(!st.running){
      if(!latest || latest.running!==false)updateHud({available:false,running:false,runtime_exit:st.runtime_exit||null});
    }else if(!latest || !latest.available){
-     $('sceneXYZ').textContent='Ожидание WebSocket телеметрии…';
+     $('sceneXYZ').textContent='Ожидание WebSocket телеметрии… UDP rx='+String(st.udp_rx??0)+' bad='+String(st.udp_bad??0)+' · WS='+String(st.ws_clients??0);
    }
  }catch(e){}
 }
@@ -1393,7 +1398,7 @@ class H(BaseHTTPRequestHandler):
             elif p=="/api/status":
                 with _lock:
                     age_ms=(time.time()-_live_last_wall)*1000.0 if _live_last_wall else None
-                self.send_json({"running":running(),"pid":_proc.pid if running() else None,"transport":"websocket","live_age_ms":age_ms,"ws_clients":len(_ws_clients),"runtime_exit":runtime_exit_info()})
+                self.send_json({"running":running(),"pid":_proc.pid if running() else None,"transport":"websocket","live_age_ms":age_ms,"ws_clients":len(_ws_clients),"udp_rx":_live_udp_rx,"udp_bad":_live_udp_bad,"runtime_exit":runtime_exit_info()})
             elif p=="/api/telemetry":
                 self.send_json(telemetry())
             elif p=="/api/log":
