@@ -1046,7 +1046,7 @@ loadConfig();initGL();refresh();refreshFc();refreshJournal();setInterval(refresh
  const st=document.getElementById('advanced3dStatus');
  try{
    if(st){st.style.display='block';st.style.color='#9fb8ca';st.textContent='Загрузка модуля расширенного 3D…';}
-   await import('/assets/advanced_scene.js?rev=4');
+   await import('/assets/advanced_scene.js?rev=5');
  }catch(e){
    console.error('Advanced 3D module failed',e);
    if(st){
