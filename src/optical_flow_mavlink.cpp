@@ -20,6 +20,8 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <sys/socket.h>
+#include <netdb.h>
 
 #if __has_include(<opencv2/freetype.hpp>)
 #include <opencv2/freetype.hpp>
@@ -180,18 +182,50 @@ struct FlowFc {
     writeAll(fd,b,n);
   }
 
-  void start(const std::string& dev){
-    fd=::open(dev.c_str(),O_RDWR|O_NOCTTY|O_NONBLOCK);
-    if(fd<0)fail("open FC");
+  static int openEndpoint(const std::string& dev){
+    constexpr const char* kTcp="tcp://";
+    if(dev.rfind(kTcp,0)==0){
+      const std::string hp=dev.substr(std::strlen(kTcp));
+      const auto colon=hp.rfind(':');
+      if(colon==std::string::npos) throw std::runtime_error("FC TCP endpoint: ожидается tcp://host:port");
+      const std::string host=hp.substr(0,colon);
+      const std::string port=hp.substr(colon+1);
+      addrinfo hints{},*res=nullptr;
+      hints.ai_family=AF_UNSPEC; hints.ai_socktype=SOCK_STREAM;
+      const int gr=getaddrinfo(host.c_str(),port.c_str(),&hints,&res);
+      if(gr!=0) throw std::runtime_error(std::string("FC TCP getaddrinfo: ")+gai_strerror(gr));
+      int s=-1;
+      for(addrinfo* p=res;p;p=p->ai_next){
+        s=::socket(p->ai_family,p->ai_socktype,p->ai_protocol);
+        if(s<0) continue;
+        if(::connect(s,p->ai_addr,p->ai_addrlen)==0) break;
+        ::close(s); s=-1;
+      }
+      freeaddrinfo(res);
+      if(s<0) throw std::runtime_error("FC TCP connect failed: "+dev);
+      const int fl=fcntl(s,F_GETFL,0);
+      if(fl>=0) fcntl(s,F_SETFL,fl|O_NONBLOCK);
+      std::cerr<<"FC endpoint: "<<dev<<" (через MAVLink router)\n";
+      return s;
+    }
+
+    int s=::open(dev.c_str(),O_RDWR|O_NOCTTY|O_NONBLOCK);
+    if(s<0)fail("open FC");
     termios t{};
-    if(tcgetattr(fd,&t)<0)fail("FC tcgetattr");
+    if(tcgetattr(s,&t)<0)fail("FC tcgetattr");
     cfmakeraw(&t);
     cfsetispeed(&t,B460800); cfsetospeed(&t,B460800);
     t.c_cflag|=CLOCAL|CREAD;
     t.c_cflag&=~CRTSCTS; t.c_cflag&=~PARENB; t.c_cflag&=~CSTOPB;
     t.c_cflag&=~CSIZE; t.c_cflag|=CS8;
-    if(tcsetattr(fd,TCSANOW,&t)<0)fail("FC tcsetattr");
-    tcflush(fd,TCIFLUSH);
+    if(tcsetattr(s,TCSANOW,&t)<0)fail("FC tcsetattr");
+    tcflush(s,TCIFLUSH);
+    std::cerr<<"FC endpoint: "<<dev<<" @ 460800 (direct UART)\n";
+    return s;
+  }
+
+  void start(const std::string& dev){
+    fd=openEndpoint(dev);
 
     th=std::thread([this]{
       mavlink_status_t st{}; mavlink_message_t m{}; uint8_t buf[4096];
