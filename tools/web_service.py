@@ -1392,7 +1392,7 @@ window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';
  const st=document.getElementById('advanced3dStatus');
  try{
    if(st){st.style.display='block';st.style.color='#9fb8ca';st.textContent='Загрузка модуля расширенного 3D…';}
-   await import('/assets/advanced_scene.js?rev=10');
+   await import('/assets/advanced_scene.js?rev=11');
  }catch(e){
    console.error('Advanced 3D module failed',e);
    if(st){
@@ -1427,7 +1427,7 @@ class H(BaseHTTPRequestHandler):
                 return
             elif p.startswith("/assets/"):
                 name=Path(p).name
-                if name not in ("CesiumDrone.glb","model-viewer.min.js","three.module.js","GLTFLoader.js","BufferGeometryUtils.js","advanced_scene.js","NOTICE.txt"): raise FileNotFoundError(name)
+                if name not in ("GTKimaQuadcopter.glb","CesiumDrone.glb","model-viewer.min.js","three.module.js","GLTFLoader.js","BufferGeometryUtils.js","advanced_scene.js","NOTICE.txt"): raise FileNotFoundError(name)
                 fp=WEB_ASSETS/name
                 if name=="advanced_scene.js":
                     fp=ROOT/"web_assets"/"advanced_scene.js"
