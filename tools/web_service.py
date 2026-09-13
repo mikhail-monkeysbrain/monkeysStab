@@ -606,7 +606,7 @@ button{cursor:pointer}
  <div class="col center">
   <div class="card sceneCard">
    <div class="sceneTitle">3D — Траектория и ориентация</div>
-   <canvas id="glCanvas"></canvas>
+   <canvas id="glCanvas"></canvas><canvas id="lightCanvas" style="display:none;width:100%;height:625px;background:#07121c"></canvas>
    <div class="sceneControls">
     <label><input id="showTrail" type="checkbox" checked> Траектория</label>
     <label><input id="showGrid" type="checkbox" checked> Сетка</label>
@@ -764,9 +764,23 @@ let viewMode='iso',viewYaw=.75,viewPitch=.65,viewDist=6.4;
 let drag=false,lastX=0,lastY=0;
 
 async function api(path,opt){let r=await fetch(path,opt);let j=await r.json();if(!r.ok)throw new Error(j.error||r.statusText);return j}
-function goSection(id,btn){
- document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));btn.classList.add('active');
- let el=$(id);if(el)el.scrollIntoView({behavior:'smooth',block:id==='system'?'end':'start'});
+function showView(id,btn){
+ document.querySelectorAll('.appView').forEach(x=>x.classList.remove('activeView'));
+ let v=$('view-'+id);if(v)v.classList.add('activeView');
+ document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));
+ if(btn)btn.classList.add('active');
+ window.scrollTo({top:0,behavior:'instant'});
+ if(id==='settings'){loadFcParams();loadGeometry()}
+ if(id==='journal')refreshJournal();
+ if(id==='system')refreshVisualizationMode();
+ if(id==='telemetry'&&latest)drawHistory(latest.history||[]);
+ setTimeout(()=>{renderScene();if(latest)drawHistory(latest.history||[])},50);
+}
+function showSettingsTab(id,btn){
+ document.querySelectorAll('#view-settings .tabPane').forEach(x=>x.classList.remove('active'));
+ document.querySelectorAll('#view-settings .tabBtn').forEach(x=>x.classList.remove('active'));
+ $('settings-'+id).classList.add('active');btn.classList.add('active');
+ if(id==='fc')loadFcParams();if(id==='geometry')loadGeometry();
 }
 function fmt(v,d=1){return v==null||!Number.isFinite(Number(v))?'—':Number(v).toFixed(d)}
 function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
@@ -779,6 +793,8 @@ function setActiveMode(mode){
 async function loadConfig(){
  let j=await api('/api/config'),c=j.runtime;
  $('focal').value=c.focal_scale;[$('r0').value,$('r1').value,$('r2').value,$('r3').value]=c.feature_roi;$('features').value=c.max_features;
+ if($('sfocal')){$('sfocal').value=c.focal_scale;[$('sr0').value,$('sr1').value,$('sr2').value,$('sr3').value]=c.feature_roi;$('sfeatures').value=c.max_features;}
+ window.visualizationMode=c.visualization_mode||'simple';refreshVisualizationMode();
  let g=j.geometry||{},gv=[];
  if(g.camera){gv.push(['FLOW_POS_X',g.camera.x*1000],['FLOW_POS_Y',g.camera.y*1000],['FLOW_POS_Z',g.camera.z*1000])}
  if(g.rangefinder){gv.push(['RNGFND1_POS_X',g.rangefinder.x*1000],['RNGFND1_POS_Y',g.rangefinder.y*1000],['RNGFND1_POS_Z',g.rangefinder.z*1000])}
@@ -792,6 +808,78 @@ async function saveConfig(){
   await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   $('saveMsg').textContent='Сохранено';
  }catch(e){$('saveMsg').textContent='Ошибка: '+e.message}
+}
+async function saveRuntimeSettings(){
+ try{
+  let body={focal_scale:+$('sfocal').value,feature_roi:[+$('sr0').value,+$('sr1').value,+$('sr2').value,+$('sr3').value],max_features:+$('sfeatures').value};
+  let j=await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  $('runtimeSettingsMsg').textContent='Сохранено';
+  $('focal').value=j.runtime.focal_scale;[$('r0').value,$('r1').value,$('r2').value,$('r3').value]=j.runtime.feature_roi;$('features').value=j.runtime.max_features;
+ }catch(e){$('runtimeSettingsMsg').textContent='Ошибка: '+e.message}
+}
+async function loadFcParams(){
+ if(!$('fcParamRows'))return;
+ $('fcParamMsg').textContent='Чтение...';
+ try{
+  let j=await api('/api/fc/params'),p=(j.profile||{}).params||{},vals=j.values||{};
+  $('fcParamRows').innerHTML=Object.keys(p).map(k=>'<tr><td>'+k+'</td><td>'+fmt(vals[k],6)+'</td><td><input data-fc-param="'+k+'" value="'+(vals[k]??p[k])+'"></td></tr>').join('');
+  $('fcParamMsg').textContent='Прочитано из FC';
+ }catch(e){$('fcParamMsg').textContent='Ошибка: '+e.message}
+}
+async function writeFcParams(){
+ if(!confirm('Записать изменённые критические параметры в FC? FC должен быть DISARMED.'))return;
+ let values={};document.querySelectorAll('[data-fc-param]').forEach(e=>values[e.dataset.fcParam]=+String(e.value).replace(',','.'));
+ $('fcParamMsg').textContent='Запись и проверка...';
+ try{await api('/api/fc/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values})});$('fcParamMsg').textContent='Записано и подтверждено';await loadFcParams();await loadConfig()}
+ catch(e){$('fcParamMsg').textContent='Ошибка: '+e.message;alert(e.message)}
+}
+async function loadGeometry(){
+ if(!$('gx0'))return;$('geometryMsg').textContent='Чтение...';
+ try{
+  let j=await api('/api/geometry'),v=j.values||{};
+  $('gx0').value=fmt((v.FLOW_POS_X||0)*1000,1);$('gy0').value=fmt((v.FLOW_POS_Y||0)*1000,1);$('gz0').value=fmt((v.FLOW_POS_Z||0)*1000,1);
+  $('grx').value=fmt((v.RNGFND1_POS_X||0)*1000,1);$('gry').value=fmt((v.RNGFND1_POS_Y||0)*1000,1);$('grz').value=fmt((v.RNGFND1_POS_Z||0)*1000,1);
+  $('geometryMsg').textContent='Прочитано из FC';
+ }catch(e){$('geometryMsg').textContent='Ошибка: '+e.message}
+}
+async function writeGeometry(){
+ if(!confirm('Записать геометрию в FC и синхронизировать локальный config?'))return;
+ let values={
+  FLOW_POS_X:+String($('gx0').value).replace(',','.')/1000,FLOW_POS_Y:+String($('gy0').value).replace(',','.')/1000,FLOW_POS_Z:+String($('gz0').value).replace(',','.')/1000,
+  RNGFND1_POS_X:+String($('grx').value).replace(',','.')/1000,RNGFND1_POS_Y:+String($('gry').value).replace(',','.')/1000,RNGFND1_POS_Z:+String($('grz').value).replace(',','.')/1000};
+ $('geometryMsg').textContent='Запись и проверка...';
+ try{await api('/api/geometry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values})});$('geometryMsg').textContent='Геометрия записана и синхронизирована';await loadGeometry();await loadConfig()}
+ catch(e){$('geometryMsg').textContent='Ошибка: '+e.message;alert(e.message)}
+}
+async function refreshJournal(){
+ if(!$('journalEvents'))return;
+ try{let j=await api('/api/journal');$('journalEvents').innerHTML=(j.events||[]).slice().reverse().map(e=>'<div class="eventRow"><span class="ts">'+e.ts+'</span><span class="'+e.level+'">'+e.level+'</span><span>'+escapeHtml(e.text)+'</span></div>').join('')}
+ catch(e){}
+}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+async function refreshMessages(){
+ try{let j=await api('/api/messages'),ev=j.events||[];$('log').innerHTML=ev.slice(-120).map(e=>'['+e.ts+'] [S'+e.severity+'] '+escapeHtml(e.text)).join('\n');$('log').scrollTop=$('log').scrollHeight}catch(e){}
+}
+function refreshVisualizationMode(){
+ let m=window.visualizationMode||'simple';
+ ['Advanced','Simple','Light'].forEach(x=>{let e=$('vm'+x);if(e)e.classList.remove('active')});
+ let id=m==='advanced'?'vmAdvanced':m==='light'?'vmLight':'vmSimple';if($(id))$(id).classList.add('active');
+ if($('glCanvas')&&$('lightCanvas')){
+  $('glCanvas').style.display=m==='light'?'none':'block';$('lightCanvas').style.display=m==='light'?'block':'none';
+ }
+ if($('visualModeMsg'))$('visualModeMsg').textContent=m==='advanced'?'Расширенный WebGL режим выбран. Полная GLB-модель загружается отдельным asset-слоем.':m==='light'?'Лёгкий 2D режим: WebGL отключён.':'Упрощённый WebGL режим.';
+ if(latest){if(m==='light')drawLightScene(latest);else renderScene()}
+}
+async function setVisualizationMode(mode){
+ try{let j=await api('/api/system/visualization',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});window.visualizationMode=j.runtime.visualization_mode;refreshVisualizationMode()}
+ catch(e){alert(e.message)}
+}
+function drawLightScene(t){
+ let c=$('lightCanvas');if(!c)return,ctx=c.getContext('2d');let d=devicePixelRatio,w=c.width=c.clientWidth*d,h=c.height=c.clientHeight*d;ctx.scale(d,d);w=c.clientWidth;h=c.clientHeight;
+ ctx.fillStyle='#07121c';ctx.fillRect(0,0,w,h);let cx=w/2,cy=h/2,scale=Math.min(w,h)/2.5;
+ ctx.strokeStyle='#153d58';for(let i=-5;i<=5;i++){let q=i*.2*scale;ctx.beginPath();ctx.moveTo(cx+q,20);ctx.lineTo(cx+q,h-20);ctx.stroke();ctx.beginPath();ctx.moveTo(20,cy+q);ctx.lineTo(w-20,cy+q);ctx.stroke()}
+ let tr=t.trail||[];ctx.strokeStyle='#1eaaff';ctx.lineWidth=2;ctx.beginPath();tr.forEach((p,i)=>{let x=cx+(p.y_mm/1000)*scale,y=cy-(p.x_mm/1000)*scale;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y)});ctx.stroke();
+ let x=cx+((t.y_mm||0)/1000)*scale,y=cy-((t.x_mm||0)/1000)*scale;ctx.fillStyle='#17d878';ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();ctx.fillStyle='#9fb7c9';ctx.fillText('N ↑   E →',16,22);
 }
 async function start(){try{await api('/api/start',{method:'POST'});}catch(e){alert(e.message)}}
 async function stop(){try{await api('/api/stop',{method:'POST'});}catch(e){alert(e.message)}}
@@ -814,7 +902,8 @@ function updateHud(t){
  $('rollNeedle').style.left=(50+clamp(t.roll_deg||0,-45,45)/45*50)+'%';
  $('pitchNeedle').style.left=(50+clamp(t.pitch_deg||0,-45,45)/45*50)+'%';
  let y=((t.yaw_deg||0)+180)%360-180;$('yawNeedle').style.left=(50+y/180*50)+'%';
- drawCompass(t.yaw_deg||0);drawHistory(t.history||[]);renderScene();
+ if($('tmx')){$('tmx').textContent=fmt(t.x_mm,0)+' мм';$('tmy').textContent=fmt(t.y_mm,0)+' мм';$('tmz').textContent=fmt(t.z_mm,0)+' мм';$('tmr').textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';$('tmq').textContent=t.quality??'—';$('troll').textContent=fmt(t.roll_deg,1)+'°';$('tpitch').textContent=fmt(t.pitch_deg,1)+'°';$('tyaw').textContent=fmt(t.yaw_deg,1)+'°';$('tinl').textContent=(t.inliers??'—')+'/'+(t.tracked??'—');$('tekf').textContent=t.ekf_valid?'VALID':'NO DATA'}
+ drawCompass(t.yaw_deg||0);drawHistory(t.history||[]);if((window.visualizationMode||'simple')==='light')drawLightScene(t);else renderScene();
 }
 
 function drawCompass(deg){
@@ -843,6 +932,9 @@ function drawHistory(h){
  let c=$('xyzChart'),ctx=c.getContext('2d'),[w,hh]=chartBase(c,ctx);let vals=[];h.forEach(d=>['x','y','z'].forEach(k=>{if(d[k]!=null)vals.push(d[k])}));let m=Math.max(.05,...vals.map(Math.abs));plotSeries(ctx,h,'x',-m,m,'#ff4352',w,hh);plotSeries(ctx,h,'y',-m,m,'#16d878',w,hh);plotSeries(ctx,h,'z',-m,m,'#218cff',w,hh);
  c=$('speedChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);plotSeries(ctx,h,'speed',0,Math.max(.2,...h.map(d=>d.speed||0))*1.15,'#ffd11f',w,hh);
  c=$('rangeChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);let rv=h.map(d=>d.range).filter(v=>v!=null),rmax=Math.max(.5,...rv)*1.2;plotSeries(ctx,h,'range',0,rmax,'#c98cff',w,hh);
+ if($('tXyzChart')){c=$('tXyzChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);plotSeries(ctx,h,'x',-m,m,'#ff4352',w,hh);plotSeries(ctx,h,'y',-m,m,'#16d878',w,hh);plotSeries(ctx,h,'z',-m,m,'#218cff',w,hh)}
+ if($('tSpeedChart')){c=$('tSpeedChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);plotSeries(ctx,h,'speed',0,Math.max(.2,...h.map(d=>d.speed||0))*1.15,'#ffd11f',w,hh)}
+ if($('tRangeChart')){c=$('tRangeChart');ctx=c.getContext('2d');[w,hh]=chartBase(c,ctx);plotSeries(ctx,h,'range',0,rmax,'#c98cff',w,hh)}
 }
 
 let gl,prog,bufPos,bufCol,locMvp,locPos,locCol;
@@ -883,10 +975,10 @@ function setView(v,el){viewMode=v;document.querySelectorAll('.viewItem').forEach
 function resetView(){viewMode='iso';viewYaw=.75;viewPitch=.65;viewDist=6.4;renderScene()}
 
 async function refresh(){
- try{let t=await api('/api/telemetry');updateHud(t);let l=await api('/api/log');$('log').textContent=l.text||'';$('log').scrollTop=$('log').scrollHeight}catch(e){}
+ try{let t=await api('/api/telemetry');updateHud(t);await refreshMessages()}catch(e){}
 }
 setInterval(()=>{$('clock').textContent=new Date().toLocaleTimeString('ru-RU')},1000);
-loadConfig();initGL();refresh();refreshFc();setInterval(refresh,700);setInterval(refreshFc,1800);window.addEventListener('resize',()=>{renderScene();if(latest)drawHistory(latest.history||[])});
+loadConfig();initGL();refresh();refreshFc();refreshJournal();setInterval(refresh,700);setInterval(refreshFc,1800);setInterval(refreshJournal,2500);window.addEventListener('resize',()=>{if((window.visualizationMode||'simple')==='light'&&latest)drawLightScene(latest);else renderScene();if(latest)drawHistory(latest.history||[])});
 </script>
 </body>
 </html>'''
