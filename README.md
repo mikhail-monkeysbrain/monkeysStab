@@ -66,22 +66,96 @@ EK3_SRC1_YAW=0
 
 ## Зависимости
 
-Нужны:
+Ниже перечислены зависимости, необходимые для сборки и запуска текущего `monkeysStab`.
 
-- Linux / Raspberry Pi OS
-- `g++` с C++17
-- OpenCV 4
-- MAVLink C headers с dialect `ardupilotmega`
-- Python 3 (только для preflight-проверок)
-
-Пример пакетов:
+### Системные пакеты
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential pkg-config libopencv-dev python3
+sudo apt install -y \
+  build-essential \
+  g++ \
+  pkg-config \
+  libopencv-dev \
+  python3 \
+  git
 ```
 
-MAVLink headers ищутся в `/usr/local/include/mavlink/v2.0` и `/usr/include/mavlink/v2.0`. Другой путь можно указать переменной `MAVLINK_ROOT`. `~/Kimera-VIO` больше не используется как неявная зависимость.
+Назначение:
+
+- **build-essential** — базовый набор средств сборки C/C++, включая `make` и системные заголовки.
+- **g++** — компилятор C++. Проект собирается в режиме C++17.
+- **pkg-config** — сообщает скриптам сборки пути к заголовкам и библиотекам OpenCV.
+- **libopencv-dev** — OpenCV 4. Используются Core, Image Processing, Video/Optical Flow, Calibration, Image Codecs и HighGUI.
+- **python3** — используется read-only preflight-проверками (проверками перед запуском) для сравнения прочитанных из FC параметров с ожидаемыми.
+- **git** — нужен для получения проекта и автоматической загрузки зафиксированной версии MAVLink headers.
+
+### MAVLink C headers
+
+Для обмена с ArduPilot нужны MAVLink C headers с dialect `ardupilotmega` (набором сообщений ArduPilot). Они не требуют старый Kimera-VIO.
+
+Если подходящих системных headers нет, `scripts/smoke_build.sh` и `scripts/run.sh` автоматически вызывают `scripts/bootstrap_dependencies.sh`. Он загружает официальные MAVLink C headers в `third_party/mavlink/`.
+
+Зафиксированная ревизия:
+
+```text
+mavlink/c_library_v2
+commit 04fffaab116486ffdf7501c37a3f7393eb7beffc
+```
+
+Порядок поиска MAVLink:
+
+```text
+1. $MAVLINK_ROOT, если задан вручную
+2. <репозиторий>/third_party/mavlink
+3. /usr/local/include/mavlink/v2.0
+4. /usr/include/mavlink/v2.0
+5. автоматическая загрузка в third_party/mavlink
+```
+
+`/home/vio/Kimera-VIO/third_party/mavlink` больше не используется и не является зависимостью проекта.
+
+### OpenCV
+
+Текущий C++ код использует OpenCV 4:
+
+```text
+opencv_core
+opencv_imgproc
+opencv_video
+opencv_calib3d
+opencv_imgcodecs
+opencv_highgui
+```
+
+Сборочные флаги и библиотеки берутся автоматически через `pkg-config --cflags opencv4` и `pkg-config --libs opencv4`. При наличии `libopencv-dev` отдельно устанавливать эти модули обычно не требуется.
+
+### Linux API, входящие в систему
+
+Дополнительные сторонние библиотеки для следующих функций не нужны: V4L2 (Video4Linux2 — стандартный Linux-интерфейс камеры) для OV9281; POSIX serial/termios (стандартный Linux-интерфейс последовательного порта) для TF-Luna и FC; `poll`, `mmap` и `pthread` для ожидания данных, отображения буферов камеры в память и фоновых потоков. Они предоставляются Linux/glibc и системными заголовками Raspberry Pi OS.
+
+### Аппаратные интерфейсы, ожидаемые проектом
+
+```text
+OV9281 USB       -> V4L2, 640x480 MJPG
+TF-Luna          -> /dev/ttyAMA2, 115200
+MatekH743 / FC   -> /dev/ttyAMA0, 460800
+```
+
+По умолчанию OV9281 ищется по стабильному USB `by-id`, указанному выше. Пути можно переопределить переменными `MONKEYS_CAMERA`, `MONKEYS_LUNA` и `MONKEYS_FC`.
+
+### Что НЕ является зависимостью
+
+Для текущего `monkeysStab` не нужны Kimera-VIO, GTSAM, ROS/ROS 2, старый `jtzero-kimera`, stereo-код OV9281/OV5647, libcamera (production OV9281 работает через USB/V4L2), старые MOVE500/VIO диагностические программы и датасеты.
+
+### Быстрая проверка окружения
+
+```bash
+cd ~/Desktop/monkeysStab
+bash scripts/smoke_build.sh
+```
+
+Успешная проверка заканчивается строкой `BUILD PASS: /tmp/monkeysstab_optical_flow_buildcheck`. Она подтверждает наличие всех компиляционных зависимостей. Камера, TF-Luna и FC при `smoke_build` не открываются.
 
 ## Проверка сборки
 
