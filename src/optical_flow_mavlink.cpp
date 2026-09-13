@@ -22,6 +22,8 @@
 #include <memory>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #if __has_include(<opencv2/freetype.hpp>)
 #include <opencv2/freetype.hpp>
@@ -74,6 +76,36 @@ void putGuiText(cv::Mat& img,const std::string& text,cv::Point org,
 #endif
   cv::putText(img,text,org,cv::FONT_HERSHEY_SIMPLEX,scale,color,thickness,cv::LINE_AA);
 }
+
+struct LiveWebTelemetryUdp {
+  int fd=-1;
+  sockaddr_in dst{};
+  int64_t last_send_ns=0;
+  int64_t period_ns=50000000LL; // 20 Hz max
+
+  LiveWebTelemetryUdp(){
+    const char* e=std::getenv("MONKEYS_WEB_TELEMETRY_UDP_PORT");
+    if(!e || !*e) return;
+    const int port=std::atoi(e);
+    if(port<=0 || port>65535) return;
+    fd=::socket(AF_INET,SOCK_DGRAM,0);
+    if(fd<0) return;
+    std::memset(&dst,0,sizeof(dst));
+    dst.sin_family=AF_INET;
+    dst.sin_port=htons(static_cast<uint16_t>(port));
+    dst.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+    std::cerr<<"WEB LIVE TELEMETRY: udp://127.0.0.1:"<<port<<" @ <=20 Hz\n";
+  }
+  ~LiveWebTelemetryUdp(){ if(fd>=0) ::close(fd); }
+
+  void send(int64_t now,const std::string& json){
+    if(fd<0) return;
+    if(last_send_ns && now-last_send_ns<period_ns) return;
+    (void)::sendto(fd,json.data(),json.size(),MSG_DONTWAIT,
+                   reinterpret_cast<const sockaddr*>(&dst),sizeof(dst));
+    last_send_ns=now;
+  }
+};
 
 struct FlowFcLocal {
   float x=0,y=0,z=0,vx=0,vy=0,vz=0;
@@ -840,6 +872,7 @@ int main(int argc,char** argv){
     GroundMotionMavlinkPublisher range_pub;
     range_pub.system_id=FlowFc::self_sys;
     range_pub.component_id=FlowFc::self_comp;
+    LiveWebTelemetryUdp web_live;
 
     std::ofstream csv(csvpath,std::ios::trunc);
     int64_t last_csv_flush_ns=monoNs();
@@ -1291,6 +1324,34 @@ int main(int argc,char** argv){
         if(now-last_csv_flush_ns>=kCsvLiveFlushNs){
           csv.flush();
           last_csv_flush_ns=now;
+        }
+
+        {
+          std::ostringstream js;
+          js<<std::setprecision(10)
+            <<"{\"type\":\"telemetry\""
+            <<",\"mono_ns\":"<<now
+            <<",\"frame\":"<<frame
+            <<",\"valid\":"<<(s.valid?1:0)
+            <<",\"quality\":"<<(int)quality
+            <<",\"features\":"<<s.features
+            <<",\"tracked\":"<<s.tracked
+            <<",\"inliers\":"<<s.inliers
+            <<",\"range_m\":"<<lm
+            <<",\"range_age_ms\":"<<lage
+            <<",\"armed\":"<<(arm_ok&&arm_now?"true":"false")
+            <<",\"ekf_valid\":"<<(efresh?"true":"false")
+            <<",\"x\":"<<ep.x
+            <<",\"y\":"<<ep.y
+            <<",\"z\":"<<ep.z
+            <<",\"vx\":"<<ep.vx
+            <<",\"vy\":"<<ep.vy
+            <<",\"vz\":"<<ep.vz
+            <<",\"roll_deg\":"<<(fg_ok?fg.roll*180.0/M_PI:0.0)
+            <<",\"pitch_deg\":"<<(fg_ok?fg.pitch*180.0/M_PI:0.0)
+            <<",\"yaw_deg\":"<<(fg_ok?fg.yaw*180.0/M_PI:0.0)
+            <<"}";
+          web_live.send(now,js.str());
         }
         pending_return_event=0;
 
