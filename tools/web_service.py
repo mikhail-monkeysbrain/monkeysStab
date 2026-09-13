@@ -369,7 +369,7 @@ def tail_rows(path, max_rows=180):
             header=next(csv.reader([header_line]))
             f.seek(0,os.SEEK_END)
             size=f.tell()
-            back=min(size, 512*1024)
+            back=min(size, 192*1024)
             f.seek(size-back,os.SEEK_SET)
             chunk=f.read().decode("utf-8","replace")
         lines=chunk.splitlines()
@@ -1045,14 +1045,14 @@ async function refresh(){
  try{let t=await api('/api/telemetry');updateHud(t)}catch(e){}
 }
 setInterval(()=>{$('clock').textContent=new Date().toLocaleTimeString('ru-RU')},1000);
-loadConfig();initGL();refresh();refreshMessages();refreshFc();refreshJournal();setInterval(refresh,700);setInterval(refreshMessages,1800);setInterval(refreshFc,1800);setInterval(refreshJournal,3000);window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';if(vm==='light'&&latest)drawLightScene(latest);else if(vm==='advanced'&&window.ThreeAdvanced)window.ThreeAdvanced.resize();else renderScene();if(latest)drawHistory(latest.history||[])});
+loadConfig();initGL();refresh();refreshMessages();refreshFc();refreshJournal();setInterval(refresh,200);setInterval(refreshMessages,1800);setInterval(refreshFc,1800);setInterval(refreshJournal,3000);window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';if(vm==='light'&&latest)drawLightScene(latest);else if(vm==='advanced'&&window.ThreeAdvanced)window.ThreeAdvanced.resize();else renderScene();if(latest)drawHistory(latest.history||[])});
 </script>
 <script>
 (async()=>{
  const st=document.getElementById('advanced3dStatus');
  try{
    if(st){st.style.display='block';st.style.color='#9fb8ca';st.textContent='Загрузка модуля расширенного 3D…';}
-   await import('/assets/advanced_scene.js?rev=8');
+   await import('/assets/advanced_scene.js?rev=9');
  }catch(e){
    console.error('Advanced 3D module failed',e);
    if(st){
