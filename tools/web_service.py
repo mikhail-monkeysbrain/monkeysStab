@@ -528,7 +528,7 @@ def start_runtime():
     return {"ok":True,"pid":pid}
 
 def stop_runtime():
-    global _proc,_log_handle,_active_csv
+    global _proc,_log_handle,_active_csv,_live_latest,_live_last_wall
     with _lock:
         if not running():
             return {"ok":True,"already_stopped":True}
@@ -548,6 +548,9 @@ def stop_runtime():
             except Exception: pass
             _log_handle=None
         _active_csv=None
+        _live_latest=None
+        _live_last_wall=0.0
+        ws_broadcast({"type":"runtime","running":False})
         log_event("INFO","Flight runtime остановлен")
         return {"ok":True}
 
@@ -995,6 +998,8 @@ window.addEventListener('unhandledrejection',e=>{
  }
 });
 let latest=null,fcLatest=null,lastChartPaint=0;
+let telemetryWs=null,wsReconnectTimer=null,wsHistory=[],wsTrail=[],wsT0=null;
+const WS_MAX_POINTS=300;
 let viewMode='iso',viewYaw=.75,viewPitch=.65,viewDist=6.4;
 let drag=false,lastX=0,lastY=0;
 
@@ -1127,13 +1132,17 @@ async function start(){
  let box=$('runtimeError');box.style.display='none';box.textContent='';
  try{
   await api('/api/start',{method:'POST'});
-  setTimeout(refresh,300);
+  setTimeout(refreshRuntimeStatus,300);
  }catch(e){
   box.style.display='block';box.textContent=e.message;alert('Не удалось запустить flight runtime. Причина показана под кнопкой запуска.');
  }
 }
-async function stop(){try{await api('/api/stop',{method:'POST'});setTimeout(refresh,150);}catch(e){alert(e.message)}}
-async function zero(){try{await api('/api/zero',{method:'POST'});if(window.ThreeAdvanced&&latest)window.ThreeAdvanced.zeroHeading(latest.yaw_deg);}catch(e){alert(e.message)}}
+async function stop(){try{await api('/api/stop',{method:'POST'});setTimeout(refreshRuntimeStatus,150);}catch(e){alert(e.message)}}
+async function zero(){try{
+ await api('/api/zero',{method:'POST'});
+ wsHistory=[];wsTrail=[];wsT0=null;
+ if(window.ThreeAdvanced&&latest)window.ThreeAdvanced.zeroHeading(latest.yaw_deg);
+}catch(e){alert(e.message)}}
 async function armFc(){if(!confirm('ARM: разрешить запуск моторов?'))return;try{showFc(await api('/api/fc/arm',{method:'POST'}))}catch(e){alert(e.message)}}
 async function disarmFc(){if(!confirm('DISARM: отключить моторы?'))return;try{showFc(await api('/api/fc/disarm',{method:'POST'}))}catch(e){alert(e.message)}}
 async function setMode(id,name){if(!confirm('Переключить режим на '+name+'?'))return;try{showFc(await api('/api/fc/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:id})}))}catch(e){alert(e.message)}}
@@ -1149,7 +1158,7 @@ function updateHud(t){
    $('footerRuntime').textContent=t.running?'запускается…':'остановлен';
    $('mx').textContent='—';$('my').textContent='—';$('mz').textContent='—';$('mr').textContent='—';$('mq').textContent='—';
    $('frame').textContent='—';$('inl').textContent='—';$('ekf').textContent='—';
-   $('sceneXYZ').textContent=t.running?'Ожидание live CSV текущего запуска…':'Runtime остановлен — live данные отсутствуют';
+   $('sceneXYZ').textContent=t.running?'Ожидание WebSocket телеметрии…':'Runtime остановлен — live данные отсутствуют';
    let box=$('runtimeError');
    if(t.runtime_exit&&t.runtime_exit.log_tail){
      box.style.display='block';
@@ -1251,11 +1260,74 @@ function renderScene(){
 function setView(v,el){viewMode=v;document.querySelectorAll('.viewItem').forEach(x=>x.classList.remove('active'));el.classList.add('active');if(window.visualizationMode==='advanced'&&window.ThreeAdvanced){window.ThreeAdvanced.setView(v)}else renderScene()}
 function resetView(){viewMode='iso';viewYaw=.75;viewPitch=.65;viewDist=6.4;if(window.visualizationMode==='advanced'&&window.ThreeAdvanced){window.ThreeAdvanced.resetView()}else renderScene()}
 
-async function refresh(){
- try{let t=await api('/api/telemetry');updateHud(t)}catch(e){}
+function ingestWsTelemetry(t){
+ if(t.type==='zero'){
+   wsHistory=[];wsTrail=[];wsT0=null;
+   return;
+ }
+ if(t.type==='runtime'){
+   if(!t.running){
+     wsHistory=[];wsTrail=[];wsT0=null;
+     updateHud({available:false,running:false,runtime_exit:null});
+   }
+   return;
+ }
+ if(t.type!=='telemetry')return;
+ const mono=Number(t.mono_ns||0);
+ if(wsT0===null && mono>0)wsT0=mono;
+ const vx=Number(t.vx||0),vy=Number(t.vy||0),vz=Number(t.vz||0);
+ wsHistory.push({
+   t:(mono>0&&wsT0!==null)?(mono-wsT0)/1e9:0,
+   x:Number(t.x_mm||0)/1000,
+   y:Number(t.y_mm||0)/1000,
+   z:Number(t.z_mm||0)/1000,
+   speed:Math.hypot(vx,vy,vz),
+   range:t.range_m==null?null:Number(t.range_m)
+ });
+ wsTrail.push({x_mm:Number(t.x_mm||0),y_mm:Number(t.y_mm||0),z_mm:Number(t.z_mm||0)});
+ if(wsHistory.length>WS_MAX_POINTS)wsHistory.splice(0,wsHistory.length-WS_MAX_POINTS);
+ if(wsTrail.length>WS_MAX_POINTS)wsTrail.splice(0,wsTrail.length-WS_MAX_POINTS);
+ t.history=wsHistory;
+ t.trail=wsTrail;
+ t.available=true;
+ t.running=true;
+ updateHud(t);
+}
+function connectTelemetryWs(){
+ if(telemetryWs && (telemetryWs.readyState===WebSocket.OPEN||telemetryWs.readyState===WebSocket.CONNECTING))return;
+ const proto=location.protocol==='https:'?'wss':'ws';
+ telemetryWs=new WebSocket(proto+'://'+location.host+'/ws/telemetry');
+ telemetryWs.onopen=()=>{
+   const box=$('runtimeError');
+   if(box && box.textContent.startsWith('WebSocket')){box.style.display='none';box.textContent='';}
+ };
+ telemetryWs.onmessage=e=>{
+   try{ingestWsTelemetry(JSON.parse(e.data))}catch(err){console.error('telemetry ws',err)}
+ };
+ telemetryWs.onerror=()=>{};
+ telemetryWs.onclose=()=>{
+   telemetryWs=null;
+   clearTimeout(wsReconnectTimer);
+   wsReconnectTimer=setTimeout(connectTelemetryWs,1000);
+ };
+}
+async function refreshRuntimeStatus(){
+ try{
+   const st=await api('/api/status');
+   $('runState').textContent=st.running?'Работает':'Остановлен';
+   $('footerRuntime').textContent=st.running?'работает':'остановлен';
+   $('footerRuntime').style.color=st.running?'#15d876':'#8aa5b8';
+   if(!st.running){
+     if(!latest || latest.running!==false)updateHud({available:false,running:false,runtime_exit:st.runtime_exit||null});
+   }else if(!latest || !latest.available){
+     $('sceneXYZ').textContent='Ожидание WebSocket телеметрии…';
+   }
+ }catch(e){}
 }
 setInterval(()=>{$('clock').textContent=new Date().toLocaleTimeString('ru-RU')},1000);
-loadConfig();initGL();refresh();refreshMessages();refreshFc();refreshJournal();setInterval(refresh,200);setInterval(refreshMessages,1800);setInterval(refreshFc,1800);setInterval(refreshJournal,3000);window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';if(vm==='light'&&latest)drawLightScene(latest);else if(vm==='advanced'&&window.ThreeAdvanced)window.ThreeAdvanced.resize();else renderScene();if(latest)drawHistory(latest.history||[])});
+loadConfig();initGL();connectTelemetryWs();refreshRuntimeStatus();refreshMessages();refreshFc();refreshJournal();
+setInterval(refreshRuntimeStatus,1000);setInterval(refreshMessages,1800);setInterval(refreshFc,1800);setInterval(refreshJournal,3000);
+window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';if(vm==='light'&&latest)drawLightScene(latest);else if(vm==='advanced'&&window.ThreeAdvanced)window.ThreeAdvanced.resize();else renderScene();if(latest)drawHistory(latest.history||[])});
 </script>
 <script>
 (async()=>{
@@ -1321,7 +1393,7 @@ class H(BaseHTTPRequestHandler):
             elif p=="/api/status":
                 with _lock:
                     age_ms=(time.time()-_live_last_wall)*1000.0 if _live_last_wall else None
-                self.send_json({"running":running(),"pid":_proc.pid if running() else None,"transport":"websocket","live_age_ms":age_ms,"ws_clients":len(_ws_clients)})
+                self.send_json({"running":running(),"pid":_proc.pid if running() else None,"transport":"websocket","live_age_ms":age_ms,"ws_clients":len(_ws_clients),"runtime_exit":runtime_exit_info()})
             elif p=="/api/telemetry":
                 self.send_json(telemetry())
             elif p=="/api/log":
