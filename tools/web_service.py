@@ -32,6 +32,8 @@ DEFAULTS={
 _lock=threading.RLock()
 _proc=None
 _log_handle=None
+_runtime_started_wall=0.0
+_active_csv=None
 _router_proc=None
 _router_log_handle=None
 _router_started_here=False
@@ -308,7 +310,7 @@ def stop_statustext_monitor():
             except Exception:pass
 
 def start_runtime():
-    global _proc,_log_handle
+    global _proc,_log_handle,_runtime_started_wall,_active_csv
     with _lock:
         if running():
             return {"ok":True,"already_running":True,"pid":_proc.pid}
@@ -319,6 +321,8 @@ def start_runtime():
         env=os.environ.copy()
         env["MONKEYS_LOCAL_GUI"]="0"
         env["MONKEYS_FC"]=FC_ENDPOINT
+        _runtime_started_wall=time.time()
+        _active_csv=None
         _proc=subprocess.Popen(
             ["bash",str(ROOT/"scripts"/"run_system.sh")],
             cwd=str(ROOT), env=env,
@@ -329,7 +333,7 @@ def start_runtime():
         return {"ok":True,"pid":_proc.pid}
 
 def stop_runtime():
-    global _proc,_log_handle
+    global _proc,_log_handle,_active_csv
     with _lock:
         if not running():
             return {"ok":True,"already_stopped":True}
@@ -348,14 +352,37 @@ def stop_runtime():
             try: _log_handle.close()
             except Exception: pass
             _log_handle=None
+        _active_csv=None
         log_event("INFO","Flight runtime остановлен")
         return {"ok":True}
 
 def latest_run_csv():
+    global _active_csv
+    if not running():
+        return None
     try:
-        candidates=sorted(RUN_ROOT.glob("*_OPTICAL_FLOW/optical_flow_mavlink.csv"),
-                          key=lambda p:p.stat().st_mtime, reverse=True)
-        return candidates[0] if candidates else None
+        # Never expose an old run as live telemetry.  A valid live CSV must
+        # have been created/updated after the current runtime was started.
+        if _active_csv is not None and _active_csv.exists():
+            try:
+                if _active_csv.stat().st_mtime >= _runtime_started_wall-1.0:
+                    return _active_csv
+            except OSError:
+                pass
+            _active_csv=None
+
+        candidates=[]
+        for p in RUN_ROOT.glob("*_OPTICAL_FLOW/optical_flow_mavlink.csv"):
+            try:
+                if p.stat().st_mtime >= _runtime_started_wall-1.0:
+                    candidates.append(p)
+            except OSError:
+                pass
+        candidates.sort(key=lambda p:p.stat().st_mtime,reverse=True)
+        if candidates:
+            _active_csv=candidates[0]
+            return _active_csv
+        return None
     except Exception:
         return None
 
@@ -395,9 +422,14 @@ def fnum(row,key,default=None):
         return default
 
 def telemetry():
-    rows=tail_rows(latest_run_csv(),180)
+    live=running()
+    path=latest_run_csv()
+    rows=tail_rows(path,180) if path else []
     if not rows:
-        return {"available":False,"running":running(),"trail":[]}
+        return {"available":False,"running":live,"trail":[],"history":[],"source_age_ms":None}
+    source_age_ms=None
+    try: source_age_ms=max(0.0,(time.time()-path.stat().st_mtime)*1000.0)
+    except Exception: pass
     last=rows[-1]
     x=fnum(last,"ekf_x_ned")
     y=fnum(last,"ekf_y_ned")
@@ -434,7 +466,8 @@ def telemetry():
 
     return {
         "available":True,
-        "running":running(),
+        "running":live,
+        "source_age_ms":source_age_ms,
         "frame":int(fnum(last,"frame",0) or 0),
         "valid":int(fnum(last,"valid",0) or 0),
         "quality":int(fnum(last,"quality",0) or 0),
@@ -462,8 +495,9 @@ def set_zero():
     t=telemetry()
     if not t.get("available"):
         raise RuntimeError("Нет телеметрии")
-    rows=tail_rows(latest_run_csv(),2)
-    if not rows: raise RuntimeError("Нет телеметрии")
+    path=latest_run_csv()
+    rows=tail_rows(path,2) if path else []
+    if not rows: raise RuntimeError("Нет live-телеметрии текущего запуска")
     r=rows[-1]
     with _lock:
         _zero["x"]=fnum(r,"ekf_x_ned")
@@ -956,7 +990,16 @@ function showFc(j){
 async function refreshFc(){try{showFc(await api('/api/fc'))}catch(e){$('linkDot').classList.add('baddot');$('linkText').textContent='НЕТ';$('fcDotBig').classList.add('baddot');$('fcState').textContent='НЕТ СВЯЗИ';$('fcMode').textContent='—'}}
 
 function updateHud(t){
- latest=t;window.latest=t;$('runState').textContent=t.running?'Работает':'Остановлен';$('footerRuntime').textContent=t.running?'работает':'остановлен';$('footerRuntime').style.color=t.running?'#15d876':'#8aa5b8';
+ latest=t;window.latest=t;$('runState').textContent=t.running?'Работает':'Остановлен';
+ if(!t.available){
+   $('footerRuntime').textContent=t.running?'запускается…':'остановлен';
+   $('mx').textContent='—';$('my').textContent='—';$('mz').textContent='—';$('mr').textContent='—';$('mq').textContent='—';
+   $('frame').textContent='—';$('inl').textContent='—';$('ekf').textContent='—';
+   $('sceneXYZ').textContent=t.running?'Ожидание live CSV текущего запуска…':'Runtime остановлен — live данные отсутствуют';
+   clearCharts();
+   return;
+ }
+ $('runState').textContent=t.running?'Работает':'Остановлен';$('footerRuntime').textContent=t.running?'работает':'остановлен';$('footerRuntime').style.color=t.running?'#15d876':'#8aa5b8';
  $('mx').textContent=fmt(t.x_mm,0)+' мм';$('my').textContent=fmt(t.y_mm,0)+' мм';$('mz').textContent=fmt(t.z_mm,0)+' мм';$('mr').textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';$('mq').textContent=t.quality??'—';
  $('roll').textContent=fmt(t.roll_deg,1)+'°';$('pitch').textContent=fmt(t.pitch_deg,1)+'°';$('yaw').textContent=fmt(t.yaw_deg,1)+'°';
  $('inl').textContent=(t.inliers??'—')+'/'+(t.tracked??'—');$('frame').textContent=t.frame??'—';$('ekf').textContent=t.ekf_valid?'VALID':'NO DATA';
@@ -967,7 +1010,7 @@ function updateHud(t){
  if($('tmx')){$('tmx').textContent=fmt(t.x_mm,0)+' мм';$('tmy').textContent=fmt(t.y_mm,0)+' мм';$('tmz').textContent=fmt(t.z_mm,0)+' мм';$('tmr').textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';$('tmq').textContent=t.quality??'—';$('troll').textContent=fmt(t.roll_deg,1)+'°';$('tpitch').textContent=fmt(t.pitch_deg,1)+'°';$('tyaw').textContent=fmt(t.yaw_deg,1)+'°';$('tinl').textContent=(t.inliers??'—')+'/'+(t.tracked??'—');$('tekf').textContent=t.ekf_valid?'VALID':'NO DATA'}
  drawCompass(t.yaw_deg||0);
  const now=performance.now();
- if(now-lastChartPaint>1000){drawHistory(t.history||[]);lastChartPaint=now;}
+ if(now-lastChartPaint>500){drawHistory(t.history||[]);lastChartPaint=now;}
  let vm=window.visualizationMode||'simple';if(vm==='light')drawLightScene(t);else if(vm==='advanced')updateAdvancedModel(t);else renderScene()
 }
 
@@ -979,6 +1022,14 @@ function drawCompass(deg){
  for(let d=0;d<360;d+=10){let a=(d-90)*Math.PI/180,r1=R-4,r2=d%30===0?R-13:R-9;ctx.strokeStyle='#557188';ctx.lineWidth=d%30===0?2:1;ctx.beginPath();ctx.moveTo(cx+Math.cos(a)*r1,cy+Math.sin(a)*r1);ctx.lineTo(cx+Math.cos(a)*r2,cy+Math.sin(a)*r2);ctx.stroke()}
  let a=(deg-90)*Math.PI/180;ctx.fillStyle='#1ca8ff';ctx.beginPath();ctx.moveTo(cx+Math.cos(a)*(R-24),cy+Math.sin(a)*(R-24));ctx.lineTo(cx+Math.cos(a+2.55)*20,cy+Math.sin(a+2.55)*20);ctx.lineTo(cx+Math.cos(a-2.55)*20,cy+Math.sin(a-2.55)*20);ctx.closePath();ctx.fill();
  ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(cx,cy,5,0,Math.PI*2);ctx.fill();ctx.font='bold 22px system-ui';ctx.fillText(fmt(deg,0)+'°',cx,cy+42);
+}
+function clearCharts(){
+ ['xyzChart','speedChart','rangeChart','tXyzChart','tSpeedChart','tRangeChart'].forEach(id=>{
+   let c=$(id);if(!c)return;
+   let ctx=c.getContext('2d');
+   let w=c.width=Math.max(2,c.clientWidth*devicePixelRatio),h=c.height=Math.max(2,c.clientHeight*devicePixelRatio);
+   ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,w,h);
+ });
 }
 function chartBase(c,ctx){
  let w=c.width=c.clientWidth*devicePixelRatio,h=c.height=c.clientHeight*devicePixelRatio;ctx.scale(devicePixelRatio,devicePixelRatio);w=c.clientWidth;h=c.clientHeight;
