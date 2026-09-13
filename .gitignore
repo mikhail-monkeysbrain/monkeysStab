@@ -9,3 +9,5 @@ runs/
 .vscode/
 .idea/
 __pycache__/
+third_party/mavlink/
+third_party/.mavlink_tmp/
