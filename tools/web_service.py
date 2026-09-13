@@ -54,6 +54,7 @@ _live_udp_thread=None
 _live_udp_stop=threading.Event()
 _live_udp_rx=0
 _live_udp_bad=0
+_last_rc_zero_seq=None
 LIVE_UDP_PORT=int(os.environ.get("MONKEYS_WEB_TELEMETRY_UDP_PORT","8766"))
 FC_ENDPOINT="tcp://127.0.0.1:5760"
 GEOMETRY_PARAMS=["FLOW_POS_X","FLOW_POS_Y","FLOW_POS_Z","RNGFND1_POS_X","RNGFND1_POS_Y","RNGFND1_POS_Z"]
@@ -147,7 +148,7 @@ def ws_broadcast(obj):
             for sock in dead:_ws_clients.discard(sock)
 
 def live_payload(raw):
-    global _live_latest,_live_last_wall
+    global _live_latest,_live_last_wall,_last_rc_zero_seq
     try:
         x=float(raw.get("x",0.0));y=float(raw.get("y",0.0));z=float(raw.get("z",0.0))
     except Exception:
@@ -160,7 +161,23 @@ def live_payload(raw):
     except Exception:
         raw_n=raw_e=None
 
+    rc_zero_event=False
+    try:
+        rc_seq=int(raw.get("rc_zero_seq",0) or 0)
+    except Exception:
+        rc_seq=0
+
     with _lock:
+        if _last_rc_zero_seq is None:
+            _last_rc_zero_seq=rc_seq
+        elif rc_seq!=_last_rc_zero_seq:
+            _last_rc_zero_seq=rc_seq
+            _zero["x"],_zero["y"],_zero["z"]=x,y,z
+            if raw_n is not None and raw_e is not None:
+                _raw_zero["n"],_raw_zero["e"]=raw_n,raw_e
+            rc_zero_event=True
+            log_event("INFO",f"HOME/0 с пульта: RC6={raw.get('rc6_us',0)} RC8={raw.get('rc8_us',0)} seq={rc_seq}")
+
         if _zero["x"] is None:
             _zero["x"],_zero["y"],_zero["z"]=x,y,z
         zx,zy,zz=_zero["x"],_zero["y"],_zero["z"]
@@ -196,6 +213,10 @@ def live_payload(raw):
         "raw_of_drift_mm":math.hypot(raw_rel_n,raw_rel_e)*1000.0 if raw_rel_n is not None and raw_rel_e is not None else None,
         "raw_of_vn":raw.get("raw_of_vn"),
         "raw_of_ve":raw.get("raw_of_ve"),
+        "rc_zero_event":rc_zero_event,
+        "rc_zero_seq":rc_seq,
+        "rc6_us":raw.get("rc6_us",0),
+        "rc8_us":raw.get("rc8_us",0),
         "vx":raw.get("vx",0.0),"vy":raw.get("vy",0.0),"vz":raw.get("vz",0.0),
         "roll_deg":raw.get("roll_deg",0.0),
         "pitch_deg":raw.get("pitch_deg",0.0),
@@ -525,10 +546,11 @@ def start_runtime():
         env["MONKEYS_LOCAL_GUI"]="0"
         env["MONKEYS_FC"]=FC_ENDPOINT
         env["MONKEYS_WEB_TELEMETRY_UDP_PORT"]=str(LIVE_UDP_PORT)
-        global _live_latest,_live_last_wall
+        global _live_latest,_live_last_wall,_last_rc_zero_seq
         with _lock:
             _live_latest=None
             _live_last_wall=0.0
+            _last_rc_zero_seq=None
             _zero["x"]=_zero["y"]=_zero["z"]=None
             _raw_zero["n"]=_raw_zero["e"]=None
         _runtime_started_wall=time.time()
@@ -1306,6 +1328,9 @@ function ingestWsTelemetry(t){
    return;
  }
  if(t.type!=='telemetry')return;
+ if(t.rc_zero_event){
+   wsHistory=[];wsTrail=[];wsT0=null;
+ }
  const mono=Number(t.mono_ns||0);
  if(wsT0===null && mono>0)wsT0=mono;
  const vx=Number(t.vx||0),vy=Number(t.vy||0),vz=Number(t.vz||0);
