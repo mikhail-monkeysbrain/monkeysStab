@@ -50,7 +50,7 @@ scene.add(axes);
 const homeMat=new THREE.MeshBasicMaterial({color:0x12e96f,side:THREE.DoubleSide});
 const home=new THREE.Mesh(new THREE.RingGeometry(.065,.085,48),homeMat);
 home.rotation.x=-Math.PI/2;
-home.position.y=.003;
+home.position.set(0,0,0);
 scene.add(home);
 
 const trailMat=new THREE.LineBasicMaterial({color:0x1ab7ff});
@@ -61,7 +61,6 @@ scene.add(trailLine);
 const droneRoot=new THREE.Group();
 scene.add(droneRoot);
 let droneModel=null;
-let modelZeroLift=0;
 
 // NED -> Three scene:
 //   N (FC X / North) -> scene +X
@@ -105,10 +104,8 @@ new GLTFLoader().load('/assets/CesiumDrone.glb',gltf=>{
  const scale=targetSpan/span;
  droneModel.scale.setScalar(scale);
 
- // At telemetry Z=0 the aircraft must not be half-buried in the grid.
- // Since the mesh is centered above, lift its reference point by half of
- // the scaled model height so the lowest point is approximately on Y=0.
- modelZeroLift=(size.y*scale)*0.5;
+ // The FC position is the vehicle reference point, not the landing gear.
+ // Keep the centered GLB origin exactly at the telemetry X/Y/Z point.
  droneRoot.add(droneModel);
  set3dStatus('');
 },undefined,e=>{console.error('GLB load failed',e);set3dStatus('Ошибка загрузки GLB: '+(e?.message||e),true)});
@@ -173,7 +170,7 @@ function update(t){
  const e=(Number(t.y_mm)||0)/1000;
  const d=(Number(t.z_mm)||0)/1000;
  currentPos.set(n,-d,e);
- droneRoot.position.set(currentPos.x,currentPos.y+modelZeroLift,currentPos.z);
+ droneRoot.position.copy(currentPos);
 
  const roll=THREE.MathUtils.degToRad(Number(t.roll_deg)||0);
  const pitch=THREE.MathUtils.degToRad(Number(t.pitch_deg)||0);
