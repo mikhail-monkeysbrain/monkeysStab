@@ -356,8 +356,9 @@ button{cursor:pointer}
 .card h3{font-size:15px;margin:0 0 12px}.card h4{font-size:13px;color:#a8bfd0;margin:8px 0}
 .fcstate{font-size:25px;font-weight:800;display:flex;align-items:center;gap:10px}.modeLine{margin:7px 0 10px;color:#a7bfd1}.modeLine b{color:#27aaff}
 .btnrow{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
-.btnrow3{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:9px}
-.btn{border:1px solid #31526a;border-radius:6px;padding:10px 8px;background:#102438;color:#eaf5fc;font-weight:800}
+.btnrow3{display:grid;grid-template-columns:1fr;gap:7px;margin-top:9px}
+.btnrow3 .btn{width:100%;min-width:0;padding:9px 6px;font-size:12px}
+.btn{border:1px solid #31526a;border-radius:6px;padding:10px 8px;background:#102438;color:#eaf5fc;font-weight:800;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .btn:hover{filter:brightness(1.12)}.btn.green{background:#0aad5b;border-color:#0de479}.btn.red{background:#a92431;border-color:#ff4050}.btn.blue{background:#087aca;border-color:#17a9ff}.btn.stop{color:#ff5361;background:#24111a;border-color:#dc3444}
 .field{display:grid;grid-template-columns:1fr 112px;align-items:center;gap:8px;margin:9px 0;color:#9fb7ca;font-size:13px}
 .field input,.field select{width:100%;background:#0b1823;color:#eaf3f9;border:1px solid #26465d;border-radius:5px;padding:7px}
@@ -391,12 +392,12 @@ button{cursor:pointer}
 <div class="topbar">
  <div class="brand"><div class="logo"></div><div><b>monkeysStab</b><small>UAV Control & Visualizer</small></div></div>
  <div class="nav">
-  <button class="active">⌂ ПОЛЁТ</button><button>⚙ НАСТРОЙКИ</button><button>⌁ ТЕЛЕМЕТРИЯ</button><button>▤ ЖУРНАЛ</button><button>⚙ СИСТЕМА</button>
+  <button class="active" onclick="goSection('flight',this)">▲ ПОЛЁТ</button><button onclick="goSection('settings',this)">⚙ НАСТРОЙКИ</button><button onclick="goSection('telemetry',this)">∿ ТЕЛЕМЕТРИЯ</button><button onclick="goSection('journal',this)">▤ ЖУРНАЛ</button><button onclick="goSection('system',this)">⚙ СИСТЕМА</button>
  </div>
  <div class="topStatus"><span><i id="linkDot" class="okdot baddot"></i>СВЯЗЬ: <b id="linkText">НЕТ</b></span><span id="clock">--:--:--</span></div>
 </div>
 
-<div class="main">
+<div class="main" id="flight">
  <div class="col left">
   <div class="card">
    <h3>Полётный контроллер</h3>
@@ -411,7 +412,7 @@ button{cursor:pointer}
    <div id="fcMsg" style="margin-top:8px;color:#7798ae;font-size:11px">Команды подтверждаются FC.</div>
   </div>
 
-  <div class="card">
+  <div class="card" id="settings">
    <h3>Стартовые параметры</h3>
    <div class="field"><span>Focal scale</span><input id="focal" type="number" min=".5" max="2" step=".001"></div>
    <div class="field"><span>ROI x0</span><input id="r0" type="number" step=".01"></div>
@@ -457,11 +458,11 @@ button{cursor:pointer}
    <div class="metric"><span>Flow quality</span><b id="mq">—</b></div>
   </div>
 
-  <div class="bottomCharts">
+  <div class="bottomCharts" id="telemetry">
    <div class="card chartCard"><h3>X / Y / Z (м)</h3><canvas id="xyzChart" class="chart"></canvas></div>
    <div class="card chartCard"><h3>Скорость (м/с)</h3><canvas id="speedChart" class="chart"></canvas></div>
    <div class="card chartCard"><h3>TF-Luna (м)</h3><canvas id="rangeChart" class="chart"></canvas></div>
-   <div class="card logCard">
+   <div class="card logCard" id="journal">
     <div class="logHead"><h3>Журнал</h3><button class="miniBtn" onclick="document.getElementById('log').textContent=''">Очистить окно</button></div>
     <div id="log" class="log"></div>
    </div>
@@ -498,7 +499,7 @@ button{cursor:pointer}
  </div>
 </div>
 
-<div class="footer">
+<div class="footer" id="system">
  <div>● &nbsp; monkeysStab Web UI &nbsp; | &nbsp; Raspberry Pi 5</div>
  <div>MAVLink router: <b id="routerStatus" style="color:#16d979">OK</b> &nbsp; | &nbsp; Mission Planner: UDP 14550 &nbsp; | &nbsp; Runtime: <b id="footerRuntime">остановлен</b></div>
 </div>
@@ -510,6 +511,10 @@ let viewMode='iso',viewYaw=.75,viewPitch=.65,viewDist=6.4;
 let drag=false,lastX=0,lastY=0;
 
 async function api(path,opt){let r=await fetch(path,opt);let j=await r.json();if(!r.ok)throw new Error(j.error||r.statusText);return j}
+function goSection(id,btn){
+ document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));btn.classList.add('active');
+ let el=$(id);if(el)el.scrollIntoView({behavior:'smooth',block:id==='system'?'end':'start'});
+}
 function fmt(v,d=1){return v==null||!Number.isFinite(Number(v))?'—':Number(v).toFixed(d)}
 function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
 function setActiveMode(mode){
