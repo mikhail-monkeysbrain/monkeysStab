@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEVICE="${MONKEYS_FC:-/dev/ttyAMA0}"
+DEVICE="${MONKEYS_FC:-tcp://127.0.0.1:5760}"
 BAUD="${MONKEYS_FC_BAUD:-460800}"
 SYSID="${MONKEYS_FC_SYSID:-1}"
 COMPID="${MONKEYS_FC_COMPID:-1}"
