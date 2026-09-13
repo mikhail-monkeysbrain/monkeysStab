@@ -939,7 +939,7 @@ function showFc(j){
 async function refreshFc(){try{showFc(await api('/api/fc'))}catch(e){$('linkDot').classList.add('baddot');$('linkText').textContent='НЕТ';$('fcDotBig').classList.add('baddot');$('fcState').textContent='НЕТ СВЯЗИ';$('fcMode').textContent='—'}}
 
 function updateHud(t){
- latest=t;$('runState').textContent=t.running?'Работает':'Остановлен';$('footerRuntime').textContent=t.running?'работает':'остановлен';$('footerRuntime').style.color=t.running?'#15d876':'#8aa5b8';
+ latest=t;window.latest=t;$('runState').textContent=t.running?'Работает':'Остановлен';$('footerRuntime').textContent=t.running?'работает':'остановлен';$('footerRuntime').style.color=t.running?'#15d876':'#8aa5b8';
  $('mx').textContent=fmt(t.x_mm,0)+' мм';$('my').textContent=fmt(t.y_mm,0)+' мм';$('mz').textContent=fmt(t.z_mm,0)+' мм';$('mr').textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';$('mq').textContent=t.quality??'—';
  $('roll').textContent=fmt(t.roll_deg,1)+'°';$('pitch').textContent=fmt(t.pitch_deg,1)+'°';$('yaw').textContent=fmt(t.yaw_deg,1)+'°';
  $('inl').textContent=(t.inliers??'—')+'/'+(t.tracked??'—');$('frame').textContent=t.frame??'—';$('ekf').textContent=t.ekf_valid?'VALID':'NO DATA';
@@ -1211,7 +1211,18 @@ function frame(){
  requestAnimationFrame(frame);
 }
 window.ThreeAdvanced={update,setView,resetView,resize,setEnabled};
-resize();updateCamera();frame();
+resize();
+updateCamera();
+
+// The classic dashboard script can finish loading config before this ES module.
+// Synchronize the renderer with the already-selected visualization mode here.
+const initialAdvanced=(window.visualizationMode||'simple')==='advanced';
+setEnabled(initialAdvanced);
+if(initialAdvanced){
+  host.style.display='block';
+  if(window.latest) update(window.latest);
+}
+frame();
 </script>
 </body>
 </html>'''
