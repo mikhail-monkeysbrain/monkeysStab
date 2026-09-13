@@ -4,6 +4,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ASSETS="$ROOT/web_assets"
 mkdir -p "$ASSETS"
 
+# Prefer the selected GTKima low-poly quadcopter if the user has downloaded it.
+bash "$ROOT/scripts/install_gtkima_model.sh" || true
+
 fetch() {
   local url="$1" dst="$2"
   [[ -s "$dst" ]] && return 0
@@ -88,6 +91,14 @@ if [[ "$MODEL_RC" != 0 || "$VIEWER_RC" != 0 || "$THREE_RC" != 0 || "$GLTF_RC" !=
 fi
 
 cat >"$ASSETS/NOTICE.txt" <<'EOF'
+GTKimaQuadcopter.glb
+Model: Low poly QuadCopter Drone
+Author: GTKima
+Source: https://sketchfab.com/3d-models/low-poly-quadcopter-drone-fa0261d9db004dda9d4d3ff9bc985717
+Fab: https://www.fab.com/listings/7e862e56-5134-4f46-8519-a7cb79692074
+License on Sketchfab: CC Attribution
+Used as the preferred flight visualizer model when installed locally.
+
 CesiumDrone.glb
 Source: CesiumGS/cesium, Apps/SampleData/models/CesiumDrone/CesiumDrone.glb
 Repository: https://github.com/CesiumGS/cesium
