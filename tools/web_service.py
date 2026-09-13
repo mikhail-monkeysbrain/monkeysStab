@@ -498,7 +498,6 @@ HTML=r'''<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>monkeysStab — UAV Control & Visualizer</title>
 <script type="module" src="/assets/model-viewer.min.js"></script>
-<script type="importmap">{"imports":{"three":"/assets/three.module.js"}}</script>
 <style>
 *{box-sizing:border-box}
 :root{
@@ -546,6 +545,7 @@ button{cursor:pointer}
  radial-gradient(circle at 50% 15%,#11304a55,#07121c 52%),#07121c}
 #advancedScene{display:none;position:absolute;inset:0;width:100%;height:625px;background:#07121c;z-index:1}
 #advancedScene canvas{display:block;width:100%;height:100%;touch-action:none}
+#advanced3dStatus{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:6;padding:10px 14px;border:1px solid #31516a;border-radius:7px;background:#071522e8;color:#9fb8ca;font-size:13px;pointer-events:none}
 .modelThumb{width:100%;height:100%;background:transparent!important;--poster-color:transparent;pointer-events:none}
 .viewItem{position:relative;overflow:hidden}
 .viewItem span{position:absolute;left:0;right:0;bottom:4px;text-align:center;z-index:3;text-shadow:0 1px 3px #000;background:#07121aaa;padding:2px 0}
@@ -629,7 +629,7 @@ button{cursor:pointer}
   <div class="card sceneCard">
    <div class="sceneTitle">3D — Траектория и ориентация</div>
    <canvas id="glCanvas"></canvas><canvas id="lightCanvas" style="display:none;width:100%;height:625px;background:#07121c"></canvas>
-   <div id="advancedScene"></div>
+   <div id="advancedScene"><div id="advanced3dStatus">Инициализация расширенного 3D…</div></div>
    <div class="sceneControls">
     <label><input id="showTrail" type="checkbox" checked> Траектория</label>
     <label><input id="showGrid" type="checkbox" checked> Сетка</label>
@@ -797,6 +797,20 @@ button{cursor:pointer}
 
 <script>
 const $=id=>document.getElementById(id);
+window.addEventListener('error',e=>{
+ const st=document.getElementById('advanced3dStatus');
+ if(st && (window.visualizationMode||'simple')==='advanced'){
+   st.style.display='block';st.style.color='#ff6672';
+   st.textContent='3D JavaScript error: '+(e.message||'unknown');
+ }
+});
+window.addEventListener('unhandledrejection',e=>{
+ const st=document.getElementById('advanced3dStatus');
+ if(st && (window.visualizationMode||'simple')==='advanced'){
+   st.style.display='block';st.style.color='#ff6672';
+   st.textContent='3D module error: '+String(e.reason||'unknown');
+ }
+});
 let latest=null,fcLatest=null;
 let viewMode='iso',viewYaw=.75,viewPitch=.65,viewDist=6.4;
 let drag=false,lastX=0,lastY=0;
@@ -1028,8 +1042,17 @@ setInterval(()=>{$('clock').textContent=new Date().toLocaleTimeString('ru-RU')},
 loadConfig();initGL();refresh();refreshFc();refreshJournal();setInterval(refresh,700);setInterval(refreshFc,1800);setInterval(refreshJournal,2500);window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';if(vm==='light'&&latest)drawLightScene(latest);else if(vm==='advanced'&&window.ThreeAdvanced)window.ThreeAdvanced.resize();else renderScene();if(latest)drawHistory(latest.history||[])});
 </script>
 <script type="module">
-import * as THREE from 'three';
+import * as THREE from '/assets/three.module.js';
 import {GLTFLoader} from '/assets/GLTFLoader.js';
+
+const statusEl=document.getElementById('advanced3dStatus');
+function set3dStatus(text,bad=false){
+ if(!statusEl)return;
+ statusEl.textContent=text;
+ statusEl.style.display=text?'block':'none';
+ statusEl.style.color=bad?'#ff6672':'#9fb8ca';
+ statusEl.style.borderColor=bad?'#a5323c':'#31516a';
+}
 
 const host=document.getElementById('advancedScene');
 const scene=new THREE.Scene();
@@ -1043,6 +1066,7 @@ renderer.outputColorSpace=THREE.SRGBColorSpace;
 renderer.shadowMap.enabled=true;
 renderer.shadowMap.type=THREE.PCFSoftShadowMap;
 host.appendChild(renderer.domElement);
+set3dStatus('Three.js запущен, загружаю модель…');
 
 scene.add(new THREE.HemisphereLight(0xb9ddff,0x102030,1.65));
 const sun=new THREE.DirectionalLight(0xffffff,2.0);
@@ -1101,6 +1125,7 @@ const bodyFromModel=new THREE.Matrix4().set(
 );
 const qBodyFromModel=new THREE.Quaternion().setFromRotationMatrix(bodyFromModel);
 
+set3dStatus('Загрузка 3D-модели…');
 new GLTFLoader().load('/assets/CesiumDrone.glb',gltf=>{
  droneModel=gltf.scene;
  droneModel.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true}});
@@ -1112,7 +1137,8 @@ new GLTFLoader().load('/assets/CesiumDrone.glb',gltf=>{
  const targetSpan=.48; // physical display span ~48 cm on the metre grid
  droneModel.scale.setScalar(targetSpan/span);
  droneRoot.add(droneModel);
-},undefined,e=>console.error('GLB load failed',e));
+ set3dStatus('');
+},undefined,e=>{console.error('GLB load failed',e);set3dStatus('Ошибка загрузки GLB: '+(e?.message||e),true)});
 
 let enabled=false;
 let az=Math.PI*.25, el=Math.PI*.28, dist=4.8;
