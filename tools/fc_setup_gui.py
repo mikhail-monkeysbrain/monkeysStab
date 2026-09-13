@@ -48,7 +48,7 @@ class App(tk.Tk):
         self.title("monkeysStab — критические параметры FC")
         super().geometry("1040x790")
         super().minsize(980,720)
-        self.device=tk.StringVar(value=os.environ.get("MONKEYS_FC","/dev/ttyAMA0"))
+        self.device=tk.StringVar(value=os.environ.get("MONKEYS_FC","tcp://127.0.0.1:5760"))
         self.baud=tk.StringVar(value=os.environ.get("MONKEYS_FC_BAUD","460800"))
         self.sysid=tk.StringVar(value=os.environ.get("MONKEYS_FC_SYSID","1"))
         self.compid=tk.StringVar(value=os.environ.get("MONKEYS_FC_COMPID","1"))
