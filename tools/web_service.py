@@ -1270,11 +1270,11 @@ class H(BaseHTTPRequestHandler):
                 b=HTML.encode();self.send_response(200);self.send_header("Content-Type","text/html; charset=utf-8");self.send_header("Content-Length",str(len(b)));self.end_headers();self.wfile.write(b)
             elif p.startswith("/assets/"):
                 name=Path(p).name
-                if name not in ("CesiumDrone.glb","model-viewer.min.js","three.module.js","GLTFLoader.js","NOTICE.txt"): raise FileNotFoundError(name)
+                if name not in ("CesiumDrone.glb","model-viewer.min.js","three.module.js","GLTFLoader.js","BufferGeometryUtils.js","NOTICE.txt"): raise FileNotFoundError(name)
                 fp=WEB_ASSETS/name
                 data=fp.read_bytes()
                 ctype="model/gltf-binary" if name.endswith(".glb") else ("text/javascript; charset=utf-8" if name.endswith(".js") else "text/plain; charset=utf-8")
-                self.send_response(200);self.send_header("Content-Type",ctype);self.send_header("Content-Length",str(len(data)));self.end_headers();self.wfile.write(data)
+                self.send_response(200);self.send_header("Content-Type",ctype);self.send_header("Cache-Control","no-store, max-age=0");self.send_header("Content-Length",str(len(data)));self.end_headers();self.wfile.write(data)
             elif p=="/charuco.pdf":
                 fp=WEB_ASSETS/"charuco.pdf"
                 data=fp.read_bytes()
