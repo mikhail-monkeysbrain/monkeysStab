@@ -495,6 +495,12 @@ def start_runtime():
         env=os.environ.copy()
         env["MONKEYS_LOCAL_GUI"]="0"
         env["MONKEYS_FC"]=FC_ENDPOINT
+        env["MONKEYS_WEB_TELEMETRY_UDP_PORT"]=str(LIVE_UDP_PORT)
+        global _live_latest,_live_last_wall
+        with _lock:
+            _live_latest=None
+            _live_last_wall=0.0
+            _zero["x"]=_zero["y"]=_zero["z"]=None
         _runtime_started_wall=time.time()
         _active_csv=None
         _proc=subprocess.Popen(
@@ -612,86 +618,36 @@ def fnum(row,key,default=None):
 
 def telemetry():
     live=running()
-    path=latest_run_csv()
-    rows=tail_rows(path,180) if path else []
-    if not rows:
-        return {"available":False,"running":live,"trail":[],"history":[],"source_age_ms":None,"runtime_exit":runtime_exit_info()}
-    source_age_ms=None
-    try: source_age_ms=max(0.0,(time.time()-path.stat().st_mtime)*1000.0)
-    except Exception: pass
-    last=rows[-1]
-    x=fnum(last,"ekf_x_ned")
-    y=fnum(last,"ekf_y_ned")
-    z=fnum(last,"ekf_z_ned")
     with _lock:
-        zx,zy,zz=_zero["x"],_zero["y"],_zero["z"]
-    if zx is None and x is not None:
-        zx,zy,zz=x,y,z
-    trail=[]
-    if zx is not None:
-        for r in rows:
-            px=fnum(r,"ekf_x_ned"); py=fnum(r,"ekf_y_ned"); pz=fnum(r,"ekf_z_ned")
-            if px is not None and py is not None:
-                trail.append({
-                    "x_mm":(px-zx)*1000.0,
-                    "y_mm":(py-zy)*1000.0,
-                    "z_mm":(pz-zz)*1000.0 if pz is not None and zz is not None else None,
-                })
-    history=[]
-    if rows:
-        t0=fnum(rows[0],"mono_ns",0) or 0
-        for rr in rows:
-            tt=(fnum(rr,"mono_ns",t0)-t0)/1e9 if t0 else 0.0
-            hx=fnum(rr,"ekf_x_ned"); hy=fnum(rr,"ekf_y_ned"); hz=fnum(rr,"ekf_z_ned")
-            hvx=fnum(rr,"ekf_vx_ned",0) or 0; hvy=fnum(rr,"ekf_vy_ned",0) or 0; hvz=fnum(rr,"ekf_vz_ned",0) or 0
-            history.append({
-                "t":tt,
-                "x":(hx-zx) if hx is not None and zx is not None else None,
-                "y":(hy-zy) if hy is not None and zy is not None else None,
-                "z":(hz-zz) if hz is not None and zz is not None else None,
-                "speed":math.sqrt(hvx*hvx+hvy*hvy+hvz*hvz),
-                "range":fnum(rr,"luna_m"),
-            })
-
-    return {
-        "available":True,
-        "running":live,
-        "source_age_ms":source_age_ms,
-        "frame":int(fnum(last,"frame",0) or 0),
-        "valid":int(fnum(last,"valid",0) or 0),
-        "quality":int(fnum(last,"quality",0) or 0),
-        "features":int(fnum(last,"features",0) or 0),
-        "tracked":int(fnum(last,"tracked",0) or 0),
-        "inliers":int(fnum(last,"inliers",0) or 0),
-        "range_m":fnum(last,"luna_m"),
-        "range_age_ms":fnum(last,"luna_age_ms"),
-        "armed":bool(int(fnum(last,"fc_armed",0) or 0)),
-        "ekf_valid":bool(int(fnum(last,"ekf_local_valid",0) or 0)),
-        "x_mm":(x-zx)*1000.0 if x is not None and zx is not None else None,
-        "y_mm":(y-zy)*1000.0 if y is not None and zy is not None else None,
-        "z_mm":(z-zz)*1000.0 if z is not None and zz is not None else None,
-        "vx":fnum(last,"ekf_vx_ned"),
-        "vy":fnum(last,"ekf_vy_ned"),
-        "vz":fnum(last,"ekf_vz_ned"),
-        "roll_deg":math.degrees(fnum(last,"fc_roll",0) or 0),
-        "pitch_deg":math.degrees(fnum(last,"fc_pitch",0) or 0),
-        "yaw_deg":math.degrees(fnum(last,"fc_yaw",0) or 0),
-        "trail":trail,
-        "history":history,
-    }
+        latest=dict(_live_latest) if _live_latest else None
+        age_ms=(time.time()-_live_last_wall)*1000.0 if _live_last_wall else None
+    if not latest:
+        return {
+            "available":False,
+            "running":live,
+            "transport":"websocket",
+            "source_age_ms":age_ms,
+            "runtime_exit":runtime_exit_info(),
+        }
+    latest["running"]=live
+    latest["transport"]="websocket"
+    latest["source_age_ms"]=age_ms
+    return latest
 
 def set_zero():
-    t=telemetry()
-    if not t.get("available"):
-        raise RuntimeError("Нет телеметрии")
-    path=latest_run_csv()
-    rows=tail_rows(path,2) if path else []
-    if not rows: raise RuntimeError("Нет live-телеметрии текущего запуска")
-    r=rows[-1]
+    global _live_latest
     with _lock:
-        _zero["x"]=fnum(r,"ekf_x_ned")
-        _zero["y"]=fnum(r,"ekf_y_ned")
-        _zero["z"]=fnum(r,"ekf_z_ned")
+        if not _live_latest:
+            raise RuntimeError("Нет live-телеметрии WebSocket")
+        cur=dict(_live_latest)
+        zx,zy,zz=_zero["x"],_zero["y"],_zero["z"]
+        raw_x=(zx or 0.0)+float(cur.get("x_mm",0.0))/1000.0
+        raw_y=(zy or 0.0)+float(cur.get("y_mm",0.0))/1000.0
+        raw_z=(zz or 0.0)+float(cur.get("z_mm",0.0))/1000.0
+        _zero["x"],_zero["y"],_zero["z"]=raw_x,raw_y,raw_z
+        cur["x_mm"]=cur["y_mm"]=cur["z_mm"]=0.0
+        _live_latest=cur
+    ws_broadcast({"type":"zero"})
 
 def log_tail(max_lines=120):
     try:
@@ -1336,6 +1292,9 @@ class H(BaseHTTPRequestHandler):
         try:
             if p=="/":
                 b=HTML.encode();self.send_response(200);self.send_header("Content-Type","text/html; charset=utf-8");self.send_header("Content-Length",str(len(b)));self.end_headers();self.wfile.write(b)
+            elif p=="/ws/telemetry":
+                websocket_session(self)
+                return
             elif p.startswith("/assets/"):
                 name=Path(p).name
                 if name not in ("CesiumDrone.glb","model-viewer.min.js","three.module.js","GLTFLoader.js","BufferGeometryUtils.js","advanced_scene.js","NOTICE.txt"): raise FileNotFoundError(name)
@@ -1360,7 +1319,9 @@ class H(BaseHTTPRequestHandler):
             elif p=="/api/config":
                 self.send_json({"runtime":load_config(),"geometry":load_json(GEOMETRY,{}),"fc_profile":load_json(FC_PROFILE,{})})
             elif p=="/api/status":
-                self.send_json({"running":running(),"pid":_proc.pid if running() else None})
+                with _lock:
+                    age_ms=(time.time()-_live_last_wall)*1000.0 if _live_last_wall else None
+                self.send_json({"running":running(),"pid":_proc.pid if running() else None,"transport":"websocket","live_age_ms":age_ms,"ws_clients":len(_ws_clients)})
             elif p=="/api/telemetry":
                 self.send_json(telemetry())
             elif p=="/api/log":
@@ -1432,6 +1393,7 @@ if __name__=="__main__":
     print("="*70,flush=True)
     try:
         ensure_router()
+        start_live_udp_listener()
         start_statustext_monitor()
         log_event("INFO","Web UI запущен")
         print("MAVLink router: ГОТОВ, Mission Planner UDP 14550",flush=True)
@@ -1441,4 +1403,5 @@ if __name__=="__main__":
     finally:
         if running(): stop_runtime()
         stop_statustext_monitor()
+        stop_live_udp_listener()
         stop_router()
