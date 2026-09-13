@@ -966,7 +966,7 @@ int main(int argc,char** argv){
     // Trigger only on a high edge; re-arm after both channels return below 1500 us.
     uint64_t rc_zero_seq=0;
     bool rc_zero_latched=false;
-    uint16_t rc6_last_us=0,rc8_last_us=0;
+    uint16_t rc6_last_us=0,rc8_last_us=0,rc10_last_us=0;
     constexpr uint16_t kRcZeroPressUs=1700;
     constexpr uint16_t kRcZeroReleaseUs=1500;
 
@@ -1331,10 +1331,12 @@ int main(int argc,char** argv){
           if(rc_fresh){
             const uint16_t rc6=rcin.pwm[5];
             const uint16_t rc8=rcin.pwm[7];
+            const uint16_t rc10=rcin.pwm[9];
             rc6_last_us=rc6;
             rc8_last_us=rc8;
-            const bool pressed=(rc6>=kRcZeroPressUs)||(rc8>=kRcZeroPressUs);
-            const bool released=(rc6<=kRcZeroReleaseUs)&&(rc8<=kRcZeroReleaseUs);
+            rc10_last_us=rc10;
+            const bool pressed=(rc6>=kRcZeroPressUs)||(rc8>=kRcZeroPressUs)||(rc10>=kRcZeroPressUs);
+            const bool released=(rc6<=kRcZeroReleaseUs)&&(rc8<=kRcZeroReleaseUs)&&(rc10<=kRcZeroReleaseUs);
             if(pressed && !rc_zero_latched){
               rc_zero_latched=true;
               ++rc_zero_seq;
@@ -1370,7 +1372,7 @@ int main(int argc,char** argv){
                 pending_return_event=1;
               }
 
-              std::cerr<<"RC HOME ZERO: RC6="<<rc6<<" RC8="<<rc8
+              std::cerr<<"RC HOME ZERO: RC6="<<rc6<<" RC8="<<rc8<<" RC10="<<rc10
                        <<" seq="<<rc_zero_seq
                        <<" current position accepted as 0/0/0\n";
             } else if(released){
@@ -1491,6 +1493,7 @@ int main(int argc,char** argv){
             <<",\"rc_zero_seq\":"<<rc_zero_seq
             <<",\"rc6_us\":"<<rc6_last_us
             <<",\"rc8_us\":"<<rc8_last_us
+            <<",\"rc10_us\":"<<rc10_last_us
             <<",\"roll_deg\":"<<jsonNumber(fg_ok?fg.roll*180.0/M_PI:0.0)
             <<",\"pitch_deg\":"<<jsonNumber(fg_ok?fg.pitch*180.0/M_PI:0.0)
             <<",\"yaw_deg\":"<<jsonNumber(fg_ok?fg.yaw*180.0/M_PI:0.0)
