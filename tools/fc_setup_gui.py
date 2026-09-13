@@ -46,8 +46,8 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("monkeysStab — критические параметры FC")
-        self.geometry("1040x790")
-        self.minsize(980,720)
+        super().geometry("1040x790")
+        super().minsize(980,720)
         self.device=tk.StringVar(value=os.environ.get("MONKEYS_FC","/dev/ttyAMA0"))
         self.baud=tk.StringVar(value=os.environ.get("MONKEYS_FC_BAUD","460800"))
         self.sysid=tk.StringVar(value=os.environ.get("MONKEYS_FC_SYSID","1"))
@@ -137,7 +137,7 @@ class App(tk.Tk):
         buttons=ttk.Frame(root); buttons.pack(fill="x",pady=(10,0))
         ttk.Button(buttons,text="ПРОЧИТАТЬ ИЗ FC",command=self.read_fc).pack(side="left",padx=(0,8))
         ttk.Button(buttons,text="ПРИМЕНИТЬ ПРОФИЛЬ",command=self.apply).pack(side="left",padx=(0,8))
-        ttk.Button(buttons,text="ГЕОМЕТРИЯ ДАТЧИКОВ",command=self.geometry).pack(side="left")
+        ttk.Button(buttons,text="ГЕОМЕТРИЯ ДАТЧИКОВ",command=self.open_geometry_gui).pack(side="left")
         ttk.Button(buttons,text="ЗАКРЫТЬ",command=self.destroy).pack(side="right")
         ttk.Label(root,textvariable=self.status,wraplength=990).pack(anchor="w",pady=(8,0))
 
@@ -257,7 +257,7 @@ class App(tk.Tk):
             self.status.set("Ошибка записи.")
             messagebox.showerror("Ошибка записи",str(e))
 
-    def geometry(self):
+    def open_geometry_gui(self):
         subprocess.Popen(["bash",os.path.join(ROOT,"scripts","geometry_gui.sh")])
 
 if __name__=="__main__":
