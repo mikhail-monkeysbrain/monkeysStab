@@ -35,7 +35,7 @@ FIXED={
     "RNGFND1_TYPE":10,         # MAVLink DISTANCE_SENSOR
     "RNGFND1_ORIENT":25,       # вниз
     "RNGFND1_MIN":0.10,
-    "RNGFND1_MAX":8.0,
+    "RNGFND1_MAX":7.0,
     "EK3_SRC1_POSXY":0,        # None
     "EK3_SRC1_VELXY":5,        # OpticalFlow
     "EK3_SRC1_VELZ":0,         # None
@@ -124,7 +124,7 @@ class App(tk.Tk):
             "RNGFND1_TYPE = 10  (MAVLink)",
             "RNGFND1_ORIENT = 25  (вниз)",
             "RNGFND1_MIN = 0.10 м",
-            "RNGFND1_MAX = 8.0 м",
+            "RNGFND1_MAX = 7.0 м",
             "Положение RNGFND1_POS_* задаётся отдельным Geometry GUI.",
         ]):
             ttk.Label(rng,text=t).grid(row=i,column=0,sticky="w",pady=2)
