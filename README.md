@@ -94,6 +94,71 @@ RNGFND1_POS_Z
 
 Утилита также показывает разнос TF-Luna относительно OV9281 по X/Y/Z.
 
+## GUI настройки критических параметров FC
+
+Критические параметры полётного контроллера настраиваются отдельной GUI-утилитой:
+
+```bash
+cd ~/Desktop/monkeysStab
+git pull --ff-only
+bash scripts/fc_setup_gui.sh
+```
+
+Утилита подключается к FC по MAVLink, читает текущие значения, показывает их и позволяет применить согласованный профиль monkeysStab.
+
+Она управляет следующими группами параметров:
+
+- **EKF3**: `AHRS_EKF_TYPE`, `EK3_ENABLE`, `EK3_SRC1_POSXY`, `EK3_SRC1_VELXY`, `EK3_SRC1_POSZ`, `EK3_SRC1_VELZ`, `EK3_SRC1_YAW`, `EK3_SRC_OPTIONS`;
+- **Optical Flow**: `FLOW_TYPE`, `FLOW_OPTIONS`, `FLOW_ORIENT_YAW`, `FLOW_FXSCALER`, `FLOW_FYSCALER`, `EK3_FLOW_DELAY`, `EK3_FLOW_MAX`;
+- **дальномер**: `RNGFND1_TYPE`, `RNGFND1_ORIENT`, `RNGFND1_MIN`, `RNGFND1_MAX`;
+- **компас**: `COMPASS_ENABLE`, `COMPASS_USE`;
+- геометрия `FLOW_POS_*` и `RNGFND1_POS_*` остаётся в отдельном Geometry GUI, который можно открыть кнопкой из этой утилиты.
+
+Для текущей безподвесной системы профиль фиксирует:
+
+```text
+AHRS_EKF_TYPE = 3
+EK3_ENABLE = 1
+
+FLOW_TYPE = 5             # MAVLink
+FLOW_OPTIONS = 0          # камера жёстко закреплена
+FLOW_ORIENT_YAW = 0
+FLOW_FXSCALER = 0
+FLOW_FYSCALER = 0
+EK3_FLOW_DELAY = 0
+
+RNGFND1_TYPE = 10         # MAVLink DISTANCE_SENSOR
+RNGFND1_ORIENT = 25       # вниз
+RNGFND1_MIN = 0.10 m
+RNGFND1_MAX = 8.0 m
+
+EK3_SRC1_POSXY = 0        # None
+EK3_SRC1_VELXY = 5        # OpticalFlow
+EK3_SRC1_VELZ = 0         # None
+EK3_SRC_OPTIONS = 0
+```
+
+В GUI отдельно выбираются:
+
+- источник Z: **RangeFinder** или **Baro**;
+- режим компаса/yaw: **компас используется для yaw**, **компас включён только для диагностики**, либо **компас полностью отключён**.
+
+Если выбран компас как источник курса, утилита согласованно выставляет `COMPASS_ENABLE=1`, `COMPASS_USE=1`, `EK3_SRC1_YAW=1`. Если компас не используется для курса, `EK3_SRC1_YAW=0`.
+
+**`EK3_SRC1_YAW=6` (ExternalNav yaw) в этой утилите намеренно недоступен.** Текущий Optical Flow не имеет независимого источника yaw (курса), поэтому возвращать yaw FC обратно как ExternalNav yaw нельзя.
+
+После нажатия **«ПРИМЕНИТЬ ПРОФИЛЬ»** утилита:
+
+1. показывает все ключевые изменения перед записью;
+2. записывает параметры в FC через MAVLink;
+3. ждёт подтверждение `PARAM_VALUE`;
+4. повторно читает параметры и проверяет их;
+5. сохраняет подтверждённый профиль в `config/fc_profile.json`.
+
+`scripts/run.sh` перед каждым запуском сверяет FC с `config/fc_profile.json`. Если критический параметр отличается, запуск останавливается.
+
+Запись выполнять при **DISARMED (моторы выключены)**. После изменения критических параметров FC нужно перезагрузить.
+
 ## Проверенная конфигурация EKF3
 
 ```text
