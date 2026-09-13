@@ -26,9 +26,13 @@ fetch "https://raw.githubusercontent.com/CesiumGS/cesium/main/Apps/SampleData/mo
 MODEL_RC=$?
 fetch "https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js" "$ASSETS/model-viewer.min.js"
 VIEWER_RC=$?
+fetch "https://unpkg.com/three@0.169.0/build/three.module.js" "$ASSETS/three.module.js"
+THREE_RC=$?
+fetch "https://unpkg.com/three@0.169.0/examples/jsm/loaders/GLTFLoader.js" "$ASSETS/GLTFLoader.js"
+GLTF_RC=$?
 set -e
 
-if [[ "$MODEL_RC" != 0 || "$VIEWER_RC" != 0 ]]; then
+if [[ "$MODEL_RC" != 0 || "$VIEWER_RC" != 0 || "$THREE_RC" != 0 || "$GLTF_RC" != 0 ]]; then
   echo "ПРЕДУПРЕЖДЕНИЕ: расширенные 3D assets не загружены. Simple/Light режимы продолжат работать." >&2
   exit 0
 fi
@@ -41,6 +45,11 @@ The Cesium repository is distributed under the Apache License 2.0.
 
 model-viewer
 Source: https://github.com/google/model-viewer
-Used as the browser GLB/WebGL renderer.
+Used only for the small model preview thumbnails.
+
+three.js / GLTFLoader
+Source: https://github.com/mrdoob/three.js
+Pinned web modules: r169
+Used for the unified advanced 3D flight scene (grid + trajectory + GLB aircraft).
 EOF
 echo "Web assets: ГОТОВО"
