@@ -7,9 +7,34 @@ CAMERA="${MONKEYS_CAMERA:-/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arduca
 LUNA="${MONKEYS_LUNA:-/dev/ttyAMA2}"
 FC="${MONKEYS_FC:-tcp://127.0.0.1:5760}"
 CAMERA_YAML="${MONKEYS_CAMERA_YAML:-$ROOT/config/ov9281_current_mount.yaml}"
-FOCAL_SCALE="${MONKEYS_FOCAL_SCALE:-0.931}"
-FEATURE_ROI="${MONKEYS_FEATURE_ROI:-0.20 0.32 0.80 0.90}"
-MAX_FEATURES="${MONKEYS_MAX_FEATURES:-500}"
+RUNTIME_JSON="${MONKEYS_RUNTIME_JSON:-$ROOT/config/runtime.json}"
+
+CFG_FOCAL_SCALE="0.931"
+CFG_FEATURE_ROI="0.20 0.32 0.80 0.90"
+CFG_MAX_FEATURES="500"
+CFG_LOCAL_GUI="1"
+if [[ -f "$RUNTIME_JSON" ]]; then
+  read -r CFG_FOCAL_SCALE RX0C RY0C RX1C RY1C CFG_MAX_FEATURES CFG_LOCAL_GUI < <(
+    python3 - "$RUNTIME_JSON" <<'PY'
+import json,sys
+with open(sys.argv[1],"r",encoding="utf-8") as f:
+    d=json.load(f)
+roi=d.get("feature_roi",[0.20,0.32,0.80,0.90])
+print(
+    d.get("focal_scale",0.931),
+    roi[0],roi[1],roi[2],roi[3],
+    d.get("max_features",500),
+    1 if d.get("local_gui",True) else 0
+)
+PY
+  )
+  CFG_FEATURE_ROI="$RX0C $RY0C $RX1C $RY1C"
+fi
+
+FOCAL_SCALE="${MONKEYS_FOCAL_SCALE:-$CFG_FOCAL_SCALE}"
+FEATURE_ROI="${MONKEYS_FEATURE_ROI:-$CFG_FEATURE_ROI}"
+MAX_FEATURES="${MONKEYS_MAX_FEATURES:-$CFG_MAX_FEATURES}"
+LOCAL_GUI="${MONKEYS_LOCAL_GUI:-$CFG_LOCAL_GUI}"
 GEOMETRY_JSON="${MONKEYS_GEOMETRY_JSON:-$ROOT/config/mount_geometry.json}"
 [[ -f "$GEOMETRY_JSON" ]] || { echo "ОШИБКА: geometry config не найден: $GEOMETRY_JSON" >&2; exit 2; }
 read -r CFG_CAMERA_Z CFG_RANGE_Z < <(python3 - "$GEOMETRY_JSON" <<'PY'
@@ -90,9 +115,15 @@ Launcher НЕ ARM-ит FC и НЕ переключает режим полёта
 ======================================================================
 EOF
 
-exec "$BIN" "$CAMERA" "$LUNA" "$FC" "$CSV" "$CAMERA_YAML" "$FOCAL_SCALE" \
-  --feature-roi "$RX0" "$RY0" "$RX1" "$RY1" \
-  --max-features "$MAX_FEATURES" \
-  --rotation-gui \
-  --diag-camera-z-m "$CAMERA_Z_M" \
+ARGS=(
+  "$CAMERA" "$LUNA" "$FC" "$CSV" "$CAMERA_YAML" "$FOCAL_SCALE"
+  --feature-roi "$RX0" "$RY0" "$RX1" "$RY1"
+  --max-features "$MAX_FEATURES"
+  --diag-camera-z-m "$CAMERA_Z_M"
   --diag-range-z-m "$RANGE_Z_M"
+)
+if [[ "$LOCAL_GUI" == "1" || "$LOCAL_GUI" == "true" || "$LOCAL_GUI" == "yes" ]]; then
+  ARGS+=(--rotation-gui)
+fi
+
+exec "$BIN" "${ARGS[@]}"
