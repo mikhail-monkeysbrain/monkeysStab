@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
+import base64
 import csv
+import hashlib
 import json
 import math
 import re
+import struct
 import os
 import signal
 import socket
@@ -42,6 +45,13 @@ _statustext_thread=None
 _zero={"x":None,"y":None,"z":None}
 _journal=deque(maxlen=500)
 _messages=deque(maxlen=500)
+_ws_clients=set()
+_ws_lock=threading.RLock()
+_live_latest=None
+_live_last_wall=0.0
+_live_udp_thread=None
+_live_udp_stop=threading.Event()
+LIVE_UDP_PORT=int(os.environ.get("MONKEYS_WEB_TELEMETRY_UDP_PORT","8766"))
 FC_ENDPOINT="tcp://127.0.0.1:5760"
 GEOMETRY_PARAMS=["FLOW_POS_X","FLOW_POS_Y","FLOW_POS_Z","RNGFND1_POS_X","RNGFND1_POS_Y","RNGFND1_POS_Z"]
 
@@ -103,6 +113,162 @@ def runtime_exit_info():
         return None
     tail=log_tail(45)
     return {"returncode":p.returncode,"log_tail":tail}
+
+def _ws_frame_text(text):
+    data=text.encode("utf-8")
+    n=len(data)
+    if n<126:
+        return bytes((0x81,n))+data
+    if n<65536:
+        return bytes((0x81,126))+struct.pack("!H",n)+data
+    return bytes((0x81,127))+struct.pack("!Q",n)+data
+
+def _ws_frame_pong(data=b""):
+    n=len(data)
+    if n<126:
+        return bytes((0x8A,n))+data
+    return bytes((0x8A,126))+struct.pack("!H",n)+data
+
+def ws_broadcast(obj):
+    frame=_ws_frame_text(json.dumps(obj,ensure_ascii=False,separators=(",",":")))
+    dead=[]
+    with _ws_lock:
+        clients=list(_ws_clients)
+    for sock in clients:
+        try:
+            sock.sendall(frame)
+        except Exception:
+            dead.append(sock)
+    if dead:
+        with _ws_lock:
+            for sock in dead:_ws_clients.discard(sock)
+
+def live_payload(raw):
+    global _live_latest,_live_last_wall
+    try:
+        x=float(raw.get("x",0.0));y=float(raw.get("y",0.0));z=float(raw.get("z",0.0))
+    except Exception:
+        x=y=z=0.0
+    with _lock:
+        if _zero["x"] is None:
+            _zero["x"],_zero["y"],_zero["z"]=x,y,z
+        zx,zy,zz=_zero["x"],_zero["y"],_zero["z"]
+    out={
+        "type":"telemetry",
+        "available":True,
+        "running":running(),
+        "mono_ns":int(raw.get("mono_ns",0) or 0),
+        "frame":int(raw.get("frame",0) or 0),
+        "valid":int(raw.get("valid",0) or 0),
+        "quality":int(raw.get("quality",0) or 0),
+        "features":int(raw.get("features",0) or 0),
+        "tracked":int(raw.get("tracked",0) or 0),
+        "inliers":int(raw.get("inliers",0) or 0),
+        "range_m":raw.get("range_m"),
+        "range_age_ms":raw.get("range_age_ms"),
+        "armed":bool(raw.get("armed",False)),
+        "ekf_valid":bool(raw.get("ekf_valid",False)),
+        "x_mm":(x-zx)*1000.0,
+        "y_mm":(y-zy)*1000.0,
+        "z_mm":(z-zz)*1000.0,
+        "vx":raw.get("vx",0.0),"vy":raw.get("vy",0.0),"vz":raw.get("vz",0.0),
+        "roll_deg":raw.get("roll_deg",0.0),
+        "pitch_deg":raw.get("pitch_deg",0.0),
+        "yaw_deg":raw.get("yaw_deg",0.0),
+    }
+    with _lock:
+        _live_latest=out
+        _live_last_wall=time.time()
+    return out
+
+def start_live_udp_listener():
+    global _live_udp_thread
+    if _live_udp_thread and _live_udp_thread.is_alive():
+        return
+    _live_udp_stop.clear()
+    def run():
+        sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+        sock.bind(("127.0.0.1",LIVE_UDP_PORT))
+        sock.settimeout(0.5)
+        log_event("INFO",f"Live telemetry UDP listener: 127.0.0.1:{LIVE_UDP_PORT}")
+        try:
+            while not _live_udp_stop.is_set():
+                try:
+                    data,_=sock.recvfrom(65535)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                try:
+                    raw=json.loads(data.decode("utf-8"))
+                    if raw.get("type")!="telemetry":continue
+                    ws_broadcast(live_payload(raw))
+                except Exception as e:
+                    log_event("WARN","Live telemetry packet error: "+str(e))
+        finally:
+            sock.close()
+    _live_udp_thread=threading.Thread(target=run,daemon=True,name="web-live-udp")
+    _live_udp_thread.start()
+
+def stop_live_udp_listener():
+    _live_udp_stop.set()
+
+def websocket_session(handler):
+    key=handler.headers.get("Sec-WebSocket-Key","")
+    if not key:
+        handler.send_error(400,"Missing Sec-WebSocket-Key")
+        return
+    accept=base64.b64encode(hashlib.sha1(
+        (key+"258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")
+    ).digest()).decode("ascii")
+    handler.send_response(101,"Switching Protocols")
+    handler.send_header("Upgrade","websocket")
+    handler.send_header("Connection","Upgrade")
+    handler.send_header("Sec-WebSocket-Accept",accept)
+    handler.end_headers()
+    sock=handler.connection
+    sock.settimeout(1.0)
+    with _ws_lock:_ws_clients.add(sock)
+    # Send current in-memory sample immediately to a newly connected browser.
+    with _lock: first=dict(_live_latest) if _live_latest else None
+    if first:
+        try:sock.sendall(_ws_frame_text(json.dumps(first,ensure_ascii=False,separators=(",",":"))))
+        except Exception:pass
+    try:
+        while True:
+            try:
+                h=sock.recv(2)
+            except socket.timeout:
+                continue
+            if not h or len(h)<2:break
+            opcode=h[0]&0x0F
+            masked=bool(h[1]&0x80)
+            n=h[1]&0x7F
+            if n==126:
+                b=sock.recv(2)
+                if len(b)!=2:break
+                n=struct.unpack("!H",b)[0]
+            elif n==127:
+                b=sock.recv(8)
+                if len(b)!=8:break
+                n=struct.unpack("!Q",b)[0]
+            mask=sock.recv(4) if masked else b""
+            payload=b""
+            while len(payload)<n:
+                q=sock.recv(min(4096,n-len(payload)))
+                if not q:break
+                payload+=q
+            if masked and len(mask)==4:
+                payload=bytes(v^mask[i%4] for i,v in enumerate(payload))
+            if opcode==0x8:break
+            if opcode==0x9:
+                try:sock.sendall(_ws_frame_pong(payload))
+                except Exception:break
+    except Exception:
+        pass
+    finally:
+        with _ws_lock:_ws_clients.discard(sock)
 
 def log_event(level,text):
     with _lock:
