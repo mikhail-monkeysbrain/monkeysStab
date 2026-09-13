@@ -343,6 +343,46 @@ SPACE в GUI — принять текущую оценку FC за новую �
 
 Q / ESC — завершить программу.
 
+## Mission Planner через Wi-Fi
+
+RPi и Windows PC могут работать в одной Wi-Fi/LAN сети без USB-соединения между PC и FC.
+
+Архитектура:
+
+```text
+MatekH743
+   ↕ /dev/ttyAMA0 @ 460800
+Raspberry Pi 5 / MAVLink router
+   ├── local TCP 127.0.0.1:5760  -> monkeysStab
+   └── UDP 14550 over Wi-Fi      <-> Mission Planner
+```
+
+Критическое правило: физический `/dev/ttyAMA0` должен иметь **одного владельца**. Нельзя одновременно открывать UART из monkeysStab и отдельного telemetry-router: два процесса будут конкурировать за входящие MAVLink-байты.
+
+Для первичной проверки Wi-Fi телеметрии, когда основной `scripts/run.sh` НЕ запущен:
+
+```bash
+cd ~/Desktop/monkeysStab
+git pull --ff-only
+bash scripts/run_mavlink_wifi.sh
+```
+
+Router открывает FC `/dev/ttyAMA0` на 460800, слушает UDP `14550` на всех сетевых интерфейсах и локальный TCP `127.0.0.1:5760`. Первый UDP-пакет от Mission Planner запоминает адрес PC; после этого обмен двусторонний.
+
+Если IP Windows PC известен заранее, можно сразу указать его:
+
+```bash
+MONKEYS_GCS_IP=192.168.1.100 bash scripts/run_mavlink_wifi.sh
+```
+
+где `192.168.1.100` нужно заменить реальным IPv4-адресом PC в той же сети.
+
+В Mission Planner для подключения используется UDP/UDPCl на порту `14550` в зависимости от выбранного способа соединения. Windows Firewall должен разрешать Mission Planner принимать UDP 14550.
+
+Текущая утилита предназначена сначала для **изолированной проверки канала FC ↔ RPi ↔ Wi-Fi ↔ Mission Planner**. До перевода production `scripts/run.sh` на локальный TCP endpoint не запускайте router и основной monkeysStab одновременно.
+
+После подтверждения телеметрии следующий архитектурный шаг — переключить monkeysStab с прямого `/dev/ttyAMA0` на локальный TCP `127.0.0.1:5760`. Тогда router станет единственным владельцем UART, а Mission Planner и monkeysStab смогут работать одновременно.
+
 ## Логи
 
 Каждый запуск создаёт каталог:
