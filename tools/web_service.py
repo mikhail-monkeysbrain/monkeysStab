@@ -1,0 +1,398 @@
+#!/usr/bin/env python3
+import csv
+import json
+import math
+import os
+import signal
+import socket
+import subprocess
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlparse
+
+ROOT=Path(__file__).resolve().parents[1]
+CONFIG=ROOT/"config"/"runtime.json"
+GEOMETRY=ROOT/"config"/"mount_geometry.json"
+FC_PROFILE=ROOT/"config"/"fc_profile.json"
+RUN_ROOT=Path(os.environ.get("MONKEYS_RUN_ROOT", str(Path.home()/"monkeysStab_runs")))
+WEB_LOG=RUN_ROOT/"web_runtime.log"
+DEFAULTS={
+    "focal_scale":0.931,
+    "feature_roi":[0.20,0.32,0.80,0.90],
+    "max_features":500,
+    "local_gui":True,
+}
+
+_lock=threading.RLock()
+_proc=None
+_log_handle=None
+_zero={"x":None,"y":None,"z":None}
+
+def load_json(path, fallback):
+    try:
+        with open(path,"r",encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return fallback
+
+def load_config():
+    d=load_json(CONFIG, dict(DEFAULTS))
+    out=dict(DEFAULTS)
+    out.update({k:v for k,v in d.items() if k in out})
+    return out
+
+def validate_config(d):
+    fs=float(d.get("focal_scale"))
+    if not (0.5 < fs < 2.0):
+        raise ValueError("focal_scale должен быть в диапазоне 0.5..2.0")
+    roi=d.get("feature_roi")
+    if not isinstance(roi,list) or len(roi)!=4:
+        raise ValueError("feature_roi должен содержать 4 числа")
+    roi=[float(x) for x in roi]
+    x0,y0,x1,y1=roi
+    if not (0<=x0<x1<=1 and 0<=y0<y1<=1 and x1-x0>=0.20 and y1-y0>=0.20):
+        raise ValueError("feature_roi: 0..1, ширина/высота не менее 0.20")
+    mf=int(d.get("max_features"))
+    if not (100 <= mf <= 1000):
+        raise ValueError("max_features должен быть 100..1000")
+    return {
+        "focal_scale":fs,
+        "feature_roi":roi,
+        "max_features":mf,
+        "local_gui":bool(d.get("local_gui",True)),
+    }
+
+def save_config(d):
+    d=validate_config(d)
+    tmp=CONFIG.with_suffix(".json.tmp")
+    with open(tmp,"w",encoding="utf-8") as f:
+        json.dump(d,f,ensure_ascii=False,indent=2)
+        f.write("\n")
+    os.replace(tmp,CONFIG)
+    return d
+
+def running():
+    global _proc
+    with _lock:
+        return _proc is not None and _proc.poll() is None
+
+def start_runtime():
+    global _proc,_log_handle
+    with _lock:
+        if running():
+            return {"ok":True,"already_running":True,"pid":_proc.pid}
+        RUN_ROOT.mkdir(parents=True,exist_ok=True)
+        _log_handle=open(WEB_LOG,"a",encoding="utf-8",buffering=1)
+        _log_handle.write("\n===== WEB START %s =====\n"%time.strftime("%Y-%m-%d %H:%M:%S"))
+        env=os.environ.copy()
+        env["MONKEYS_LOCAL_GUI"]="0"
+        _proc=subprocess.Popen(
+            ["bash",str(ROOT/"scripts"/"run_system.sh")],
+            cwd=str(ROOT), env=env,
+            stdout=_log_handle, stderr=subprocess.STDOUT,
+            start_new_session=True, text=True
+        )
+        return {"ok":True,"pid":_proc.pid}
+
+def stop_runtime():
+    global _proc,_log_handle
+    with _lock:
+        if not running():
+            return {"ok":True,"already_stopped":True}
+        pid=_proc.pid
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            _proc.wait(timeout=6)
+        except subprocess.TimeoutExpired:
+            try: os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+            _proc.wait(timeout=2)
+        if _log_handle:
+            try: _log_handle.close()
+            except Exception: pass
+            _log_handle=None
+        return {"ok":True}
+
+def latest_run_csv():
+    try:
+        candidates=sorted(RUN_ROOT.glob("*_OPTICAL_FLOW/optical_flow_mavlink.csv"),
+                          key=lambda p:p.stat().st_mtime, reverse=True)
+        return candidates[0] if candidates else None
+    except Exception:
+        return None
+
+def tail_rows(path, max_rows=180):
+    if not path or not path.exists():
+        return []
+    try:
+        with open(path,"r",encoding="utf-8",errors="replace") as f:
+            header_line=f.readline().strip()
+            if not header_line: return []
+            header=next(csv.reader([header_line]))
+            f.seek(0,os.SEEK_END)
+            size=f.tell()
+            back=min(size, 512*1024)
+            f.seek(size-back)
+            chunk=f.read()
+        lines=chunk.splitlines()
+        if back < size and lines: lines=lines[1:]
+        data=[]
+        for line in lines[-max_rows*2:]:
+            if not line or line.startswith("mono_ns,"): continue
+            try:
+                vals=next(csv.reader([line]))
+                if len(vals)!=len(header): continue
+                data.append(dict(zip(header,vals)))
+            except Exception:
+                pass
+        return data[-max_rows:]
+    except Exception:
+        return []
+
+def fnum(row,key,default=None):
+    try:
+        v=float(row.get(key,""))
+        return v if math.isfinite(v) else default
+    except Exception:
+        return default
+
+def telemetry():
+    rows=tail_rows(latest_run_csv(),180)
+    if not rows:
+        return {"available":False,"running":running(),"trail":[]}
+    last=rows[-1]
+    x=fnum(last,"ekf_x_ned")
+    y=fnum(last,"ekf_y_ned")
+    z=fnum(last,"ekf_z_ned")
+    with _lock:
+        zx,zy,zz=_zero["x"],_zero["y"],_zero["z"]
+    if zx is None and x is not None:
+        zx,zy,zz=x,y,z
+    trail=[]
+    if zx is not None:
+        for r in rows:
+            px=fnum(r,"ekf_x_ned"); py=fnum(r,"ekf_y_ned"); pz=fnum(r,"ekf_z_ned")
+            if px is not None and py is not None:
+                trail.append({
+                    "x_mm":(px-zx)*1000.0,
+                    "y_mm":(py-zy)*1000.0,
+                    "z_mm":(pz-zz)*1000.0 if pz is not None and zz is not None else None,
+                })
+    return {
+        "available":True,
+        "running":running(),
+        "frame":int(fnum(last,"frame",0) or 0),
+        "valid":int(fnum(last,"valid",0) or 0),
+        "quality":int(fnum(last,"quality",0) or 0),
+        "features":int(fnum(last,"features",0) or 0),
+        "tracked":int(fnum(last,"tracked",0) or 0),
+        "inliers":int(fnum(last,"inliers",0) or 0),
+        "range_m":fnum(last,"luna_m"),
+        "range_age_ms":fnum(last,"luna_age_ms"),
+        "armed":bool(int(fnum(last,"fc_armed",0) or 0)),
+        "ekf_valid":bool(int(fnum(last,"ekf_local_valid",0) or 0)),
+        "x_mm":(x-zx)*1000.0 if x is not None and zx is not None else None,
+        "y_mm":(y-zy)*1000.0 if y is not None and zy is not None else None,
+        "z_mm":(z-zz)*1000.0 if z is not None and zz is not None else None,
+        "vx":fnum(last,"ekf_vx_ned"),
+        "vy":fnum(last,"ekf_vy_ned"),
+        "vz":fnum(last,"ekf_vz_ned"),
+        "roll_deg":math.degrees(fnum(last,"fc_roll",0) or 0),
+        "pitch_deg":math.degrees(fnum(last,"fc_pitch",0) or 0),
+        "yaw_deg":math.degrees(fnum(last,"fc_yaw",0) or 0),
+        "trail":trail,
+    }
+
+def set_zero():
+    t=telemetry()
+    if not t.get("available"):
+        raise RuntimeError("Нет телеметрии")
+    rows=tail_rows(latest_run_csv(),2)
+    if not rows: raise RuntimeError("Нет телеметрии")
+    r=rows[-1]
+    with _lock:
+        _zero["x"]=fnum(r,"ekf_x_ned")
+        _zero["y"]=fnum(r,"ekf_y_ned")
+        _zero["z"]=fnum(r,"ekf_z_ned")
+
+def log_tail(max_lines=120):
+    try:
+        with open(WEB_LOG,"r",encoding="utf-8",errors="replace") as f:
+            return "\n".join(f.readlines()[-max_lines:])
+    except Exception:
+        return ""
+
+HTML=r'''<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>monkeysStab</title>
+<style>
+:root{font-family:system-ui,-apple-system,sans-serif;color:#e8edf2;background:#11161b}
+body{margin:0;background:#11161b}.wrap{max-width:1450px;margin:auto;padding:18px}
+h1{margin:0 0 4px;font-size:28px} .sub{color:#9fb0bd;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:390px 1fr;gap:16px}
+.card{background:#192129;border:1px solid #2c3943;border-radius:12px;padding:16px}
+label{display:block;font-size:13px;color:#aebbc5;margin:10px 0 4px}
+input{box-sizing:border-box;width:100%;background:#0f151a;color:#eef4f8;border:1px solid #40515d;border-radius:7px;padding:9px}
+.row{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
+button{border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer;margin:5px 5px 5px 0}
+.primary{background:#4da3ff;color:#06111b}.danger{background:#e05b65;color:white}.soft{background:#34434e;color:#eef4f8}
+.status{display:flex;gap:10px;align-items:center;margin-bottom:12px}.dot{width:12px;height:12px;border-radius:50%;background:#777}.on{background:#45c878}.off{background:#e05b65}
+.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:10px}.metric{background:#10171d;border-radius:8px;padding:10px}.metric b{display:block;font-size:20px}.metric span{color:#8fa1ae;font-size:12px}
+canvas{width:100%;height:560px;background:#0c1115;border-radius:10px}
+pre{height:190px;overflow:auto;background:#0c1115;border-radius:8px;padding:10px;white-space:pre-wrap;font-size:12px}
+.small{font-size:12px;color:#93a5b2}.good{color:#56d88b}.bad{color:#f06b75}
+@media(max-width:900px){.grid{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}canvas{height:420px}}
+</style>
+</head>
+<body><div class="wrap">
+<h1>monkeysStab</h1><div class="sub">Optical Flow + TF-Luna + ArduPilot EKF3</div>
+<div class="grid">
+<div>
+<div class="card">
+<h3>Запуск</h3>
+<div class="status"><span id="dot" class="dot off"></span><b id="runState">Остановлено</b></div>
+<button class="primary" onclick="start()">ЗАПУСТИТЬ ДЛЯ ПОЛЁТА</button>
+<button class="danger" onclick="stop()">ОСТАНОВИТЬ</button>
+<button class="soft" onclick="zero()">НОВАЯ ТОЧКА 0</button>
+<div class="small">Web START не ARM-ит FC и не переключает режим полёта.</div>
+</div>
+<div class="card" style="margin-top:16px">
+<h3>Стартовые параметры</h3>
+<label>focal_scale</label><input id="focal" type="number" min=".5" max="2" step=".001">
+<label>Feature ROI (x0 / y0 / x1 / y1)</label>
+<div class="row"><input id="r0" type="number" step=".01"><input id="r1" type="number" step=".01"><input id="r2" type="number" step=".01"><input id="r3" type="number" step=".01"></div>
+<label>Максимум точек</label><input id="features" type="number" min="100" max="1000" step="10">
+<button class="soft" onclick="saveConfig()">СОХРАНИТЬ</button>
+<div id="saveMsg" class="small"></div>
+</div>
+<div class="card" style="margin-top:16px">
+<h3>Текущая геометрия</h3><pre id="geometry" style="height:120px"></pre>
+<h3>Профиль FC</h3><pre id="profile" style="height:150px"></pre>
+</div>
+</div>
+<div>
+<div class="card">
+<div class="metrics">
+<div class="metric"><span>X</span><b id="mx">—</b></div>
+<div class="metric"><span>Y</span><b id="my">—</b></div>
+<div class="metric"><span>Z</span><b id="mz">—</b></div>
+<div class="metric"><span>TF-Luna</span><b id="mr">—</b></div>
+<div class="metric"><span>Flow quality</span><b id="mq">—</b></div>
+</div>
+<canvas id="plot" width="1000" height="650"></canvas>
+<div class="metrics" style="margin-top:10px">
+<div class="metric"><span>Roll</span><b id="roll">—</b></div>
+<div class="metric"><span>Pitch</span><b id="pitch">—</b></div>
+<div class="metric"><span>Yaw</span><b id="yaw">—</b></div>
+<div class="metric"><span>Inliers</span><b id="inl">—</b></div>
+<div class="metric"><span>FC</span><b id="arm">—</b></div>
+</div>
+</div>
+<div class="card" style="margin-top:16px"><h3>Журнал</h3><pre id="log"></pre></div>
+</div>
+</div>
+</div>
+<script>
+async function api(path,opt){let r=await fetch(path,opt);let j=await r.json();if(!r.ok)throw new Error(j.error||r.statusText);return j}
+function fmt(v,d=0){return v==null?'—':Number(v).toFixed(d)}
+async function loadConfig(){let j=await api('/api/config'); let c=j.runtime;
+focal.value=c.focal_scale; [r0.value,r1.value,r2.value,r3.value]=c.feature_roi; features.value=c.max_features;
+geometry.textContent=JSON.stringify(j.geometry,null,2); profile.textContent=JSON.stringify(j.fc_profile.params,null,2)}
+async function saveConfig(){try{let body={focal_scale:+focal.value,feature_roi:[+r0.value,+r1.value,+r2.value,+r3.value],max_features:+features.value,local_gui:true};
+await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});saveMsg.textContent='Сохранено';}catch(e){saveMsg.textContent='Ошибка: '+e.message}}
+async function start(){try{await api('/api/start',{method:'POST'});}catch(e){alert(e.message)}}
+async function stop(){try{await api('/api/stop',{method:'POST'});}catch(e){alert(e.message)}}
+async function zero(){try{await api('/api/zero',{method:'POST'});}catch(e){alert(e.message)}}
+function draw(t){
+ let c=plot,ctx=c.getContext('2d'),w=c.width,h=c.height;ctx.clearRect(0,0,w,h);
+ ctx.fillStyle='#0c1115';ctx.fillRect(0,0,w,h);
+ const cx=w/2,cy=h/2,scale=Math.min(w,h)/(2*550);
+ ctx.strokeStyle='#26343d';ctx.lineWidth=1;
+ for(let mm=-500;mm<=500;mm+=100){let x=cx+mm*scale,y=cy-mm*scale;ctx.beginPath();ctx.moveTo(x,40);ctx.lineTo(x,h-40);ctx.stroke();ctx.beginPath();ctx.moveTo(40,y);ctx.lineTo(w-40,y);ctx.stroke()}
+ ctx.strokeStyle='#607582';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(cx,35);ctx.lineTo(cx,h-35);ctx.stroke();ctx.beginPath();ctx.moveTo(35,cy);ctx.lineTo(w-35,cy);ctx.stroke();
+ ctx.fillStyle='#9fb0bd';ctx.font='16px system-ui';ctx.fillText('N +X',cx+8,55);ctx.fillText('E +Y',w-85,cy-10);ctx.fillText('фиксированный масштаб ±500 мм',45,h-18);
+ if(t.trail&&t.trail.length){ctx.strokeStyle='#4da3ff';ctx.lineWidth=3;ctx.beginPath();t.trail.forEach((p,i)=>{let x=cx+p.y_mm*scale,y=cy-p.x_mm*scale;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)});ctx.stroke();
+ let p=t.trail[t.trail.length-1],x=cx+p.y_mm*scale,y=cy-p.x_mm*scale;ctx.fillStyle='#56d88b';ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();}
+}
+async function refresh(){try{
+ let t=await api('/api/telemetry'); dot.className='dot '+(t.running?'on':'off');runState.textContent=t.running?'Работает':'Остановлено';
+ mx.textContent=fmt(t.x_mm,0)+' мм';my.textContent=fmt(t.y_mm,0)+' мм';mz.textContent=fmt(t.z_mm,0)+' мм';mr.textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';mq.textContent=t.quality==null?'—':t.quality;
+ roll.textContent=fmt(t.roll_deg,1)+'°';pitch.textContent=fmt(t.pitch_deg,1)+'°';yaw.textContent=fmt(t.yaw_deg,1)+'°';inl.textContent=(t.inliers??'—')+'/'+(t.tracked??'—');arm.textContent=t.armed?'ARMED':'DISARMED';draw(t);
+ let l=await api('/api/log');log.textContent=l.text||'';log.scrollTop=log.scrollHeight;
+ }catch(e){}}
+loadConfig();refresh();setInterval(refresh,700);
+</script></body></html>'''
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        pass
+    def send_json(self,obj,status=200):
+        b=json.dumps(obj,ensure_ascii=False).encode()
+        self.send_response(status);self.send_header("Content-Type","application/json; charset=utf-8")
+        self.send_header("Content-Length",str(len(b)));self.end_headers();self.wfile.write(b)
+    def body_json(self):
+        n=int(self.headers.get("Content-Length","0") or 0)
+        return json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+    def do_GET(self):
+        p=urlparse(self.path).path
+        try:
+            if p=="/":
+                b=HTML.encode();self.send_response(200);self.send_header("Content-Type","text/html; charset=utf-8");self.send_header("Content-Length",str(len(b)));self.end_headers();self.wfile.write(b)
+            elif p=="/api/config":
+                self.send_json({"runtime":load_config(),"geometry":load_json(GEOMETRY,{}),"fc_profile":load_json(FC_PROFILE,{})})
+            elif p=="/api/status":
+                self.send_json({"running":running(),"pid":_proc.pid if running() else None})
+            elif p=="/api/telemetry":
+                self.send_json(telemetry())
+            elif p=="/api/log":
+                self.send_json({"text":log_tail()})
+            else:self.send_json({"error":"not found"},404)
+        except Exception as e:self.send_json({"error":str(e)},500)
+    def do_POST(self):
+        p=urlparse(self.path).path
+        try:
+            if p=="/api/config":
+                if running(): raise RuntimeError("Остановите flight runtime перед изменением стартовых параметров")
+                self.send_json({"ok":True,"runtime":save_config(self.body_json())})
+            elif p=="/api/start": self.send_json(start_runtime())
+            elif p=="/api/stop": self.send_json(stop_runtime())
+            elif p=="/api/zero": set_zero();self.send_json({"ok":True})
+            else:self.send_json({"error":"not found"},404)
+        except Exception as e:self.send_json({"error":str(e)},400)
+
+def ips():
+    out=[]
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(),None,socket.AF_INET):
+            ip=info[4][0]
+            if not ip.startswith("127.") and ip not in out: out.append(ip)
+    except Exception: pass
+    return out
+
+if __name__=="__main__":
+    import argparse
+    ap=argparse.ArgumentParser()
+    ap.add_argument("--host",default="0.0.0.0")
+    ap.add_argument("--port",type=int,default=8080)
+    a=ap.parse_args()
+    RUN_ROOT.mkdir(parents=True,exist_ok=True)
+    print("="*70)
+    print("monkeysStab WEB")
+    print(f"Локально: http://127.0.0.1:{a.port}")
+    for ip in ips(): print(f"С компьютера в той же сети: http://{ip}:{a.port}")
+    print("Web-интерфейс не ARM-ит FC и не переключает режим полёта.")
+    print("="*70,flush=True)
+    try:
+        ThreadingHTTPServer((a.host,a.port),H).serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if running(): stop_runtime()
