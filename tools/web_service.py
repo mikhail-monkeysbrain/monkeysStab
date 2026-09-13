@@ -90,7 +90,7 @@ def validate_config(d):
         "feature_roi":roi,
         "max_features":mf,
         "local_gui":bool(d.get("local_gui",True)),
-        "visualization_mode":str(d.get("visualization_mode","simple")) if str(d.get("visualization_mode","simple")) in ("advanced","simple","light") else "simple",
+        "visualization_mode":str(d.get("visualization_mode","simple")) if str(d.get("visualization_mode","simple")) in ("simple","light") else "simple",
     }
 
 def save_config(d):
@@ -763,9 +763,6 @@ button{cursor:pointer}
 .sceneTitle{position:absolute;left:14px;top:10px;z-index:4;font-weight:800}
 #glCanvas{display:block;width:100%;height:625px;background:
  radial-gradient(circle at 50% 15%,#11304a55,#07121c 52%),#07121c}
-#advancedScene{display:none;position:absolute;inset:0;width:100%;height:625px;background:#07121c;z-index:1}
-#advancedScene canvas{display:block;width:100%;height:100%;touch-action:none}
-#advanced3dStatus{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:6;padding:10px 14px;border:1px solid #31516a;border-radius:7px;background:#071522e8;color:#9fb8ca;font-size:13px;pointer-events:none}
 .modelThumb{position:absolute;inset:10px 18px 18px;pointer-events:none}
 .modelThumb:before,.modelThumb:after{content:"";position:absolute;left:50%;top:50%;width:66px;height:5px;background:#8ba6b8;border-radius:4px;transform-origin:center}
 .modelThumb:before{transform:translate(-50%,-50%) rotate(28deg)}
@@ -854,7 +851,6 @@ button{cursor:pointer}
   <div class="card sceneCard">
    <div class="sceneTitle">3D — Траектория и ориентация</div>
    <canvas id="glCanvas"></canvas><canvas id="lightCanvas" style="display:none;width:100%;height:625px;background:#07121c"></canvas>
-   <div id="advancedScene"><div id="advanced3dStatus">Инициализация расширенного 3D…</div></div>
    <div class="sceneControls">
     <label><input id="showTrail" type="checkbox" checked> Траектория</label>
     <label><input id="showGrid" type="checkbox" checked> Сетка</label>
@@ -1002,7 +998,6 @@ button{cursor:pointer}
   <div class="card">
    <h3>Режим визуализации</h3>
    <div class="systemModes">
-    <div id="vmAdvanced" class="systemMode" onclick="setVisualizationMode('advanced')"><h3>Расширенное 3D</h3><p>WebGL с полноценной 3D-моделью БПЛА. Максимальная визуальная детализация.</p></div>
     <div id="vmSimple" class="systemMode" onclick="setVisualizationMode('simple')"><h3>Упрощённое 3D</h3><p>Текущий лёгкий WebGL-каркас, сетка, траектория и ориентация.</p></div>
     <div id="vmLight" class="systemMode" onclick="setVisualizationMode('light')"><h3>Лёгкое 2D</h3><p>Без 3D. Только XY-график, траектория и числовые показатели.</p></div>
    </div>
@@ -1034,20 +1029,6 @@ button{cursor:pointer}
 
 <script>
 const $=id=>document.getElementById(id);
-window.addEventListener('error',e=>{
- const st=document.getElementById('advanced3dStatus');
- if(st && (window.visualizationMode||'simple')==='advanced'){
-   st.style.display='block';st.style.color='#ff6672';
-   st.textContent='3D JavaScript error: '+(e.message||'unknown');
- }
-});
-window.addEventListener('unhandledrejection',e=>{
- const st=document.getElementById('advanced3dStatus');
- if(st && (window.visualizationMode||'simple')==='advanced'){
-   st.style.display='block';st.style.color='#ff6672';
-   st.textContent='3D module error: '+String(e.reason||'unknown');
- }
-});
 let latest=null,fcLatest=null,lastChartPaint=0;
 let telemetryWs=null,wsReconnectTimer=null,wsHistory=[],wsTrail=[],wsT0=null;
 const WS_MAX_POINTS=300;
@@ -1153,16 +1134,15 @@ async function refreshMessages(){
 }
 function refreshVisualizationMode(){
  let m=window.visualizationMode||'simple';
- ['Advanced','Simple','Light'].forEach(x=>{let e=$('vm'+x);if(e)e.classList.remove('active')});
- let id=m==='advanced'?'vmAdvanced':m==='light'?'vmLight':'vmSimple';if($(id))$(id).classList.add('active');
- if($('glCanvas')&&$('lightCanvas')&&$('advancedScene')){
+ if(m!=='simple'&&m!=='light')m='simple';
+ ['Simple','Light'].forEach(x=>{let e=$('vm'+x);if(e)e.classList.remove('active')});
+ let id=m==='light'?'vmLight':'vmSimple';if($(id))$(id).classList.add('active');
+ if($('glCanvas')&&$('lightCanvas')){
   $('glCanvas').style.display=m==='simple'?'block':'none';
   $('lightCanvas').style.display=m==='light'?'block':'none';
-  $('advancedScene').style.display=m==='advanced'?'block':'none';
-  if(window.ThreeAdvanced) window.ThreeAdvanced.setEnabled(m==='advanced');
  }
- if($('visualModeMsg'))$('visualModeMsg').textContent=m==='advanced'?'Расширенный WebGL: локальная GLB-модель CesiumDrone.':m==='light'?'Лёгкий 2D режим: WebGL отключён.':'Упрощённый WebGL режим.';
- if(latest){if(m==='light')drawLightScene(latest);else if(m==='advanced')updateAdvancedModel(latest);else renderScene()}
+ if($('visualModeMsg'))$('visualModeMsg').textContent=m==='light'?'Лёгкий 2D режим: WebGL отключён.':'Упрощённый WebGL режим.';
+ if(latest){if(m==='light')drawLightScene(latest);else renderScene()}
 }
 async function setVisualizationMode(mode){
  try{let j=await api('/api/system/visualization',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});window.visualizationMode=j.runtime.visualization_mode;refreshVisualizationMode()}
@@ -1174,10 +1154,6 @@ function drawLightScene(t){
  ctx.strokeStyle='#153d58';for(let i=-5;i<=5;i++){let q=i*.2*scale;ctx.beginPath();ctx.moveTo(cx+q,20);ctx.lineTo(cx+q,h-20);ctx.stroke();ctx.beginPath();ctx.moveTo(20,cy+q);ctx.lineTo(w-20,cy+q);ctx.stroke()}
  let tr=t.trail||[];ctx.strokeStyle='#1eaaff';ctx.lineWidth=2;ctx.beginPath();tr.forEach((p,i)=>{let x=cx+(p.y_mm/1000)*scale,y=cy+(p.x_mm/1000)*scale;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y)});ctx.stroke();
  let x=cx+((t.y_mm||0)/1000)*scale,y=cy+((t.x_mm||0)/1000)*scale;ctx.fillStyle='#17d878';ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();ctx.fillStyle='#9fb7c9';ctx.fillText('N ↑   E →',16,22);
-}
-
-function updateAdvancedModel(t){
- if(window.ThreeAdvanced) window.ThreeAdvanced.update(t);
 }
 async function start(){
  let box=$('runtimeError');box.style.display='none';box.textContent='';
@@ -1192,7 +1168,6 @@ async function stop(){try{await api('/api/stop',{method:'POST'});setTimeout(refr
 async function zero(){try{
  await api('/api/zero',{method:'POST'});
  wsHistory=[];wsTrail=[];wsT0=null;
- if(window.ThreeAdvanced&&latest)window.ThreeAdvanced.zeroHeading(latest.yaw_deg);
 }catch(e){alert(e.message)}}
 async function armFc(){if(!confirm('ARM: разрешить запуск моторов?'))return;try{showFc(await api('/api/fc/arm',{method:'POST'}))}catch(e){alert(e.message)}}
 async function disarmFc(){if(!confirm('DISARM: отключить моторы?'))return;try{showFc(await api('/api/fc/disarm',{method:'POST'}))}catch(e){alert(e.message)}}
@@ -1315,8 +1290,8 @@ function renderScene(){
  gl.bindBuffer(gl.ARRAY_BUFFER,bufPos);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(P),gl.DYNAMIC_DRAW);gl.enableVertexAttribArray(locPos);gl.vertexAttribPointer(locPos,3,gl.FLOAT,false,0,0);
  gl.bindBuffer(gl.ARRAY_BUFFER,bufCol);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(C),gl.DYNAMIC_DRAW);gl.enableVertexAttribArray(locCol);gl.vertexAttribPointer(locCol,3,gl.FLOAT,false,0,0);gl.drawArrays(gl.LINES,0,P.length/3);
 }
-function setView(v,el){viewMode=v;document.querySelectorAll('.viewItem').forEach(x=>x.classList.remove('active'));el.classList.add('active');if(window.visualizationMode==='advanced'&&window.ThreeAdvanced){window.ThreeAdvanced.setView(v)}else renderScene()}
-function resetView(){viewMode='iso';viewYaw=.75;viewPitch=.65;viewDist=6.4;if(window.visualizationMode==='advanced'&&window.ThreeAdvanced){window.ThreeAdvanced.resetView()}else renderScene()}
+function setView(v,el){viewMode=v;document.querySelectorAll('.viewItem').forEach(x=>x.classList.remove('active'));el.classList.add('active');renderScene()}
+function resetView(){viewMode='iso';viewYaw=.75;viewPitch=.65;viewDist=6.4;renderScene()}
 
 function ingestWsTelemetry(t){
  if(t.type==='zero'){
@@ -1385,24 +1360,7 @@ async function refreshRuntimeStatus(){
 setInterval(()=>{$('clock').textContent=new Date().toLocaleTimeString('ru-RU')},1000);
 loadConfig();initGL();connectTelemetryWs();refreshRuntimeStatus();refreshMessages();refreshFc();refreshJournal();
 setInterval(refreshRuntimeStatus,1000);setInterval(refreshMessages,1800);setInterval(refreshFc,1800);setInterval(refreshJournal,3000);
-window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';if(vm==='light'&&latest)drawLightScene(latest);else if(vm==='advanced'&&window.ThreeAdvanced)window.ThreeAdvanced.resize();else renderScene();if(latest)drawHistory(latest.history||[])});
-</script>
-<script>
-(async()=>{
- const st=document.getElementById('advanced3dStatus');
- try{
-   if(st){st.style.display='block';st.style.color='#9fb8ca';st.textContent='Загрузка модуля расширенного 3D…';}
-   await import('/assets/advanced_scene.js?rev=11');
- }catch(e){
-   console.error('Advanced 3D module failed',e);
-   if(st){
-     st.style.display='block';
-     st.style.color='#ff6672';
-     st.style.borderColor='#a5323c';
-     st.textContent='3D module error: '+(e && e.message ? e.message : String(e));
-   }
- }
-})();
+window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';if(vm==='light'&&latest)drawLightScene(latest);else renderScene();if(latest)drawHistory(latest.history||[])});
 </script>
 </body>
 </html>'''
@@ -1425,15 +1383,6 @@ class H(BaseHTTPRequestHandler):
             elif p=="/ws/telemetry":
                 websocket_session(self)
                 return
-            elif p.startswith("/assets/"):
-                name=Path(p).name
-                if name not in ("GTKimaQuadcopter.glb","CesiumDrone.glb","model-viewer.min.js","three.module.js","GLTFLoader.js","BufferGeometryUtils.js","advanced_scene.js","NOTICE.txt"): raise FileNotFoundError(name)
-                fp=WEB_ASSETS/name
-                if name=="advanced_scene.js":
-                    fp=ROOT/"web_assets"/"advanced_scene.js"
-                data=fp.read_bytes()
-                ctype="model/gltf-binary" if name.endswith(".glb") else ("text/javascript; charset=utf-8" if name.endswith(".js") else "text/plain; charset=utf-8")
-                self.send_response(200);self.send_header("Content-Type",ctype);self.send_header("Cache-Control","no-store, max-age=0");self.send_header("Content-Length",str(len(data)));self.end_headers();self.wfile.write(data)
             elif p=="/charuco.pdf":
                 fp=WEB_ASSETS/"charuco.pdf"
                 data=fp.read_bytes()
@@ -1493,7 +1442,7 @@ class H(BaseHTTPRequestHandler):
                 self.send_json({"ok":True,"values":set_geometry(self.body_json().get("values",{}))})
             elif p=="/api/system/visualization":
                 mode=str(self.body_json().get("mode","simple"))
-                if mode not in ("advanced","simple","light"): raise ValueError("Недопустимый режим визуализации")
+                if mode not in ("simple","light"): raise ValueError("Разрешены только simple и light")
                 cfg=save_config({"visualization_mode":mode});log_event("INFO","Визуализация -> "+mode)
                 self.send_json({"ok":True,"runtime":cfg})
             else:self.send_json({"error":"not found"},404)
