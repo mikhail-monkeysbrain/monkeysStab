@@ -71,10 +71,15 @@ const sceneFromNed=new THREE.Matrix4().set(
 );
 const qSceneFromNed=new THREE.Quaternion().setFromRotationMatrix(sceneFromNed);
 
-// CesiumDrone is authored Y-up. Treat local +Z as vehicle forward and +X as right.
-// This fixed basis maps model coordinates into body FRD before FC attitude is applied.
+// CesiumDrone/glTF is right-handed and Y-up; its visual forward is -Z.
+// Map model axes to ArduPilot body FRD with a proper rotation (det=+1):
+// model +X (right) -> body +Y (right)
+// model +Y (up)    -> body -Z (up)
+// model -Z (front) -> body +X (forward)
+// The previous +Z->+X mapping had det=-1 (reflection), so the zero-attitude
+// quaternion was invalid and the aircraft appeared on its side.
 const bodyFromModel=new THREE.Matrix4().set(
- 0, 0, 1, 0,
+ 0, 0,-1, 0,
  1, 0, 0, 0,
  0,-1, 0, 0,
  0, 0, 0, 1
