@@ -13,14 +13,17 @@ MAX_FEATURES="${MONKEYS_MAX_FEATURES:-500}"
 CAMERA_Z_M="${MONKEYS_CAMERA_Z_M:-0.050}"
 RANGE_Z_M="${MONKEYS_RANGE_Z_M:-0.055}"
 if [[ -z "${MAVLINK_ROOT:-}" ]]; then
-  for d in /usr/local/include/mavlink/v2.0 /usr/include/mavlink/v2.0; do
+  for d in "$ROOT/third_party/mavlink" /usr/local/include/mavlink/v2.0 /usr/include/mavlink/v2.0; do
     if [[ -f "$d/ardupilotmega/mavlink.h" ]]; then
       MAVLINK_ROOT="$d"
       break
     fi
   done
 fi
-MAVLINK_ROOT="${MAVLINK_ROOT:-/usr/local/include/mavlink/v2.0}"
+if [[ -z "${MAVLINK_ROOT:-}" ]]; then
+  bash "$ROOT/scripts/bootstrap_dependencies.sh"
+  MAVLINK_ROOT="$ROOT/third_party/mavlink"
+fi
 RUN_ROOT="${MONKEYS_RUN_ROOT:-$HOME/monkeysStab_runs}"
 
 bash "$ROOT/scripts/audit_geometry.sh"
@@ -30,7 +33,7 @@ bash "$ROOT/scripts/audit_fc_params.sh"
 [[ -e "$LUNA" ]] || { echo "ОШИБКА: TF-Luna не найден: $LUNA" >&2; exit 2; }
 [[ -e "$FC" ]] || { echo "ОШИБКА: FC не найден: $FC" >&2; exit 2; }
 [[ -f "$CAMERA_YAML" ]] || { echo "ОШИБКА: camera YAML не найден: $CAMERA_YAML" >&2; exit 2; }
-[[ -f "$MAVLINK_ROOT/ardupilotmega/mavlink.h" ]] || { echo "ОШИБКА: MAVLink headers не найдены. Установите их системно или задайте MAVLINK_ROOT." >&2; exit 2; }
+[[ -f "$MAVLINK_ROOT/ardupilotmega/mavlink.h" ]] || { echo "ОШИБКА: MAVLink headers не найдены: $MAVLINK_ROOT" >&2; exit 2; }
 [[ -f "$ROOT/src/optical_flow_mavlink.cpp" ]] || {
   echo "ОШИБКА: отсутствует production source src/optical_flow_mavlink.cpp" >&2
   echo "Репозиторий перенесён не полностью. Не используйте старый jtzero-kimera как скрытую зависимость." >&2
