@@ -9,7 +9,7 @@ monkeysStab MAVLink byte router.
 TCP-клиент monkeysStab получает полный поток FC и может отправлять MAVLink обратно.
 UDP GCS получает телеметрию; любой пакет, пришедший на UDP 14550, передаётся FC.
 """
-import argparse, os, select, socket, termios, time
+import argparse, os, select, socket, termios, time, subprocess
 
 BAUD={460800:termios.B460800,115200:termios.B115200,57600:termios.B57600}
 
@@ -43,11 +43,40 @@ def main():
 
     clients=[]; gcs=set()
     if a.gcs_ip: gcs.add((a.gcs_ip,a.udp_port))
-    print("monkeysStab MAVLink router")
-    print(f"FC:        {a.serial} @ {a.baud}")
-    print(f"monkeysStab TCP: 127.0.0.1:{a.tcp_port}")
-    print(f"Mission Planner UDP: 0.0.0.0:{a.udp_port}")
-    if a.gcs_ip: print(f"GCS preset: {a.gcs_ip}:{a.udp_port}")
+    def local_ipv4_addresses():
+        addrs=[]
+        try:
+            out=subprocess.check_output(["hostname","-I"],text=True,timeout=2)
+            for token in out.split():
+                if token.count(".")==3 and token!="127.0.0.1" and token not in addrs:
+                    addrs.append(token)
+        except Exception:
+            pass
+        return addrs
+
+    ips=local_ipv4_addresses()
+
+    print("======================================================================")
+    print("monkeysStab — MAVLink Wi-Fi router")
+    print("======================================================================")
+    print(f"FC UART:              {a.serial} @ {a.baud}")
+    print(f"monkeysStab local TCP: 127.0.0.1:{a.tcp_port}")
+    print(f"Mission Planner UDP:   port {a.udp_port}")
+    print()
+    if ips:
+        print("ПОДКЛЮЧЕНИЕ MISSION PLANNER:")
+        for ip in ips:
+            print(f"  UDPCl -> {ip}:{a.udp_port}")
+    else:
+        print("ПОДКЛЮЧЕНИЕ MISSION PLANNER:")
+        print(f"  IP RPi не определён автоматически; порт UDP {a.udp_port}")
+    if a.gcs_ip:
+        print()
+        print(f"Предустановленный адрес ПК: {a.gcs_ip}:{a.udp_port}")
+    print()
+    print("В Mission Planner выберите UDPCl, укажите один из IP выше и порт "
+          f"{a.udp_port}.")
+    print("======================================================================")
     print("Ожидание подключений...",flush=True)
 
     try:
