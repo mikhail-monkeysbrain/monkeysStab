@@ -1126,8 +1126,8 @@ function drawLightScene(t){
  let c=$('lightCanvas');if(!c)return;let ctx=c.getContext('2d');let d=devicePixelRatio,w=c.width=c.clientWidth*d,h=c.height=c.clientHeight*d;ctx.scale(d,d);w=c.clientWidth;h=c.clientHeight;
  ctx.fillStyle='#07121c';ctx.fillRect(0,0,w,h);let cx=w/2,cy=h/2,scale=Math.min(w,h)/2.5;
  ctx.strokeStyle='#153d58';for(let i=-5;i<=5;i++){let q=i*.2*scale;ctx.beginPath();ctx.moveTo(cx+q,20);ctx.lineTo(cx+q,h-20);ctx.stroke();ctx.beginPath();ctx.moveTo(20,cy+q);ctx.lineTo(w-20,cy+q);ctx.stroke()}
- let tr=t.trail||[];ctx.strokeStyle='#1eaaff';ctx.lineWidth=2;ctx.beginPath();tr.forEach((p,i)=>{let x=cx+(p.y_mm/1000)*scale,y=cy-(p.x_mm/1000)*scale;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y)});ctx.stroke();
- let x=cx+((t.y_mm||0)/1000)*scale,y=cy-((t.x_mm||0)/1000)*scale;ctx.fillStyle='#17d878';ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();ctx.fillStyle='#9fb7c9';ctx.fillText('N ↑   E →',16,22);
+ let tr=t.trail||[];ctx.strokeStyle='#1eaaff';ctx.lineWidth=2;ctx.beginPath();tr.forEach((p,i)=>{let x=cx+(p.y_mm/1000)*scale,y=cy+(p.x_mm/1000)*scale;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y)});ctx.stroke();
+ let x=cx+((t.y_mm||0)/1000)*scale,y=cy+((t.x_mm||0)/1000)*scale;ctx.fillStyle='#17d878';ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();ctx.fillStyle='#9fb7c9';ctx.fillText('N ↑   E →',16,22);
 }
 
 function updateAdvancedModel(t){
@@ -1249,8 +1249,8 @@ function renderScene(){
  if($('showGrid').checked){for(let i=-10;i<=10;i++){let q=i*.25;addLine(P,C,[-2.5,q,0],[2.5,q,0],[.08,.23,.34]);addLine(P,C,[q,-2.5,0],[q,2.5,0],[.08,.23,.34])}}
  if($('showAxes').checked){addLine(P,C,[0,0,0],[1.15,0,0],[1,.15,.15]);addLine(P,C,[0,0,0],[0,1.15,0],[.1,1,.25]);addLine(P,C,[0,0,0],[0,0,1.15],[.1,.45,1])}
  addCircle(P,C,[0,0,.01],.08,[.1,1,.35]);
- if(latest&&$('showTrail').checked&&(latest.trail||[]).length>1){let tr=latest.trail;for(let i=1;i<tr.length;i++){let a=tr[i-1],b=tr[i];addLine(P,C,[a.x_mm/1000,a.y_mm/1000,-(a.z_mm||0)/1000],[b.x_mm/1000,b.y_mm/1000,-(b.z_mm||0)/1000],[.05,.75,1])}}
- let pos=latest?[(latest.x_mm||0)/1000,(latest.y_mm||0)/1000,-(latest.z_mm||0)/1000]:[0,0,.2],rr=(latest?.roll_deg||0)*Math.PI/180,pp=(latest?.pitch_deg||0)*Math.PI/180,yy=(latest?.yaw_deg||0)*Math.PI/180;
+ if(latest&&$('showTrail').checked&&(latest.trail||[]).length>1){let tr=latest.trail;for(let i=1;i<tr.length;i++){let a=tr[i-1],b=tr[i];addLine(P,C,[-a.x_mm/1000,a.y_mm/1000,-(a.z_mm||0)/1000],[-b.x_mm/1000,b.y_mm/1000,-(b.z_mm||0)/1000],[.05,.75,1])}}
+ let pos=latest?[-(latest.x_mm||0)/1000,(latest.y_mm||0)/1000,-(latest.z_mm||0)/1000]:[0,0,.2],rr=(latest?.roll_deg||0)*Math.PI/180,pp=(latest?.pitch_deg||0)*Math.PI/180,yy=(latest?.yaw_deg||0)*Math.PI/180;
  function wp(v){let q=rotLocal(v,rr,pp,yy);return[q[0]+pos[0],q[1]+pos[1],q[2]+pos[2]]}
  if((window.visualizationMode||'simple')!=='advanced'){
    let arm=.32;addLine(P,C,wp([arm,arm,0]),wp([-arm,-arm,0]),[.7,.78,.84]);addLine(P,C,wp([arm,-arm,0]),wp([-arm,arm,0]),[.7,.78,.84]);
@@ -1339,7 +1339,7 @@ window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';
  const st=document.getElementById('advanced3dStatus');
  try{
    if(st){st.style.display='block';st.style.color='#9fb8ca';st.textContent='Загрузка модуля расширенного 3D…';}
-   await import('/assets/advanced_scene.js?rev=9');
+   await import('/assets/advanced_scene.js?rev=10');
  }catch(e){
    console.error('Advanced 3D module failed',e);
    if(st){
