@@ -1212,7 +1212,7 @@ function updateHud(t){
  drawCompass(t.yaw_deg||0);
  const now=performance.now();
  if(now-lastChartPaint>500){drawHistory(t.history||[]);lastChartPaint=now;}
- let vm=window.visualizationMode||'simple';if(vm==='light')drawLightScene(t);else if(vm==='advanced')updateAdvancedModel(t);else renderScene()
+ let vm=window.visualizationMode||'simple';if(vm==='light')drawLightScene(t);else renderScene()
 }
 
 function drawCompass(deg){
@@ -1280,7 +1280,7 @@ function renderScene(){
  if(latest&&$('showTrail').checked&&(latest.trail||[]).length>1){let tr=latest.trail;for(let i=1;i<tr.length;i++){let a=tr[i-1],b=tr[i];addLine(P,C,[-a.x_mm/1000,a.y_mm/1000,-(a.z_mm||0)/1000],[-b.x_mm/1000,b.y_mm/1000,-(b.z_mm||0)/1000],[.05,.75,1])}}
  let pos=latest?[-(latest.x_mm||0)/1000,(latest.y_mm||0)/1000,-(latest.z_mm||0)/1000]:[0,0,.2],rr=(latest?.roll_deg||0)*Math.PI/180,pp=(latest?.pitch_deg||0)*Math.PI/180,yy=(latest?.yaw_deg||0)*Math.PI/180;
  function wp(v){let q=rotLocal(v,rr,pp,yy);return[q[0]+pos[0],q[1]+pos[1],q[2]+pos[2]]}
- if((window.visualizationMode||'simple')!=='advanced'){
+ {
    let arm=.32;addLine(P,C,wp([arm,arm,0]),wp([-arm,-arm,0]),[.7,.78,.84]);addLine(P,C,wp([arm,-arm,0]),wp([-arm,arm,0]),[.7,.78,.84]);
    [[arm,arm],[-arm,-arm],[arm,-arm],[-arm,arm]].forEach((xy,i)=>{let n=30;for(let k=0;k<n;k++){let a=k/n*Math.PI*2,b=(k+1)/n*Math.PI*2,A=wp([xy[0]+Math.cos(a)*.17,xy[1]+Math.sin(a)*.17,.03]),B=wp([xy[0]+Math.cos(b)*.17,xy[1]+Math.sin(b)*.17,.03]);addLine(P,C,A,B,i<2?[.1,.9,.55]:[.25,.55,1])}});
    let body=[[-.12,-.08,-.05],[.12,-.08,-.05],[.12,.08,-.05],[-.12,.08,-.05],[-.12,-.08,.07],[.12,-.08,.07],[.12,.08,.07],[-.12,.08,.07]],edges=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];edges.forEach(e=>addLine(P,C,wp(body[e[0]]),wp(body[e[1]]),[1,.45,.08]));addLine(P,C,wp([.1,0,.02]),wp([.48,0,.02]),[1,.1,.1]);
