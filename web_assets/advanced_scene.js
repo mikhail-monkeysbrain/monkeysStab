@@ -127,12 +127,25 @@ new GLTFLoader().load('/assets/CesiumDrone.glb',gltf=>{
 },undefined,e=>{console.error('GLB load failed',e);set3dStatus('Ошибка загрузки GLB: '+(e?.message||e),true)});
 
 let enabled=false;
+let renderPending=false;
 let yawZeroDeg=null;
 let az=Math.PI*.25, el=Math.PI*.28, dist=4.8;
 let target=new THREE.Vector3(0,0,0);
 let currentPos=new THREE.Vector3();
 let dragging=false,lastX=0,lastY=0;
 
+function requestRender(){
+ if(!enabled || renderPending)return;
+ renderPending=true;
+ requestAnimationFrame(()=>{
+   renderPending=false;
+   if(!enabled)return;
+   trailLine.visible=document.getElementById('showTrail')?.checked!==false;
+   grid.visible=document.getElementById('showGrid')?.checked!==false;
+   axes.visible=document.getElementById('showAxes')?.checked!==false;
+   renderer.render(scene,camera);
+ });
+}
 function updateCamera(){
  const follow=document.getElementById('followCam')?.checked;
  const t=follow?currentPos:target;
@@ -143,12 +156,14 @@ function updateCamera(){
    t.z + dist*ce*Math.cos(az)
  );
  camera.lookAt(t);
+ requestRender();
 }
 function resize(){
  const w=Math.max(2,host.clientWidth),h=Math.max(2,host.clientHeight);
  renderer.setSize(w,h,false);
  camera.aspect=w/h;
  camera.updateProjectionMatrix();
+ requestRender();
 }
 function setView(v){
  if(v==='top'){az=0;el=Math.PI/2-.02;dist=4.1}
@@ -216,22 +231,16 @@ function update(t){
 }
 function setEnabled(v){
  enabled=!!v;
- resize();
- updateCamera();
-}
-function frame(){
- if(enabled){
-   trailLine.visible=document.getElementById('showTrail')?.checked!==false;
-   grid.visible=document.getElementById('showGrid')?.checked!==false;
-   axes.visible=document.getElementById('showAxes')?.checked!==false;
-   renderer.render(scene,camera);
- }
- requestAnimationFrame(frame);
+ if(enabled){resize();updateCamera();requestRender();}
 }
 function zeroHeading(yawDeg){
  yawZeroDeg=Number.isFinite(Number(yawDeg))?Number(yawDeg):null;
  if(window.latest) update(window.latest);
 }
+['showTrail','showGrid','showAxes','followCam'].forEach(id=>{
+ const el=document.getElementById(id);
+ if(el)el.addEventListener('change',()=>{updateCamera();requestRender();});
+});
 window.ThreeAdvanced={update,setView,resetView,resize,setEnabled,zeroHeading};
 resize();
 updateCamera();
@@ -244,4 +253,3 @@ if(initialAdvanced){
   host.style.display='block';
   if(window.latest) update(window.latest);
 }
-frame();
