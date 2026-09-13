@@ -942,7 +942,7 @@ function updateAdvancedModel(t){
 }
 async function start(){try{await api('/api/start',{method:'POST'});}catch(e){alert(e.message)}}
 async function stop(){try{await api('/api/stop',{method:'POST'});}catch(e){alert(e.message)}}
-async function zero(){try{await api('/api/zero',{method:'POST'});}catch(e){alert(e.message)}}
+async function zero(){try{await api('/api/zero',{method:'POST'});if(window.ThreeAdvanced&&latest)window.ThreeAdvanced.zeroHeading(latest.yaw_deg);}catch(e){alert(e.message)}}
 async function armFc(){if(!confirm('ARM: разрешить запуск моторов?'))return;try{showFc(await api('/api/fc/arm',{method:'POST'}))}catch(e){alert(e.message)}}
 async function disarmFc(){if(!confirm('DISARM: отключить моторы?'))return;try{showFc(await api('/api/fc/disarm',{method:'POST'}))}catch(e){alert(e.message)}}
 async function setMode(id,name){if(!confirm('Переключить режим на '+name+'?'))return;try{showFc(await api('/api/fc/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:id})}))}catch(e){alert(e.message)}}
@@ -1046,7 +1046,7 @@ loadConfig();initGL();refresh();refreshFc();refreshJournal();setInterval(refresh
  const st=document.getElementById('advanced3dStatus');
  try{
    if(st){st.style.display='block';st.style.color='#9fb8ca';st.textContent='Загрузка модуля расширенного 3D…';}
-   await import('/assets/advanced_scene.js?rev=6');
+   await import('/assets/advanced_scene.js?rev=7');
  }catch(e){
    console.error('Advanced 3D module failed',e);
    if(st){
