@@ -769,6 +769,21 @@ button{cursor:pointer}
    </div>
    <div id="visualModeMsg" style="margin-top:12px;color:#86a7bf"></div>
   </div>
+  <div class="card" style="margin-top:12px">
+   <h3>ChArUco для калибровки камеры</h3>
+   <div class="kv">
+    <span>Доска</span><span>5 x 7 квадратов</span>
+    <span>Размер квадрата</span><span>30.0 мм</span>
+    <span>Размер маркера</span><span>22.0 мм</span>
+    <span>Словарь</span><span>DICT_4X4_50</span>
+    <span>Формат</span><span>A4 PDF</span>
+   </div>
+   <p style="color:#8da9bd;font-size:13px">Печатать строго 100% / Actual size, без Fit to page. После печати проверьте контрольный отрезок 100 мм.</p>
+   <div class="actionBar">
+    <button class="btn blue" onclick="window.open('/charuco.pdf','_blank')">ОТКРЫТЬ CHARUCO.PDF</button>
+    <a class="btn green" href="/charuco.pdf?download=1" download="charuco.pdf" style="text-decoration:none;display:inline-block">СКАЧАТЬ CHARUCO.PDF</a>
+   </div>
+  </div>
   <div class="card" style="margin-top:12px"><h3>Сеть</h3><div class="kv"><span>MAVLink router</span><span>TCP 127.0.0.1:5760</span><span>Mission Planner</span><span>UDP 14550</span><span>Web UI</span><span>TCP 8080</span></div></div>
  </div>
 </section>
@@ -1055,6 +1070,18 @@ class H(BaseHTTPRequestHandler):
                 data=fp.read_bytes()
                 ctype="model/gltf-binary" if name.endswith(".glb") else ("text/javascript; charset=utf-8" if name.endswith(".js") else "text/plain; charset=utf-8")
                 self.send_response(200);self.send_header("Content-Type",ctype);self.send_header("Content-Length",str(len(data)));self.end_headers();self.wfile.write(data)
+            elif p=="/charuco.pdf":
+                fp=WEB_ASSETS/"charuco.pdf"
+                data=fp.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type","application/pdf")
+                if "download=1" in self.path:
+                    self.send_header("Content-Disposition",'attachment; filename="charuco.pdf"')
+                else:
+                    self.send_header("Content-Disposition",'inline; filename="charuco.pdf"')
+                self.send_header("Cache-Control","no-cache")
+                self.send_header("Content-Length",str(len(data)))
+                self.end_headers();self.wfile.write(data)
             elif p=="/api/config":
                 self.send_json({"runtime":load_config(),"geometry":load_json(GEOMETRY,{}),"fc_profile":load_json(FC_PROFILE,{})})
             elif p=="/api/status":
