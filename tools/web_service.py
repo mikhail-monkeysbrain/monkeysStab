@@ -54,6 +54,8 @@ _live_udp_thread=None
 _live_udp_stop=threading.Event()
 _live_udp_rx=0
 _live_udp_bad=0
+_camera_jpeg=None
+_camera_last_wall=0.0
 _last_rc_zero_seq=None
 LIVE_UDP_PORT=int(os.environ.get("MONKEYS_WEB_TELEMETRY_UDP_PORT","8766"))
 FC_ENDPOINT="tcp://127.0.0.1:5760"
@@ -252,7 +254,7 @@ def start_live_udp_listener():
         return
     _live_udp_stop.clear()
     def run():
-        global _live_udp_rx,_live_udp_bad
+        global _live_udp_rx,_live_udp_bad,_camera_jpeg,_camera_last_wall
         sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
         sock.bind(("127.0.0.1",LIVE_UDP_PORT))
@@ -267,6 +269,13 @@ def start_live_udp_listener():
                 except OSError:
                     break
                 try:
+                    if data.startswith(b"MJPG"):
+                        jpg=data[4:]
+                        if jpg:
+                            with _lock:
+                                _camera_jpeg=bytes(jpg)
+                                _camera_last_wall=time.time()
+                        continue
                     raw=json.loads(data.decode("utf-8"))
                     if raw.get("type")!="telemetry":continue
                     _live_udp_rx+=1
@@ -802,6 +811,13 @@ button{cursor:pointer}
 .kv{display:grid;grid-template-columns:1fr auto;gap:5px 9px;font-size:12px}.kv span:nth-child(odd){color:#86a7bf}.kv span:nth-child(even){color:#dfeaf2}
 .sceneCard{padding:0;overflow:hidden;position:relative;min-height:625px}
 .sceneTitle{position:absolute;left:14px;top:10px;z-index:4;font-weight:800}
+.voPreviewCard{padding:0;overflow:hidden}
+.voPreviewHead{display:flex;align-items:center;justify-content:space-between;padding:10px 13px;border-bottom:1px solid var(--line2)}
+.voPreviewHead h3{margin:0}.voPreviewHead span{font-size:11px;color:var(--muted)}
+.voPreviewWrap{position:relative;background:#02070b;aspect-ratio:4/3;max-height:360px;display:flex;align-items:center;justify-content:center}
+#voPreview{display:block;width:100%;height:100%;object-fit:contain}
+.voPreviewLegend{position:absolute;left:9px;bottom:8px;padding:4px 7px;border-radius:4px;background:#07121acc;font-size:11px;color:#cfe2ef}
+.voPreviewLegend b{color:#31ef79}
 #glCanvas{display:block;width:100%;height:625px;background:
  radial-gradient(circle at 50% 15%,#11304a55,#07121c 52%),#07121c}
 .modelThumb{position:absolute;inset:10px 18px 18px;pointer-events:none}
@@ -900,6 +916,14 @@ button{cursor:pointer}
    </div>
    <div class="sceneLegend"><button class="miniBtn" onclick="zero()">⟳ HOME = текущая точка</button><button class="miniBtn" onclick="resetView()">⌂ Сброс вида</button></div>
    <div class="telemetryStrip"><span id="sceneXYZ">X 0.000 · Y 0.000 · Z 0.000 m</span></div>
+  </div>
+
+  <div class="card voPreviewCard">
+   <div class="voPreviewHead"><h3>VO — камера / точки захвата</h3><span id="voPreviewState">нет кадра</span></div>
+   <div class="voPreviewWrap">
+    <img id="voPreview" alt="OV9281 VO preview">
+    <div class="voPreviewLegend"><b>●</b> RANSAC inliers · жёлтая рамка = feature ROI</div>
+   </div>
   </div>
 
   <div class="metrics">
@@ -1402,8 +1426,24 @@ async function refreshRuntimeStatus(){
  }catch(e){}
 }
 setInterval(()=>{$('clock').textContent=new Date().toLocaleTimeString('ru-RU')},1000);
-loadConfig();initGL();connectTelemetryWs();refreshRuntimeStatus();refreshMessages();refreshFc();refreshJournal();
-setInterval(refreshRuntimeStatus,1000);setInterval(refreshMessages,1800);setInterval(refreshFc,1800);setInterval(refreshJournal,3000);
+let voPreviewBusy=false;
+async function refreshVoPreview(){
+ if(voPreviewBusy)return;
+ const img=$('voPreview'),st=$('voPreviewState');
+ if(!img||!st)return;
+ voPreviewBusy=true;
+ try{
+  const r=await fetch('/api/camera.jpg?t='+Date.now(),{cache:'no-store'});
+  if(!r.ok){st.textContent='нет кадра';return}
+  const blob=await r.blob();
+  const url=URL.createObjectURL(blob),old=img.dataset.url;
+  img.onload=()=>{if(old)URL.revokeObjectURL(old);st.textContent='LIVE'};
+  img.src=url;img.dataset.url=url;
+ }catch(e){st.textContent='нет кадра'}
+ finally{voPreviewBusy=false}
+}
+loadConfig();initGL();connectTelemetryWs();refreshRuntimeStatus();refreshMessages();refreshFc();refreshJournal();refreshVoPreview();
+setInterval(refreshRuntimeStatus,1000);setInterval(refreshMessages,1800);setInterval(refreshFc,1800);setInterval(refreshJournal,3000);setInterval(refreshVoPreview,200);
 window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';if(vm==='light'&&latest)drawLightScene(latest);else renderScene();if(latest)drawHistory(latest.history||[])});
 </script>
 </body>
@@ -1414,8 +1454,11 @@ class H(BaseHTTPRequestHandler):
         pass
     def send_json(self,obj,status=200):
         b=json.dumps(obj,ensure_ascii=False).encode()
-        self.send_response(status);self.send_header("Content-Type","application/json; charset=utf-8")
-        self.send_header("Content-Length",str(len(b)));self.end_headers();self.wfile.write(b)
+        try:
+            self.send_response(status);self.send_header("Content-Type","application/json; charset=utf-8")
+            self.send_header("Content-Length",str(len(b)));self.end_headers();self.wfile.write(b)
+        except (BrokenPipeError,ConnectionResetError):
+            return
     def body_json(self):
         n=int(self.headers.get("Content-Length","0") or 0)
         return json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
@@ -1439,6 +1482,18 @@ class H(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control","no-cache")
                 self.send_header("Content-Length",str(len(data)))
                 self.end_headers();self.wfile.write(data)
+            elif p=="/api/camera.jpg":
+                with _lock:
+                    data=bytes(_camera_jpeg) if _camera_jpeg else None
+                    age_ms=(time.time()-_camera_last_wall)*1000.0 if _camera_last_wall else None
+                if not data or age_ms is None or age_ms>2000:
+                    self.send_error(503,"camera preview unavailable")
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type","image/jpeg")
+                    self.send_header("Cache-Control","no-store, no-cache, must-revalidate")
+                    self.send_header("Content-Length",str(len(data)))
+                    self.end_headers();self.wfile.write(data)
             elif p=="/api/config":
                 self.send_json({"runtime":load_config(),"geometry":load_json(GEOMETRY,{}),"fc_profile":load_json(FC_PROFILE,{})})
             elif p=="/api/status":
