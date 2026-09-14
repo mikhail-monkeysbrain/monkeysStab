@@ -98,8 +98,13 @@ struct LiveWebTelemetryUdp {
   int64_t period_ns=50000000LL; // 20 Hz max
   int64_t last_preview_ns=0;
   int64_t preview_period_ns=166666667LL; // <=6 Hz diagnostic web preview
+  std::string preview_path;
 
   LiveWebTelemetryUdp(){
+    if(const char* p=std::getenv("MONKEYS_WEB_PREVIEW_PATH"); p && *p){
+      preview_path=p;
+      std::cerr<<"WEB CAMERA PREVIEW: "<<preview_path<<" @ <=6 Hz\n";
+    }
     const char* e=std::getenv("MONKEYS_WEB_TELEMETRY_UDP_PORT");
     if(!e || !*e) return;
     const int port=std::atoi(e);
@@ -125,7 +130,7 @@ struct LiveWebTelemetryUdp {
   void sendPreview(int64_t now,const cv::Mat& gray,
                    const std::vector<cv::Point2f>& inliers,
                    const FeatureRoi& roi){
-    if(fd<0 || gray.empty()) return;
+    if((fd<0 && preview_path.empty()) || gray.empty()) return;
     if(last_preview_ns && now-last_preview_ns<preview_period_ns) return;
     constexpr int out_w=320;
     const int out_h=std::max(1,(int)std::lround((double)gray.rows*out_w/std::max(1,gray.cols)));
@@ -144,13 +149,31 @@ struct LiveWebTelemetryUdp {
       cv::Scalar(0,220,255),1,cv::LINE_AA);
     std::vector<uchar> jpg;
     const std::vector<int> params{cv::IMWRITE_JPEG_QUALITY,65};
-    if(!cv::imencode(".jpg",bgr,jpg,params) || jpg.size()>60000) return;
-    std::vector<uint8_t> packet;
-    packet.reserve(jpg.size()+4);
-    packet.insert(packet.end(),{'M','J','P','G'});
-    packet.insert(packet.end(),jpg.begin(),jpg.end());
-    (void)::sendto(fd,packet.data(),packet.size(),MSG_DONTWAIT,
-                   reinterpret_cast<const sockaddr*>(&dst),sizeof(dst));
+    if(!cv::imencode(".jpg",bgr,jpg,params)) return;
+
+    // Primary preview transport: an atomic RAM-file snapshot.  This avoids
+    // UDP datagram size/bind failures while keeping the existing telemetry
+    // socket completely independent. /dev/shm is supplied by web_service.py.
+    if(!preview_path.empty()){
+      const std::string tmp=preview_path+".tmp";
+      {
+        std::ofstream out(tmp,std::ios::binary|std::ios::trunc);
+        if(out.good()) out.write(reinterpret_cast<const char*>(jpg.data()),
+                                static_cast<std::streamsize>(jpg.size()));
+      }
+      (void)::rename(tmp.c_str(),preview_path.c_str());
+    }
+
+    // Keep UDP preview as a best-effort compatibility path when it fits in one
+    // datagram. The web UI no longer depends on this path.
+    if(fd>=0 && jpg.size()<=60000){
+      std::vector<uint8_t> packet;
+      packet.reserve(jpg.size()+4);
+      packet.insert(packet.end(),{'M','J','P','G'});
+      packet.insert(packet.end(),jpg.begin(),jpg.end());
+      (void)::sendto(fd,packet.data(),packet.size(),MSG_DONTWAIT,
+                     reinterpret_cast<const sockaddr*>(&dst),sizeof(dst));
+    }
     last_preview_ns=now;
   }
 };
