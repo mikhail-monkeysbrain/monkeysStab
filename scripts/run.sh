@@ -94,7 +94,7 @@ fi
 }
 
 STAMP="$(date +%Y%m%d_%H%M%S)"
-RUN_DIR="$RUN_ROOT/${STAMP}_OPTICAL_FLOW"
+RUN_DIR="${MONKEYS_RUN_DIR:-$RUN_ROOT/${STAMP}_OPTICAL_FLOW}"
 mkdir -p "$RUN_DIR"
 BIN="$RUN_DIR/monkeysstab_optical_flow"
 CSV="$RUN_DIR/optical_flow_mavlink.csv"
@@ -140,6 +140,15 @@ ARGS=(
 )
 if [[ "$LOCAL_GUI" == "1" || "$LOCAL_GUI" == "true" || "$LOCAL_GUI" == "yes" ]]; then
   ARGS+=(--rotation-gui)
+fi
+if [[ -n "${MONKEYS_DATASET_DIR:-}" ]]; then
+  ARGS+=(--dataset-dir "$MONKEYS_DATASET_DIR")
+fi
+if [[ -n "${MONKEYS_DATASET_SURFACE:-}" ]]; then
+  ARGS+=(--dataset-surface "$MONKEYS_DATASET_SURFACE")
+fi
+if [[ -n "${MONKEYS_DATASET_DURATION_SEC:-}" ]]; then
+  ARGS+=(--dataset-duration-sec "$MONKEYS_DATASET_DURATION_SEC")
 fi
 
 exec "$BIN" "${ARGS[@]}"
