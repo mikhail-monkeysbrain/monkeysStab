@@ -895,6 +895,9 @@ int main(int argc,char** argv){
   bool return_gui=false;
   bool rotation_gui=false;
   bool return_manual_target=false;
+  std::string dataset_dir;
+  std::string dataset_surface;
+  double dataset_duration_sec=0.0;
   double diag_camera_z_m=std::numeric_limits<double>::quiet_NaN();
   double diag_range_z_m=std::numeric_limits<double>::quiet_NaN();
   double bench_height_override=0.0;
@@ -914,6 +917,9 @@ int main(int argc,char** argv){
     else if(a=="--return-gui") return_gui=true;
     else if(a=="--rotation-gui") rotation_gui=true;
     else if(a=="--return-manual-target") return_manual_target=true;
+    else if(a=="--dataset-dir" && i+1<argc) dataset_dir=argv[++i];
+    else if(a=="--dataset-surface" && i+1<argc) dataset_surface=argv[++i];
+    else if(a=="--dataset-duration-sec" && i+1<argc) dataset_duration_sec=std::stod(argv[++i]);
     else if(a=="--diag-camera-z-m" && i+1<argc) diag_camera_z_m=std::stod(argv[++i]);
     else if(a=="--diag-range-z-m" && i+1<argc) diag_range_z_m=std::stod(argv[++i]);
     else if(a=="--bench-height" && i+1<argc) bench_height_override=std::stod(argv[++i]);
@@ -955,6 +961,10 @@ int main(int argc,char** argv){
     std::cerr<<"ОШИБКА: --pre-static-sec/--post-static-sec разрешены 1..30 с\n";
     return 2;
   }
+  if(dataset_duration_sec<0.0 || dataset_duration_sec>3600.0){
+    std::cerr<<"ОШИБКА: --dataset-duration-sec разрешён 0..3600 с\n";
+    return 2;
+  }
   if(!(focal_scale>0.5&&focal_scale<2.0)){
     std::cerr<<"ОШИБКА: focal_scale вне разумного диапазона 0.5..2.0\n";
     return 2;
@@ -994,6 +1004,25 @@ int main(int argc,char** argv){
 
     std::ofstream csv(csvpath,std::ios::trunc);
     if(!csv) throw std::runtime_error("не удалось открыть CSV: "+csvpath);
+
+    std::ofstream dataset_frames_bin;
+    std::ofstream dataset_frames_csv;
+    uint64_t dataset_saved_frames=0;
+    uint64_t dataset_saved_bytes=0;
+    int64_t dataset_start_ns=0;
+    if(!dataset_dir.empty()){
+      const std::string frames_bin_path=dataset_dir+"/frames.mjpgbin";
+      const std::string frames_csv_path=dataset_dir+"/frames.csv";
+      dataset_frames_bin.open(frames_bin_path,std::ios::binary|std::ios::trunc);
+      dataset_frames_csv.open(frames_csv_path,std::ios::trunc);
+      if(!dataset_frames_bin || !dataset_frames_csv)
+        throw std::runtime_error("не удалось открыть файлы датасета в "+dataset_dir);
+      dataset_frames_csv<<"dataset_frame,camera_ts_ns,mono_ns,jpeg_size\n";
+      std::cerr<<"DATASET CAPTURE: surface="<<(dataset_surface.empty()?"unknown":dataset_surface)
+               <<" dir="<<dataset_dir
+               <<" duration="<<(dataset_duration_sec>0.0?std::to_string(dataset_duration_sec):std::string("manual"))
+               <<" s\n";
+    }
     int64_t last_csv_flush_ns=monoNs();
     constexpr int64_t kCsvLiveFlushNs=50000000LL; // 50 ms: low-latency web telemetry without per-frame fsync
     constexpr std::streamoff kCsvMaxBytes=250LL*1024LL*1024LL;
@@ -1003,6 +1032,7 @@ int main(int argc,char** argv){
 
     cv::setNumThreads(1);
     std::signal(SIGINT,onSignal); std::signal(SIGTERM,onSignal);
+    if(!dataset_dir.empty()) dataset_start_ns=monoNs();
 
     cv::Mat prev; int64_t prev_ts=0; uint64_t frame=0;
     double prev_camera_height_m=0.0;
@@ -1288,6 +1318,31 @@ int main(int argc,char** argv){
       camera_queue_dropped_total += camera_queue_dropped;
 
       const int64_t now=monoNs();
+
+      if(dataset_frames_bin.is_open()){
+        const uint64_t ts64=(uint64_t)std::max<int64_t>(0,ts);
+        const uint32_t sz32=(uint32_t)std::min<size_t>(latest_jpeg.size(),0xffffffffu);
+        dataset_frames_bin.write(reinterpret_cast<const char*>(&ts64),sizeof(ts64));
+        dataset_frames_bin.write(reinterpret_cast<const char*>(&sz32),sizeof(sz32));
+        dataset_frames_bin.write(reinterpret_cast<const char*>(latest_jpeg.data()),sz32);
+        ++dataset_saved_frames;
+        dataset_saved_bytes += sizeof(ts64)+sizeof(sz32)+sz32;
+        dataset_frames_csv<<dataset_saved_frames<<','<<ts<<','<<now<<','<<sz32<<'\n';
+        if((dataset_saved_frames%120)==0){
+          dataset_frames_bin.flush();
+          dataset_frames_csv.flush();
+        }
+      }
+
+      if(dataset_start_ns>0 && dataset_duration_sec>0.0 &&
+         (now-dataset_start_ns)*1e-9 >= dataset_duration_sec){
+        std::cerr<<"DATASET CAPTURE COMPLETE: "
+                 <<dataset_saved_frames<<" frames, "
+                 <<dataset_saved_bytes<<" bytes\n";
+        g_running=false;
+        break;
+      }
+
       cv::Mat raw(1,(int)latest_jpeg.size(),CV_8UC1,latest_jpeg.data());
       cv::Mat gray=cv::imdecode(raw,cv::IMREAD_GRAYSCALE);
       if(gray.empty()) continue;
