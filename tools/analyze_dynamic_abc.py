@@ -61,9 +61,13 @@ def leg_integral(leg,xk,yk,validk):
         dt=r.get("dt_s",0.0); h=camera_h(r)
         if h is None or not (0<dt<0.2):
             continue
+        # fc_gyro_samples==0 does NOT mean gyro is unavailable. In production
+        # consumeGyroAverage() falls back to the latest valid ATTITUDE/body-rate
+        # sample when no new samples accumulated since the previous processed
+        # camera frame. The CSV still contains that valid fc_gyro_x/y value.
+        # Therefore keep these rows; only count them diagnostically.
         if r.get("fc_gyro_samples",0)<1:
             gyro_missing += 1
-            continue
 
         fx=r.get(xk,float("nan")); fy=r.get(yk,float("nan"))
         gx=r.get("fc_gyro_x",float("nan")); gy=r.get("fc_gyro_y",float("nan"))
