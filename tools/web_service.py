@@ -110,6 +110,24 @@ def running():
     with _lock:
         return _proc is not None and _proc.poll() is None
 
+def open_rotating_log(path, max_bytes=20*1024*1024, backups=2):
+    """Open an append log after bounded size rotation."""
+    path=Path(path)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    try:
+        if path.exists() and path.stat().st_size >= max_bytes:
+            oldest=Path(str(path)+f".{backups}")
+            try: oldest.unlink()
+            except FileNotFoundError: pass
+            for i in range(backups-1,0,-1):
+                src=Path(str(path)+f".{i}")
+                if src.exists():
+                    os.replace(src,Path(str(path)+f".{i+1}"))
+            os.replace(path,Path(str(path)+".1"))
+    except OSError:
+        pass
+    return open(path,"a",encoding="utf-8",buffering=1)
+
 def runtime_exit_info():
     with _lock:
         p=_proc
@@ -467,7 +485,7 @@ def ensure_router():
             return
         RUN_ROOT.mkdir(parents=True,exist_ok=True)
         router_log=RUN_ROOT/"mavlink_router_web.log"
-        _router_log_handle=open(router_log,"a",encoding="utf-8",buffering=1)
+        _router_log_handle=open_rotating_log(router_log)
         _router_log_handle.write("\n===== WEB ROUTER START %s =====\n"%time.strftime("%Y-%m-%d %H:%M:%S"))
         env=os.environ.copy()
         env["MONKEYS_FC_TCP_PORT"]="5760"
@@ -540,7 +558,7 @@ def start_runtime():
         if running():
             return {"ok":True,"already_running":True,"pid":_proc.pid}
         RUN_ROOT.mkdir(parents=True,exist_ok=True)
-        _log_handle=open(WEB_LOG,"a",encoding="utf-8",buffering=1)
+        _log_handle=open_rotating_log(WEB_LOG)
         _log_handle.write("\n===== WEB START %s =====\n"%time.strftime("%Y-%m-%d %H:%M:%S"))
         ensure_router()
         env=os.environ.copy()
