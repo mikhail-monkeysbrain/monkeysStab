@@ -60,6 +60,22 @@ if [[ -z "${MAVLINK_ROOT:-}" ]]; then
 fi
 export MAVLINK_ROOT
 RUN_ROOT="${MONKEYS_RUN_ROOT:-$HOME/monkeysStab_runs}"
+mkdir -p "$RUN_ROOT"
+
+# SD-card guard.  Do not start a new flight runtime when the root filesystem is
+# already critically full.  A low-space warning is allowed so the operator can
+# still fly, while the in-process CSV cap prevents the logger from consuming
+# the remaining filesystem.
+FREE_KB="$(df -Pk "$RUN_ROOT" | awk 'NR==2 {print $4}')"
+FREE_MB=$((FREE_KB / 1024))
+if (( FREE_MB < 300 )); then
+  echo "ОШИБКА: недостаточно свободного места: ${FREE_MB} MB." >&2
+  echo "Для запуска monkeysStab требуется минимум 300 MB." >&2
+  exit 3
+elif (( FREE_MB < 1024 )); then
+  echo "ПРЕДУПРЕЖДЕНИЕ: на диске осталось только ${FREE_MB} MB (< 1 GB)." >&2
+  echo "CSV будет автоматически остановлен при достижении лимита." >&2
+fi
 
 bash "$ROOT/scripts/audit_geometry.sh"
 bash "$ROOT/scripts/audit_fc_params.sh"
