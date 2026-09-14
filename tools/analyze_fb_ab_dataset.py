@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+import csv, math, statistics, sys
+from pathlib import Path
+
+if len(sys.argv) != 2:
+    raise SystemExit("usage: analyze_fb_ab_dataset.py optical_flow_mavlink.csv")
+
+path=Path(sys.argv[1])
+rows=[]
+with path.open(newline="") as f:
+    for r in csv.DictReader(f):
+        try:
+            row={k:float(v) for k,v in r.items() if v not in ("",None)}
+        except ValueError:
+            continue
+        rows.append(row)
+
+if not rows:
+    raise SystemExit("no rows")
+
+required=["ab_fb_enabled","ab_fb_valid","ab_fb_flow_body_x","ab_fb_flow_body_y",
+          "flow_body_x","flow_body_y","dt_s","luna_m"]
+missing=[k for k in required if k not in rows[0]]
+if missing:
+    raise SystemExit("CSV has no A/B columns: "+", ".join(missing))
+
+a=[r for r in rows if r.get("valid",0)>0.5]
+paired=[r for r in a if r.get("ab_fb_valid",0)>0.5]
+
+def mean(v):
+    return statistics.fmean(v) if v else float("nan")
+def rmsxy(rr,x,y):
+    return math.sqrt(mean([r[x]*r[x]+r[y]*r[y] for r in rr])) if rr else float("nan")
+def integ(rr,x,y):
+    sx=sy=0.0
+    n=0
+    for r in rr:
+        dt=r.get("dt_s",0.0); h=r.get("luna_m",0.0)
+        if 0<dt<0.2 and 0.05<h<10:
+            sx += r[x]*h*dt
+            sy += r[y]*h*dt
+            n += 1
+    return sx,sy,math.hypot(sx,sy),n
+
+ax,ay,an,na=integ(paired,"flow_body_x","flow_body_y")
+bx,by,bn,nb=integ(paired,"ab_fb_flow_body_x","ab_fb_flow_body_y")
+
+print(f"CSV: {path}")
+print(f"rows={len(rows)}  A_valid={len(a)}  paired_A_B={len(paired)} ({100*len(paired)/max(1,len(a)):.2f}%)")
+print(f"FB threshold px: {rows[0].get('ab_fb_max_px',float('nan')):g}")
+print(f"mean FB pass ratio: {mean([r.get('ab_fb_ratio',0.0) for r in a]):.4f}")
+print(f"mean A inliers:      {mean([r.get('inliers',0.0) for r in paired]):.2f}")
+print(f"mean B FB-pass:      {mean([r.get('ab_fb_pass',0.0) for r in paired]):.2f}")
+print(f"mean B inliers:      {mean([r.get('ab_fb_inliers',0.0) for r in paired]):.2f}")
+print(f"mean shadow time ms: {mean([r.get('ab_fb_t_ms',0.0) for r in a]):.3f}")
+print()
+print("PAIRED SAME-FRAME METRICS")
+print(f"A mean flow X/Y rad/s: {mean([r['flow_body_x'] for r in paired]):+.8f}  {mean([r['flow_body_y'] for r in paired]):+.8f}")
+print(f"B mean flow X/Y rad/s: {mean([r['ab_fb_flow_body_x'] for r in paired]):+.8f}  {mean([r['ab_fb_flow_body_y'] for r in paired]):+.8f}")
+print(f"A RMS vector rad/s:    {rmsxy(paired,'flow_body_x','flow_body_y'):.8f}")
+print(f"B RMS vector rad/s:    {rmsxy(paired,'ab_fb_flow_body_x','ab_fb_flow_body_y'):.8f}")
+print(f"A integral X/Y/norm:   {ax*1000:+.3f} {ay*1000:+.3f} / {an*1000:.3f} mm")
+print(f"B integral X/Y/norm:   {bx*1000:+.3f} {by*1000:+.3f} / {bn*1000:.3f} mm")
+if math.isfinite(an) and an>0:
+    print(f"B/A endpoint ratio:     {bn/an:.3f}")
+if math.isfinite(rmsxy(paired,'flow_body_x','flow_body_y')) and rmsxy(paired,'flow_body_x','flow_body_y')>0:
+    print(f"B/A RMS ratio:          {rmsxy(paired,'ab_fb_flow_body_x','ab_fb_flow_body_y')/rmsxy(paired,'flow_body_x','flow_body_y'):.3f}")
