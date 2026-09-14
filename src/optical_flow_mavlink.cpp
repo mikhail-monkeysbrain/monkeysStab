@@ -905,8 +905,12 @@ int main(int argc,char** argv){
     LiveWebTelemetryUdp web_live;
 
     std::ofstream csv(csvpath,std::ios::trunc);
+    if(!csv) throw std::runtime_error("не удалось открыть CSV: "+csvpath);
     int64_t last_csv_flush_ns=monoNs();
     constexpr int64_t kCsvLiveFlushNs=50000000LL; // 50 ms: low-latency web telemetry without per-frame fsync
+    constexpr std::streamoff kCsvMaxBytes=250LL*1024LL*1024LL;
+    bool csv_logging_enabled=true;
+    bool csv_limit_reported=false;
     csv<<"mono_ns,camera_ts_ns,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
 
     cv::setNumThreads(1);
@@ -1431,6 +1435,7 @@ int main(int argc,char** argv){
           g_running=false;
         }
 
+        if(csv_logging_enabled){
         csv<<now<<','<<ts<<','<<flow_send_ns<<','<<frame_pipeline_latency_ms<<','
            <<camera_queue_dropped<<','<<camera_queue_dropped_total<<','
            <<frame<<','<<guide_leg.load()<<','<<guide_stage.load()<<','<<(s.valid?1:0)<<','<<s.invalid_reason<<','<<(bridge_pending?1:0)<<','<<dt<<','
@@ -1463,6 +1468,22 @@ int main(int argc,char** argv){
         if(now-last_csv_flush_ns>=kCsvLiveFlushNs){
           csv.flush();
           last_csv_flush_ns=now;
+        }
+
+        // Logging is diagnostic only.  Never sacrifice the flight publisher to
+        // an unbounded CSV.  Once 250 MiB is reached, close the CSV and keep
+        // Optical Flow / RangeFinder / WebSocket telemetry running.
+        const std::streamoff csv_pos=csv.tellp();
+        if(csv_pos<0 || csv_pos>=kCsvMaxBytes){
+          csv.flush();
+          csv.close();
+          csv_logging_enabled=false;
+          if(!csv_limit_reported){
+            csv_limit_reported=true;
+            std::cerr<<"\nПРЕДУПРЕЖДЕНИЕ: CSV достиг лимита 250 MiB; запись остановлена. "
+                     <<"Полётный publisher продолжает работать. CSV="<<csvpath<<"\n";
+          }
+        }
         }
 
         {
