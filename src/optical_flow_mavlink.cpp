@@ -608,6 +608,7 @@ bool sendOpticalFlow(int fd,uint64_t time_usec,float rate_x,float rate_y,uint8_t
 FeatureRoi g_feature_roi{};
 int g_max_features=500; // production default; diagnostic sweeps may override in-process
 double g_fb_shadow_max_px=0.0; // 0=disabled; diagnostic A/B only, never changes MAVLink production flow
+bool g_obs_shadow_enabled=true; // D observability arm; dynamic A/B/C tests disable it to save CPU
 
 struct FlowStep {
   bool valid=false;
@@ -892,6 +893,7 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
               o.robust_shadow_valid=std::isfinite(rmag) && rmag<4.0;
             }
 
+            if(g_obs_shadow_enabled){
             // D shadow: local aperture/conditioning test.  cornerEigenValsAndVecs
             // gives two structure-tensor eigenvalues per pixel.  Their ratio is
             // near zero for edge-like/one-dimensional texture and closer to one
@@ -943,6 +945,7 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
               o.obs_downweighted=odown;
               const double omag=std::hypot(o.obs_flow_body_x,o.obs_flow_body_y);
               o.obs_shadow_valid=std::isfinite(omag) && omag<4.0;
+            }
             }
           }
         }
@@ -1174,6 +1177,9 @@ int main(int argc,char** argv){
     else if(a=="--fb-shadow-max-px" && i+1<argc){
       g_fb_shadow_max_px=std::stod(argv[++i]);
     }
+    else if(a=="--no-obs-shadow"){
+      g_obs_shadow_enabled=false;
+    }
   }
   if(continuous_guided && (continuous_legs<2 || continuous_legs>30)){
     std::cerr<<"ОШИБКА: --continuous-legs разрешён только 2..30\n";
@@ -1273,11 +1279,13 @@ int main(int argc,char** argv){
     csv<<"mono_ns,camera_ts_ns,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
 
     if(g_fb_shadow_max_px>0.0){
-      std::cerr<<"A/B/C/D SHADOW: A=production publish, B=FB-consistency <= "
+      std::cerr<<(g_obs_shadow_enabled?"A/B/C/D SHADOW: ":"A/B/C SHADOW: ")
+               <<"A=production publish, B=FB-consistency <= "
                <<g_fb_shadow_max_px
-               <<" px + ordinary LS, C=same B inliers + adaptive Huber IRLS, "
-               <<"D=same B inliers + adaptive structure-tensor observability weights; "
-               <<"B/C/D diagnostic only and NEVER sent to FC\n";
+               <<" px + ordinary LS, C=same B inliers + adaptive Huber IRLS";
+      if(g_obs_shadow_enabled)
+        std::cerr<<", D=same B inliers + adaptive structure-tensor observability weights";
+      std::cerr<<"; shadow arms diagnostic only and NEVER sent to FC\n";
     }
     cv::setNumThreads(1);
     std::signal(SIGINT,onSignal); std::signal(SIGTERM,onSignal);
