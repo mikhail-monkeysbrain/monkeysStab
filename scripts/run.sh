@@ -150,5 +150,8 @@ fi
 if [[ -n "${MONKEYS_DATASET_DURATION_SEC:-}" ]]; then
   ARGS+=(--dataset-duration-sec "$MONKEYS_DATASET_DURATION_SEC")
 fi
+if [[ -n "${MONKEYS_FB_SHADOW_MAX_PX:-}" ]]; then
+  ARGS+=(--fb-shadow-max-px "$MONKEYS_FB_SHADOW_MAX_PX")
+fi
 
 exec "$BIN" "${ARGS[@]}"
