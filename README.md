@@ -121,6 +121,7 @@ AHRS_EKF_TYPE = 3
 EK3_ENABLE = 1
 
 FLOW_TYPE = 5             # MAVLink
+VISO_TYPE = 0             # VisualOdometry отключён: monkeysStab отправляет OPTICAL_FLOW, не VISION/ODOMETRY
 FLOW_OPTIONS = 0          # камера жёстко закреплена
 FLOW_ORIENT_YAW = 0
 FLOW_FXSCALER = 0
@@ -187,6 +188,7 @@ GUI поэтому предоставляет три режима: компас 
 
 ```text
 FLOW_TYPE=5
+VISO_TYPE=0
 FLOW_OPTIONS=0
 FLOW_ORIENT_YAW=0
 FLOW_FXSCALER=0
