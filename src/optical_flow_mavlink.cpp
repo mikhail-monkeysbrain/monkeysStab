@@ -633,6 +633,17 @@ struct FlowStep {
   double fb_flow_body_x=0.0,fb_flow_body_y=0.0;
   double fb_t_ms=0.0;
 
+  // C shadow: same FB-filtered + RANSAC inliers as B, but the final
+  // translation/scale/yaw fit is Huber IRLS instead of ordinary LS.
+  // The Huber scale is estimated independently on every frame from MAD of
+  // signed 2-D residual components. C is diagnostic only and never published.
+  bool robust_shadow_valid=false;
+  double robust_flow_body_x=0.0,robust_flow_body_y=0.0;
+  double robust_sigma=0.0;
+  double robust_mean_weight=0.0;
+  int robust_downweighted=0;
+  int robust_iters=0;
+
   std::vector<cv::Point2f> inlier_points; // current-frame RANSAC inliers for web diagnostics
 
   // 3x3 spatial diagnostics inside the configured feature ROI.
@@ -799,6 +810,77 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
             o.fb_flow_body_y=fbody[1];
             const double fmag=std::hypot(o.fb_flow_body_x,o.fb_flow_body_y);
             o.fb_shadow_valid=std::isfinite(fmag) && fmag<4.0;
+
+            // C shadow: Huber IRLS on the exact same afi/bfi set as B.
+            // Start from ordinary LS, estimate robust scale from the signed
+            // residual components, then solve weighted LS.  No hand-tuned
+            // pixel residual threshold is introduced here.
+            cv::Mat sol_r=sol_fb.clone();
+            constexpr int kRobustMaxIters=5;
+            constexpr double kHuberK=1.345;
+            for(int iter=0;iter<kRobustMaxIters;iter++){
+              std::vector<double> signed_res;
+              signed_res.reserve(afi.size()*2);
+              std::vector<double> rnorm(afi.size(),0.0);
+              for(size_t k=0;k<afi.size();++k){
+                const double x=(double)au_fb[k].x, y=(double)au_fb[k].y;
+                const double du=(double)bu_fb[k].x-au_fb[k].x;
+                const double dv=(double)bu_fb[k].y-au_fb[k].y;
+                const double tx=sol_r.at<double>(0,0);
+                const double ty=sol_r.at<double>(1,0);
+                const double sc=sol_r.at<double>(2,0);
+                const double wz=sol_r.at<double>(3,0);
+                const double eu=du-(tx+sc*x-wz*y);
+                const double ev=dv-(ty+sc*y+wz*x);
+                signed_res.push_back(eu);
+                signed_res.push_back(ev);
+                rnorm[k]=std::hypot(eu,ev);
+              }
+              const double med_r=median(signed_res);
+              std::vector<double> abs_dev;
+              abs_dev.reserve(signed_res.size());
+              for(double r:signed_res) abs_dev.push_back(std::abs(r-med_r));
+              const double sigma=std::max(1e-7,1.4826*median(abs_dev));
+              const double delta=kHuberK*sigma;
+
+              cv::Mat Aw=A_fb.clone(), bw=bb_fb.clone();
+              double wsum=0.0;
+              int down=0;
+              for(size_t k=0;k<afi.size();++k){
+                const double rr=rnorm[k];
+                const double w=(rr<=delta || rr<=1e-15)?1.0:(delta/rr);
+                const double sw=std::sqrt(std::max(0.0,w));
+                if(w<0.999999) down++;
+                wsum+=w;
+                const int r0=(int)(2*k), r1=r0+1;
+                for(int c=0;c<4;c++){
+                  Aw.at<double>(r0,c)*=sw;
+                  Aw.at<double>(r1,c)*=sw;
+                }
+                bw.at<double>(r0,0)*=sw;
+                bw.at<double>(r1,0)*=sw;
+              }
+              cv::Mat next;
+              if(!cv::solve(Aw,bw,next,cv::DECOMP_SVD) || next.rows!=4) break;
+              const double dsol=cv::norm(next-sol_r);
+              sol_r=next;
+              o.robust_sigma=sigma;
+              o.robust_mean_weight=wsum/std::max<size_t>(1,afi.size());
+              o.robust_downweighted=down;
+              o.robust_iters=iter+1;
+              if(dsol<1e-10) break;
+            }
+            if(o.robust_iters>0 && sol_r.rows==4){
+              const double du_r=sol_r.at<double>(0,0);
+              const double dv_r=sol_r.at<double>(1,0);
+              const double rcx=dv_r/dt;
+              const double rcy=-du_r/dt;
+              const cv::Vec3d rbody=FRD_R_C_FB*cv::Vec3d(rcx,rcy,0.0);
+              o.robust_flow_body_x=rbody[0];
+              o.robust_flow_body_y=rbody[1];
+              const double rmag=std::hypot(o.robust_flow_body_x,o.robust_flow_body_y);
+              o.robust_shadow_valid=std::isfinite(rmag) && rmag<4.0;
+            }
           }
         }
       }
@@ -1125,12 +1207,13 @@ int main(int argc,char** argv){
     constexpr std::streamoff kCsvMaxBytes=250LL*1024LL*1024LL;
     bool csv_logging_enabled=true;
     bool csv_limit_reported=false;
-    csv<<"mono_ns,camera_ts_ns,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
+    csv<<"mono_ns,camera_ts_ns,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
 
     if(g_fb_shadow_max_px>0.0){
-      std::cerr<<"A/B SHADOW: A=production publish, B=FB-consistency <= "
+      std::cerr<<"A/B/C SHADOW: A=production publish, B=FB-consistency <= "
                <<g_fb_shadow_max_px
-               <<" px on same frames; B diagnostic only and NEVER sent to FC\n";
+               <<" px + ordinary LS, C=same B inliers + adaptive Huber IRLS; "
+               <<"B/C diagnostic only and NEVER sent to FC\n";
     }
     cv::setNumThreads(1);
     std::signal(SIGINT,onSignal); std::signal(SIGTERM,onSignal);
@@ -1691,6 +1774,7 @@ int main(int argc,char** argv){
            <<s.scale_rate<<','<<s.lk_height_scale<<','
            <<s.flow_cam_x<<','<<s.flow_cam_y<<','<<s.flow_body_x<<','<<s.flow_body_y<<','
            <<(g_fb_shadow_max_px>0.0?1:0)<<','<<g_fb_shadow_max_px<<','<<s.fb_checked<<','<<s.fb_pass<<','<<s.fb_ratio<<','<<s.fb_inliers<<','<<(s.fb_shadow_valid?1:0)<<','<<s.fb_flow_body_x<<','<<s.fb_flow_body_y<<','<<s.fb_t_ms<<','
+           <<(s.robust_shadow_valid?1:0)<<','<<s.robust_flow_body_x<<','<<s.robust_flow_body_y<<','<<s.robust_sigma<<','<<s.robust_mean_weight<<','<<s.robust_downweighted<<','<<s.robust_iters<<','
            <<(int)quality<<','<<lm<<','<<lage<<','<<range_to_fc<<','<<flow_send_x<<','<<flow_send_y<<','<<(flow_sent?1:0)<<','<<(range_sent?1:0)<<','
            <<(arm_ok?(arm_now?1:0):-1)<<','
            <<(efresh?1:0)<<','<<ep.x<<','<<ep.y<<','<<ep.z<<','<<ep.vx<<','<<ep.vy<<','<<ep.vz<<','<<eage<<','<<ec<<','
