@@ -582,6 +582,15 @@ def start_runtime():
         env["MONKEYS_FC"]=FC_ENDPOINT
         env["MONKEYS_WEB_TELEMETRY_UDP_PORT"]=str(LIVE_UDP_PORT)
         env["MONKEYS_WEB_PREVIEW_PATH"]=str(PREVIEW_PATH)
+
+        # ARMED hand-test branch only: ArduPilot EKF3 zeros optical-flow
+        # measurements before takeoff while AGL < 0.5 m. The Web UI must
+        # reproduce the same corrected bench condition as the CLI diagnostic:
+        # publish 0.60 m to FC, while the real TF-Luna remains the metric
+        # height source inside the optical-flow estimator.
+        env["MONKEYS_BENCH_HEIGHT"]="0.60"
+        env.pop("MONKEYS_BENCH_TRUE_CAMERA_HEIGHT",None)
+        _log_handle.write("WEB BENCH TEST: synthetic FC range=0.60 m; real TF-Luna kept for optical-flow scale\n")
         try:
             PREVIEW_PATH.unlink()
         except FileNotFoundError:
