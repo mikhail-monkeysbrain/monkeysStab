@@ -142,4 +142,18 @@ if [[ "$LOCAL_GUI" == "1" || "$LOCAL_GUI" == "true" || "$LOCAL_GUI" == "yes" ]];
   ARGS+=(--rotation-gui)
 fi
 
+# Diagnostic-only environment hooks. They do not change the default web/flight runtime.
+if [[ "${MONKEYS_REQUIRE_ARMED:-0}" == "1" ]]; then
+  ARGS+=(--require-armed)
+fi
+if [[ -n "${MONKEYS_GUIDED_MM:-}" ]]; then
+  ARGS+=(--guided-mm "$MONKEYS_GUIDED_MM")
+fi
+if [[ -n "${MONKEYS_PRE_STATIC_SEC:-}" ]]; then
+  ARGS+=(--pre-static-sec "$MONKEYS_PRE_STATIC_SEC")
+fi
+if [[ -n "${MONKEYS_POST_STATIC_SEC:-}" ]]; then
+  ARGS+=(--post-static-sec "$MONKEYS_POST_STATIC_SEC")
+fi
+
 exec "$BIN" "${ARGS[@]}"
