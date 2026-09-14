@@ -14,7 +14,7 @@
     "RNGFND1_TYPE": 10,
     "RNGFND1_ORIENT": 25,
     "RNGFND1_MIN": 0.1,
-    "RNGFND1_MAX": 7.0,
+    "RNGFND1_MAX": 7,
     "EK3_SRC1_POSXY": 0,
     "EK3_SRC1_VELXY": 5,
     "EK3_SRC1_POSZ": 2,
@@ -22,6 +22,7 @@
     "EK3_SRC1_YAW": 0,
     "EK3_SRC_OPTIONS": 0,
     "COMPASS_ENABLE": 1,
-    "COMPASS_USE": 0
+    "COMPASS_USE": 0,
+    "VISO_TYPE": 0
   }
 }
