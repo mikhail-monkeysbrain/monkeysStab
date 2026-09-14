@@ -153,5 +153,20 @@ fi
 if [[ -n "${MONKEYS_FB_SHADOW_MAX_PX:-}" ]]; then
   ARGS+=(--fb-shadow-max-px "$MONKEYS_FB_SHADOW_MAX_PX")
 fi
+if [[ "${MONKEYS_NO_OBS_SHADOW:-0}" == "1" ]]; then
+  ARGS+=(--no-obs-shadow)
+fi
+if [[ -n "${MONKEYS_GUIDED_MM:-}" ]]; then
+  ARGS+=(--guided-mm "$MONKEYS_GUIDED_MM")
+fi
+if [[ -n "${MONKEYS_CONTINUOUS_LEGS:-}" ]]; then
+  ARGS+=(--continuous-legs "$MONKEYS_CONTINUOUS_LEGS")
+fi
+if [[ -n "${MONKEYS_PRE_STATIC_SEC:-}" ]]; then
+  ARGS+=(--pre-static-sec "$MONKEYS_PRE_STATIC_SEC")
+fi
+if [[ -n "${MONKEYS_POST_STATIC_SEC:-}" ]]; then
+  ARGS+=(--post-static-sec "$MONKEYS_POST_STATIC_SEC")
+fi
 
 exec "$BIN" "${ARGS[@]}"
