@@ -155,5 +155,11 @@ fi
 if [[ -n "${MONKEYS_POST_STATIC_SEC:-}" ]]; then
   ARGS+=(--post-static-sec "$MONKEYS_POST_STATIC_SEC")
 fi
+if [[ -n "${MONKEYS_BENCH_HEIGHT:-}" ]]; then
+  ARGS+=(--bench-height "$MONKEYS_BENCH_HEIGHT")
+fi
+if [[ -n "${MONKEYS_BENCH_TRUE_CAMERA_HEIGHT:-}" ]]; then
+  ARGS+=(--bench-true-camera-height "$MONKEYS_BENCH_TRUE_CAMERA_HEIGHT")
+fi
 
 exec "$BIN" "${ARGS[@]}"
