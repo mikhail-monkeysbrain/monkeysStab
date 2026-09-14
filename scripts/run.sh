@@ -150,9 +150,10 @@ fi
 if [[ -n "${MONKEYS_DATASET_DURATION_SEC:-}" ]]; then
   ARGS+=(--dataset-duration-sec "$MONKEYS_DATASET_DURATION_SEC")
 fi
-if [[ -n "${MONKEYS_FB_SHADOW_MAX_PX:-}" ]]; then
-  ARGS+=(--fb-shadow-max-px "$MONKEYS_FB_SHADOW_MAX_PX")
-fi
+# This branch is intentionally an end-to-end field candidate:
+# Web launcher publishes estimator C = FB consistency + adaptive Huber IRLS.
+FB_HUBER_PX="${MONKEYS_FB_SHADOW_MAX_PX:-0.5}"
+ARGS+=(--fb-shadow-max-px "$FB_HUBER_PX" --publish-fb-huber --no-obs-shadow)
 if [[ "${MONKEYS_NO_OBS_SHADOW:-0}" == "1" ]]; then
   ARGS+=(--no-obs-shadow)
 fi
