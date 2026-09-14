@@ -607,6 +607,7 @@ bool sendOpticalFlow(int fd,uint64_t time_usec,float rate_x,float rate_y,uint8_t
 
 FeatureRoi g_feature_roi{};
 int g_max_features=500; // production default; diagnostic sweeps may override in-process
+double g_fb_shadow_max_px=0.0; // 0=disabled; diagnostic A/B only, never changes MAVLink production flow
 
 struct FlowStep {
   bool valid=false;
@@ -622,6 +623,16 @@ struct FlowStep {
   double lk_height_scale=1; // initial KLT scale guess from TF-Luna, curr image / prev image
   double flow_cam_x=0,flow_cam_y=0;
   double flow_body_x=0,flow_body_y=0;
+
+  // Diagnostic A/B shadow path. A is the production result above. B applies
+  // forward/backward KLT consistency to the SAME forward correspondences, then
+  // runs the same homography RANSAC and 4-parameter fit. B is never sent to FC.
+  bool fb_shadow_valid=false;
+  int fb_checked=0,fb_pass=0,fb_inliers=0;
+  double fb_ratio=0.0;
+  double fb_flow_body_x=0.0,fb_flow_body_y=0.0;
+  double fb_t_ms=0.0;
+
   std::vector<cv::Point2f> inlier_points; // current-frame RANSAC inliers for web diagnostics
 
   // 3x3 spatial diagnostics inside the configured feature ROI.
@@ -715,6 +726,85 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
   for(size_t i=0;i<p0.size();++i){if(st[i]){a.push_back(p0[i]);b.push_back(p1[i]);}}
   o.tracked=(int)a.size();
   if(a.size()<20){ o.invalid_reason=3; return o; }
+
+  // B shadow: forward/backward consistency on exactly the correspondences used
+  // by production A. This makes A/B share frames, GFTT points, forward KLT and
+  // dt; only the FB gate differs. The extra work exists only in explicit A/B
+  // mode and cannot alter the flow that is published to ArduPilot.
+  if(g_fb_shadow_max_px>0.0){
+    const int64_t tfb0=monoNs();
+    o.fb_checked=(int)a.size();
+    std::vector<cv::Point2f> back;
+    std::vector<uchar> st_back;
+    std::vector<float> err_back;
+    cv::calcOpticalFlowPyrLK(curr,prev,b,back,st_back,err_back,{21,21},3,
+                             cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,30,0.01),
+                             0,1e-4);
+    std::vector<cv::Point2f> af,bf;
+    af.reserve(a.size()); bf.reserve(a.size());
+    for(size_t i=0;i<a.size();++i){
+      if(!st_back[i]) continue;
+      const double fb_err=cv::norm(back[i]-a[i]);
+      if(std::isfinite(fb_err) && fb_err<=g_fb_shadow_max_px){
+        af.push_back(a[i]); bf.push_back(b[i]);
+      }
+    }
+    o.fb_pass=(int)af.size();
+    o.fb_ratio=o.fb_checked?((double)o.fb_pass/o.fb_checked):0.0;
+
+    if(af.size()>=20){
+      cv::Mat fmask;
+      constexpr int kFbHomographyMaxIters=350;
+      constexpr double kFbHomographyConfidence=0.99;
+      cv::findHomography(af,bf,cv::RANSAC,2.0,fmask,
+                         kFbHomographyMaxIters,kFbHomographyConfidence);
+      if(!fmask.empty()){
+        std::vector<cv::Point2f> afi,bfi;
+        for(size_t i=0;i<af.size();++i){
+          if(fmask.at<uchar>((int)i)){ afi.push_back(af[i]); bfi.push_back(bf[i]); }
+        }
+        o.fb_inliers=(int)afi.size();
+        if(afi.size()>=20){
+          std::vector<cv::Point2f> au_fb,bu_fb;
+          cv::undistortPoints(afi,au_fb,calib.K,calib.D);
+          cv::undistortPoints(bfi,bu_fb,calib.K,calib.D);
+
+          cv::Mat A_fb((int)afi.size()*2,4,CV_64F);
+          cv::Mat bb_fb((int)afi.size()*2,1,CV_64F);
+          for(size_t k=0;k<afi.size();++k){
+            const double x=(double)au_fb[k].x, y=(double)au_fb[k].y;
+            const double du=(double)bu_fb[k].x-au_fb[k].x;
+            const double dv=(double)bu_fb[k].y-au_fb[k].y;
+            A_fb.at<double>((int)(2*k),0)=1.0;
+            A_fb.at<double>((int)(2*k),1)=0.0;
+            A_fb.at<double>((int)(2*k),2)=x;
+            A_fb.at<double>((int)(2*k),3)=-y;
+            bb_fb.at<double>((int)(2*k),0)=du;
+            A_fb.at<double>((int)(2*k+1),0)=0.0;
+            A_fb.at<double>((int)(2*k+1),1)=1.0;
+            A_fb.at<double>((int)(2*k+1),2)=y;
+            A_fb.at<double>((int)(2*k+1),3)=x;
+            bb_fb.at<double>((int)(2*k+1),0)=dv;
+          }
+          cv::Mat sol_fb;
+          if(cv::solve(A_fb,bb_fb,sol_fb,cv::DECOMP_SVD) && sol_fb.rows==4){
+            const double du_fb=sol_fb.at<double>(0,0);
+            const double dv_fb=sol_fb.at<double>(1,0);
+            const double fcx=dv_fb/dt;
+            const double fcy=-du_fb/dt;
+            const cv::Matx33d FLU_TO_FRD_FB(1,0,0, 0,-1,0, 0,0,-1);
+            const cv::Matx33d FRD_R_C_FB=FLU_TO_FRD_FB*calib.B_R_C;
+            const cv::Vec3d fbody=FRD_R_C_FB*cv::Vec3d(fcx,fcy,0.0);
+            o.fb_flow_body_x=fbody[0];
+            o.fb_flow_body_y=fbody[1];
+            const double fmag=std::hypot(o.fb_flow_body_x,o.fb_flow_body_y);
+            o.fb_shadow_valid=std::isfinite(fmag) && fmag<4.0;
+          }
+        }
+      }
+    }
+    o.fb_t_ms=(monoNs()-tfb0)*1e-6;
+  }
 
   cv::Mat mask;
   const int64_t t_ransac0=monoNs();
@@ -936,6 +1026,9 @@ int main(int argc,char** argv){
     else if(a=="--max-features" && i+1<argc){
       g_max_features=std::stoi(argv[++i]);
     }
+    else if(a=="--fb-shadow-max-px" && i+1<argc){
+      g_fb_shadow_max_px=std::stod(argv[++i]);
+    }
   }
   if(continuous_guided && (continuous_legs<2 || continuous_legs>30)){
     std::cerr<<"ОШИБКА: --continuous-legs разрешён только 2..30\n";
@@ -978,6 +1071,10 @@ int main(int argc,char** argv){
   }
   if(g_max_features<100 || g_max_features>1000){
     std::cerr<<"ОШИБКА: --max-features разрешён только 100..1000\n";
+    return 2;
+  }
+  if(g_fb_shadow_max_px!=0.0 && !(g_fb_shadow_max_px>=0.1 && g_fb_shadow_max_px<=5.0)){
+    std::cerr<<"ОШИБКА: --fb-shadow-max-px должен быть 0 (off) или 0.1..5.0 px\n";
     return 2;
   }
 
@@ -1028,8 +1125,13 @@ int main(int argc,char** argv){
     constexpr std::streamoff kCsvMaxBytes=250LL*1024LL*1024LL;
     bool csv_logging_enabled=true;
     bool csv_limit_reported=false;
-    csv<<"mono_ns,camera_ts_ns,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
+    csv<<"mono_ns,camera_ts_ns,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
 
+    if(g_fb_shadow_max_px>0.0){
+      std::cerr<<"A/B SHADOW: A=production publish, B=FB-consistency <= "
+               <<g_fb_shadow_max_px
+               <<" px on same frames; B diagnostic only and NEVER sent to FC\n";
+    }
     cv::setNumThreads(1);
     std::signal(SIGINT,onSignal); std::signal(SIGTERM,onSignal);
     if(!dataset_dir.empty()) dataset_start_ns=monoNs();
@@ -1588,6 +1690,7 @@ int main(int argc,char** argv){
            <<s.du_px<<','<<s.dv_px<<','<<s.du_norm<<','<<s.dv_norm<<','<<s.yaw_rate_cam_z<<','
            <<s.scale_rate<<','<<s.lk_height_scale<<','
            <<s.flow_cam_x<<','<<s.flow_cam_y<<','<<s.flow_body_x<<','<<s.flow_body_y<<','
+           <<(g_fb_shadow_max_px>0.0?1:0)<<','<<g_fb_shadow_max_px<<','<<s.fb_checked<<','<<s.fb_pass<<','<<s.fb_ratio<<','<<s.fb_inliers<<','<<(s.fb_shadow_valid?1:0)<<','<<s.fb_flow_body_x<<','<<s.fb_flow_body_y<<','<<s.fb_t_ms<<','
            <<(int)quality<<','<<lm<<','<<lage<<','<<range_to_fc<<','<<flow_send_x<<','<<flow_send_y<<','<<(flow_sent?1:0)<<','<<(range_sent?1:0)<<','
            <<(arm_ok?(arm_now?1:0):-1)<<','
            <<(efresh?1:0)<<','<<ep.x<<','<<ep.y<<','<<ep.z<<','<<ep.vx<<','<<ep.vy<<','<<ep.vz<<','<<eage<<','<<ec<<','
