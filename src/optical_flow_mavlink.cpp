@@ -84,11 +84,20 @@ static std::string jsonNumber(double v){
   return o.str();
 }
 
+struct FeatureRoi {
+  double x0=0.20;
+  double y0=0.20;
+  double x1=0.80;
+  double y1=0.80;
+};
+
 struct LiveWebTelemetryUdp {
   int fd=-1;
   sockaddr_in dst{};
   int64_t last_send_ns=0;
   int64_t period_ns=50000000LL; // 20 Hz max
+  int64_t last_preview_ns=0;
+  int64_t preview_period_ns=166666667LL; // <=6 Hz diagnostic web preview
 
   LiveWebTelemetryUdp(){
     const char* e=std::getenv("MONKEYS_WEB_TELEMETRY_UDP_PORT");
@@ -111,6 +120,38 @@ struct LiveWebTelemetryUdp {
     (void)::sendto(fd,json.data(),json.size(),MSG_DONTWAIT,
                    reinterpret_cast<const sockaddr*>(&dst),sizeof(dst));
     last_send_ns=now;
+  }
+
+  void sendPreview(int64_t now,const cv::Mat& gray,
+                   const std::vector<cv::Point2f>& inliers,
+                   const FeatureRoi& roi){
+    if(fd<0 || gray.empty()) return;
+    if(last_preview_ns && now-last_preview_ns<preview_period_ns) return;
+    constexpr int out_w=320;
+    const int out_h=std::max(1,(int)std::lround((double)gray.rows*out_w/std::max(1,gray.cols)));
+    cv::Mat small,bgr;
+    cv::resize(gray,small,cv::Size(out_w,out_h),0,0,cv::INTER_AREA);
+    cv::cvtColor(small,bgr,cv::COLOR_GRAY2BGR);
+    const double sx=(double)out_w/std::max(1,gray.cols);
+    const double sy=(double)out_h/std::max(1,gray.rows);
+    for(const auto& p:inliers){
+      cv::circle(bgr,cv::Point((int)std::lround(p.x*sx),(int)std::lround(p.y*sy)),
+                 2,cv::Scalar(0,255,0),-1,cv::LINE_AA);
+    }
+    cv::rectangle(bgr,
+      cv::Point((int)std::lround(roi.x0*out_w),(int)std::lround(roi.y0*out_h)),
+      cv::Point((int)std::lround(roi.x1*out_w),(int)std::lround(roi.y1*out_h)),
+      cv::Scalar(0,220,255),1,cv::LINE_AA);
+    std::vector<uchar> jpg;
+    const std::vector<int> params{cv::IMWRITE_JPEG_QUALITY,65};
+    if(!cv::imencode(".jpg",bgr,jpg,params) || jpg.size()>60000) return;
+    std::vector<uint8_t> packet;
+    packet.reserve(jpg.size()+4);
+    packet.insert(packet.end(),{'M','J','P','G'});
+    packet.insert(packet.end(),jpg.begin(),jpg.end());
+    (void)::sendto(fd,packet.data(),packet.size(),MSG_DONTWAIT,
+                   reinterpret_cast<const sockaddr*>(&dst),sizeof(dst));
+    last_preview_ns=now;
   }
 };
 
@@ -541,13 +582,6 @@ bool sendOpticalFlow(int fd,uint64_t time_usec,float rate_x,float rate_y,uint8_t
   return GroundMotionMavlinkPublisher::writeMessage(fd,msg);
 }
 
-struct FeatureRoi {
-  double x0=0.20;
-  double y0=0.20;
-  double x1=0.80;
-  double y1=0.80;
-};
-
 FeatureRoi g_feature_roi{};
 int g_max_features=500; // production default; diagnostic sweeps may override in-process
 
@@ -565,6 +599,7 @@ struct FlowStep {
   double lk_height_scale=1; // initial KLT scale guess from TF-Luna, curr image / prev image
   double flow_cam_x=0,flow_cam_y=0;
   double flow_body_x=0,flow_body_y=0;
+  std::vector<cv::Point2f> inlier_points; // current-frame RANSAC inliers for web diagnostics
 
   // 3x3 spatial diagnostics inside the configured feature ROI.
   // Each cell stores median inlier flow transformed to body FRD.
@@ -644,6 +679,7 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
   for(size_t i=0;i<a.size();++i){if(mask.at<uchar>((int)i)){ai.push_back(a[i]);bi.push_back(b[i]);}}
   o.inliers=(int)ai.size();
   o.inlier_ratio=a.empty()?0.0:(double)ai.size()/a.size();
+  o.inlier_points=bi;
   if(ai.size()<20){ o.invalid_reason=5; return o; }
 
   const int64_t t_post0=monoNs();
@@ -1255,6 +1291,7 @@ int main(int argc,char** argv){
           prev,gray,dt,calib,
           prev_camera_height_valid?prev_camera_height_m:0.0,
           current_camera_height_valid?current_camera_height_m:0.0);
+        web_live.sendPreview(now,gray,s.inlier_points,g_feature_roi);
 
         // Consume the FC gyro for THIS processed camera interval before any
         // bench-only range remapping.  Pure rotational optical flow must remain
