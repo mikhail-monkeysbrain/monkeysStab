@@ -607,8 +607,9 @@ bool sendOpticalFlow(int fd,uint64_t time_usec,float rate_x,float rate_y,uint8_t
 
 FeatureRoi g_feature_roi{};
 int g_max_features=500; // production default; diagnostic sweeps may override in-process
-double g_fb_shadow_max_px=0.0; // 0=disabled; diagnostic A/B only, never changes MAVLink production flow
-bool g_obs_shadow_enabled=true; // D observability arm; dynamic A/B/C tests disable it to save CPU
+double g_fb_shadow_max_px=0.0;
+bool g_obs_shadow_enabled=true;
+bool g_publish_fb_huber=false; // experiment branch: publish C (FB + Huber) instead of legacy A
 
 struct FlowStep {
   bool valid=false;
@@ -1180,6 +1181,9 @@ int main(int argc,char** argv){
     else if(a=="--no-obs-shadow"){
       g_obs_shadow_enabled=false;
     }
+    else if(a=="--publish-fb-huber"){
+      g_publish_fb_huber=true;
+    }
   }
   if(continuous_guided && (continuous_legs<2 || continuous_legs>30)){
     std::cerr<<"ОШИБКА: --continuous-legs разрешён только 2..30\n";
@@ -1226,6 +1230,10 @@ int main(int argc,char** argv){
   }
   if(g_fb_shadow_max_px!=0.0 && !(g_fb_shadow_max_px>=0.1 && g_fb_shadow_max_px<=5.0)){
     std::cerr<<"ОШИБКА: --fb-shadow-max-px должен быть 0 (off) или 0.1..5.0 px\n";
+    return 2;
+  }
+  if(g_publish_fb_huber && g_fb_shadow_max_px<=0.0){
+    std::cerr<<"ОШИБКА: --publish-fb-huber требует --fb-shadow-max-px > 0\n";
     return 2;
   }
 
@@ -1278,8 +1286,15 @@ int main(int argc,char** argv){
     bool csv_limit_reported=false;
     csv<<"mono_ns,camera_ts_ns,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
 
+    if(g_publish_fb_huber){
+      std::cerr<<"======================================================================\n"
+               <<"EXPERIMENTAL PUBLISHER: FB + adaptive Huber IRLS\n"
+               <<"FB threshold: "<<g_fb_shadow_max_px<<" px\n"
+               <<"В FC и Web RAW идёт estimator C, legacy A остаётся только в CSV.\n"
+               <<"======================================================================\n";
+    }
     if(g_fb_shadow_max_px>0.0){
-      std::cerr<<(g_obs_shadow_enabled?"A/B/C/D SHADOW: ":"A/B/C SHADOW: ")
+      std::cerr<<(g_obs_shadow_enabled?"A/B/C/D: ":"A/B/C: ")
                <<"A=production publish, B=FB-consistency <= "
                <<g_fb_shadow_max_px
                <<" px + ordinary LS, C=same B inliers + adaptive Huber IRLS";
@@ -1664,9 +1679,16 @@ int main(int argc,char** argv){
         FlowFcGyro fg{}; double fg_age=1e9; uint64_t fg_samples=0;
         const bool fg_ok=fc.consumeGyroAverage(&fg,&fg_age,&fg_samples);
 
+        const bool publisher_flow_valid =
+          g_publish_fb_huber ? (s.valid && s.robust_shadow_valid) : s.valid;
+        const double publisher_native_x =
+          g_publish_fb_huber ? s.robust_flow_body_x : s.flow_body_x;
+        const double publisher_native_y =
+          g_publish_fb_huber ? s.robust_flow_body_y : s.flow_body_y;
+
         bool flow_sent=false; uint8_t quality=0;
-        double flow_send_x=s.flow_body_x, flow_send_y=s.flow_body_y;
-        if(s.valid && bench_height_override>0.0){
+        double flow_send_x=publisher_native_x, flow_send_y=publisher_native_y;
+        if(publisher_flow_valid && bench_height_override>0.0){
           double real_camera_height=0.0;
           double fake_camera_height=bench_height_override;
           if(std::isfinite(diag_camera_z_m) && std::isfinite(diag_range_z_m)){
@@ -1697,8 +1719,8 @@ int main(int argc,char** argv){
             //
             // This makes AP's post-compensation residual k*translation, which
             // paired with the synthetic range preserves the real metric speed.
-            flow_send_x = fg.x + k*(s.flow_body_x - fg.x);
-            flow_send_y = fg.y + k*(s.flow_body_y - fg.y);
+            flow_send_x = fg.x + k*(publisher_native_x - fg.x);
+            flow_send_y = fg.y + k*(publisher_native_y - fg.y);
           }
         }
         int64_t flow_send_ns=monoNs();
@@ -1706,7 +1728,7 @@ int main(int argc,char** argv){
           (ts>0) ? (flow_send_ns-ts)*1e-6 : -1.0;
         const bool flow_fresh = frame_pipeline_latency_ms>=0.0 &&
                                 frame_pipeline_latency_ms<=kMaxFlowPipelineAgeMs;
-        if(s.valid && flow_fresh && !terrain_step_guard){
+        if(publisher_flow_valid && flow_fresh && !terrain_step_guard){
           quality=255;
           // AP_OpticalFlow_MAV currently timestamps measurement by RECEIVE time,
           // not packet.time_usec, so low pipeline latency is mandatory.
@@ -1714,9 +1736,9 @@ int main(int argc,char** argv){
             (float)flow_send_x,(float)flow_send_y,quality);
           if(flow_sent)++flow_sent_total;
         } else {
-          if(!prev.empty() && !s.valid) ++flow_invalid_total;
-          if(s.valid && !flow_fresh) ++stale_flow_rejected_total;
-          if(s.valid && flow_fresh && terrain_step_guard) ++terrain_step_reject_total;
+          if(!prev.empty() && !publisher_flow_valid) ++flow_invalid_total;
+          if(publisher_flow_valid && !flow_fresh) ++stale_flow_rejected_total;
+          if(publisher_flow_valid && flow_fresh && terrain_step_guard) ++terrain_step_reject_total;
         }
 
         FlowFcLocal ep{}; double eage=1e9; uint64_t ec=0;
@@ -1792,7 +1814,7 @@ int main(int argc,char** argv){
         // This is intentionally diagnostic-only and does not alter publisher/EKF.
         web_raw_step_valid=false;
         web_raw_vn=web_raw_ve=0.0;
-        if(s.valid && flow_sent && fg_ok && dt>0.0 && dt<0.2){
+        if(publisher_flow_valid && flow_sent && fg_ok && dt>0.0 && dt<0.2){
           double hcam=0.0;
           if(bench_true_camera_height>0.0){
             hcam=bench_true_camera_height;
@@ -1800,8 +1822,8 @@ int main(int argc,char** argv){
             hcam=current_camera_height_m;
           }
           if(hcam>0.02 && std::isfinite(hcam)){
-            const double native_fx=s.flow_body_x;
-            const double native_fy=s.flow_body_y;
+            const double native_fx=publisher_native_x;
+            const double native_fy=publisher_native_y;
             const double comp_x=-native_fx + fg.x;
             const double comp_y=-native_fy + fg.y;
             const double vbx=(-comp_y)*hcam;
@@ -1975,7 +1997,7 @@ int main(int argc,char** argv){
           }
         }
 
-        if(return_gui && return_target_set && s.valid && flow_sent && dt>0.0 && dt<0.2){
+        if(return_gui && return_target_set && publisher_flow_valid && flow_sent && dt>0.0 && dt<0.2){
           double hcam=0.0;
           if(bench_true_camera_height>0.0){
             hcam=bench_true_camera_height;
@@ -1988,7 +2010,7 @@ int main(int argc,char** argv){
           if(hcam>0.02){
             // RAW forensic integrates the physical camera measurement,
             // before any synthetic-range remapping used only for ArduPilot.
-            double native_fx=s.flow_body_x, native_fy=s.flow_body_y;
+            double native_fx=publisher_native_x, native_fy=publisher_native_y;
 
             // Legacy/native LOS integral.
             return_raw_x += native_fx*hcam*dt;
