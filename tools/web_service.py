@@ -24,6 +24,7 @@ FC_PROFILE=ROOT/"config"/"fc_profile.json"
 RUN_ROOT=Path(os.environ.get("MONKEYS_RUN_ROOT", str(Path.home()/"monkeysStab_runs")))
 WEB_LOG=RUN_ROOT/"web_runtime.log"
 WEB_ASSETS=ROOT/"web_assets"
+PREVIEW_PATH=Path(os.environ.get("MONKEYS_WEB_PREVIEW_PATH","/dev/shm/monkeysstab_vo_preview.jpg"))
 DEFAULTS={
     "focal_scale":0.931,
     "feature_roi":[0.20,0.32,0.80,0.90],
@@ -257,7 +258,13 @@ def start_live_udp_listener():
         global _live_udp_rx,_live_udp_bad,_camera_jpeg,_camera_last_wall
         sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-        sock.bind(("127.0.0.1",LIVE_UDP_PORT))
+        try:
+            sock.bind(("127.0.0.1",LIVE_UDP_PORT))
+        except OSError as e:
+            _live_udp_bad+=1
+            log_event("ERROR",f"Live telemetry UDP bind failed 127.0.0.1:{LIVE_UDP_PORT}: {e}")
+            sock.close()
+            return
         sock.settimeout(0.5)
         log_event("INFO",f"Live telemetry UDP listener: 127.0.0.1:{LIVE_UDP_PORT}")
         try:
@@ -574,6 +581,11 @@ def start_runtime():
         env["MONKEYS_LOCAL_GUI"]="0"
         env["MONKEYS_FC"]=FC_ENDPOINT
         env["MONKEYS_WEB_TELEMETRY_UDP_PORT"]=str(LIVE_UDP_PORT)
+        env["MONKEYS_WEB_PREVIEW_PATH"]=str(PREVIEW_PATH)
+        try:
+            PREVIEW_PATH.unlink()
+        except FileNotFoundError:
+            pass
         global _live_latest,_live_last_wall,_last_rc_zero_seq
         with _lock:
             _live_latest=None
@@ -1483,10 +1495,22 @@ class H(BaseHTTPRequestHandler):
                 self.send_header("Content-Length",str(len(data)))
                 self.end_headers();self.wfile.write(data)
             elif p=="/api/camera.jpg":
-                with _lock:
-                    data=bytes(_camera_jpeg) if _camera_jpeg else None
-                    age_ms=(time.time()-_camera_last_wall)*1000.0 if _camera_last_wall else None
-                if not data or age_ms is None or age_ms>2000:
+                data=None
+                # Prefer the atomic /dev/shm snapshot produced by the VO
+                # process. Fall back to legacy UDP preview packets.
+                try:
+                    st=PREVIEW_PATH.stat()
+                    if (time.time()-st.st_mtime) <= 2.0:
+                        data=PREVIEW_PATH.read_bytes()
+                except (FileNotFoundError,OSError):
+                    pass
+                if not data:
+                    with _lock:
+                        data=bytes(_camera_jpeg) if _camera_jpeg else None
+                        age_ms=(time.time()-_camera_last_wall)*1000.0 if _camera_last_wall else None
+                    if age_ms is None or age_ms>2000:
+                        data=None
+                if not data:
                     self.send_error(503,"camera preview unavailable")
                 else:
                     self.send_response(200)
