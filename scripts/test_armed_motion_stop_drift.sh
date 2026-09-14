@@ -14,7 +14,10 @@ echo
 echo "ТРЕБОВАНИЯ:"
 echo "  - ПРОПЕЛЛЕРЫ СНЯТЫ"
 echo "  - FC должен быть ARMED до запуска теста"
-echo "  - поверхность и высота произвольные, но не меняются после STOP"
+echo "  - поверхность произвольная"
+echo "  - FC получит СИНТЕТИЧЕСКУЮ высоту 0.60 м, чтобы ArduPilot не занулял"
+echo "    optical flow до takeoff ниже 0.5 м"
+echo "  - реальный TF-Luna продолжит использоваться для метрического масштаба flow"
 echo
 echo "ПРОТОКОЛ:"
 echo "  PRE: 5 с неподвижно"
@@ -119,6 +122,14 @@ export MONKEYS_GUIDED_MM=175
 export MONKEYS_PRE_STATIC_SEC=5
 export MONKEYS_POST_STATIC_SEC=15
 export MONKEYS_LOCAL_GUI=0
+
+# ArduPilot EKF3 intentionally forces optical-flow measurements to zero when
+# takeoff has not been detected and AGL is below 0.5 m. This hand-carried,
+# props-off test never triggers takeoff, so publish 0.60 m to FC only.
+# The production estimator still reads real TF-Luna and run.cpp scales only
+# the translational flow residual so metric motion remains based on real range.
+export MONKEYS_BENCH_HEIGHT=0.60
+unset MONKEYS_BENCH_TRUE_CAMERA_HEIGHT || true
 
 before="$(find "${MONKEYS_RUN_ROOT:-$HOME/monkeysStab_runs}" -mindepth 1 -maxdepth 1 -type d -name '*_OPTICAL_FLOW' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
 
