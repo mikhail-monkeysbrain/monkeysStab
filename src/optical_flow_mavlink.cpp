@@ -636,16 +636,45 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
   FlowStep o;
   if(prev.empty()||curr.empty()||!(dt>0&&dt<0.2)){ o.invalid_reason=1; return o; }
 
-  cv::Mat feature_mask(prev.size(),CV_8UC1,cv::Scalar(0));
   const int x0=std::clamp((int)std::lround(g_feature_roi.x0*prev.cols),0,prev.cols-1);
   const int y0=std::clamp((int)std::lround(g_feature_roi.y0*prev.rows),0,prev.rows-1);
   const int x1=std::clamp((int)std::lround(g_feature_roi.x1*prev.cols),x0+1,prev.cols);
   const int y1=std::clamp((int)std::lround(g_feature_roi.y1*prev.rows),y0+1,prev.rows);
-  feature_mask(cv::Rect(x0,y0,x1-x0,y1-y0)).setTo(255);
 
   std::vector<cv::Point2f> p0,p1;
   const int64_t t_feat0=monoNs();
-  cv::goodFeaturesToTrack(prev,p0,g_max_features,0.01,7,feature_mask);
+
+  // Detect corners independently in a 3x3 grid. A single global GFTT call
+  // normalises quality against the strongest corner in the whole ROI, so a
+  // pair of bright/high-contrast patches can consume nearly all features.
+  // Per-cell GFTT preserves the same qualityLevel/minDistance while allowing
+  // weaker textured regions to contribute real corners. This also improves
+  // conditioning of the downstream translation/scale/yaw fit.
+  constexpr int kFeatureGrid=3;
+  const int per_cell=std::max(1,(g_max_features+kFeatureGrid*kFeatureGrid-1)/
+                                (kFeatureGrid*kFeatureGrid));
+  p0.reserve(g_max_features);
+  for(int gy=0;gy<kFeatureGrid;gy++){
+    const int cy0=y0+(y1-y0)*gy/kFeatureGrid;
+    const int cy1=y0+(y1-y0)*(gy+1)/kFeatureGrid;
+    for(int gx=0;gx<kFeatureGrid;gx++){
+      const int cx0=x0+(x1-x0)*gx/kFeatureGrid;
+      const int cx1=x0+(x1-x0)*(gx+1)/kFeatureGrid;
+      if(cx1<=cx0 || cy1<=cy0) continue;
+
+      const cv::Rect cell(cx0,cy0,cx1-cx0,cy1-cy0);
+      std::vector<cv::Point2f> local;
+      cv::goodFeaturesToTrack(prev(cell),local,per_cell,0.01,7);
+      for(auto p:local){
+        p.x+=(float)cell.x;
+        p.y+=(float)cell.y;
+        p0.push_back(p);
+        if((int)p0.size()>=g_max_features) break;
+      }
+      if((int)p0.size()>=g_max_features) break;
+    }
+    if((int)p0.size()>=g_max_features) break;
+  }
 
   // If the normal ROI becomes texture-starved (typical when crossing a sharp
   // table/floor boundary), widen only the ground-facing part of the image and
