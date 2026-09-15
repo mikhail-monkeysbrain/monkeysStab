@@ -199,6 +199,8 @@ struct FlowFcGyro {
   double roll=0,pitch=0,yaw=0; // ATTITUDE angles, rad
   double x=0,y=0,z=0;          // body FRD roll/pitch/yaw rates, rad/s
   int64_t recv_ns=0;
+  uint32_t time_boot_ms=0;
+  int64_t sample_ns=0; // FC sample time mapped into RPi CLOCK_MONOTONIC
   bool valid=false;
 };
 
@@ -239,7 +241,8 @@ struct FlowFc {
   FlowFcAttTarget att_target{};
   FlowFcOutputs outputs{};
   FlowFcRc rc{};
-  std::deque<FlowFcGyro> attitude_history; // monotonic receive-time history for frame-aligned ΔR
+  std::deque<FlowFcGyro> attitude_history; // FC sample times mapped to RPi monotonic clock
+  int64_t attitude_boot_to_mono_ns=std::numeric_limits<int64_t>::max();
   uint64_t local_count=0;
   uint64_t ekf_count=0;
   uint64_t gyro_count=0;
@@ -420,10 +423,23 @@ struct FlowFc {
               std::lock_guard<std::mutex> l(mu);
               gyro.roll=q.roll; gyro.pitch=q.pitch; gyro.yaw=q.yaw;
               gyro.x=q.rollspeed; gyro.y=q.pitchspeed; gyro.z=q.yawspeed;
-              gyro.recv_ns=monoNs(); gyro.valid=true; ++gyro_count;
+              gyro.recv_ns=monoNs(); gyro.time_boot_ms=q.time_boot_ms;
+              // ATTITUDE carries the FC measurement timestamp. Map FC boot time
+              // into RPi CLOCK_MONOTONIC using the minimum observed receive
+              // offset, which removes variable serial/scheduler latency instead
+              // of pretending recv_ns is the measurement time.
+              {
+                const int64_t boot_ns=(int64_t)q.time_boot_ms*1000000LL;
+                const int64_t observed_offset=gyro.recv_ns-boot_ns;
+                if(attitude_boot_to_mono_ns==std::numeric_limits<int64_t>::max() ||
+                   observed_offset<attitude_boot_to_mono_ns)
+                  attitude_boot_to_mono_ns=observed_offset;
+                gyro.sample_ns=boot_ns+attitude_boot_to_mono_ns;
+              }
+              gyro.valid=true; ++gyro_count;
               attitude_history.push_back(gyro);
               while(attitude_history.size()>2 &&
-                    gyro.recv_ns-attitude_history.front().recv_ns>3000000000LL)
+                    gyro.sample_ns-attitude_history.front().sample_ns>3000000000LL)
                 attitude_history.pop_front();
               gyro_sum_x+=q.rollspeed; gyro_sum_y+=q.pitchspeed; gyro_sum_z+=q.yawspeed;
               ++gyro_sum_count;
@@ -486,14 +502,14 @@ struct FlowFc {
     if(!C1_R_C0 || attitude_history.size()<2 || !(t1_ns>t0_ns)) return false;
 
     auto interp=[&](int64_t t,FlowFcGyro* out,double* gap_ms)->bool{
-      if(t<attitude_history.front().recv_ns || t>attitude_history.back().recv_ns) return false;
+      if(t<attitude_history.front().sample_ns || t>attitude_history.back().sample_ns) return false;
       for(size_t i=1;i<attitude_history.size();++i){
         const auto& a=attitude_history[i-1];
         const auto& b=attitude_history[i];
         if(t>b.recv_ns) continue;
-        const int64_t span=b.recv_ns-a.recv_ns;
+        const int64_t span=b.sample_ns-a.sample_ns;
         if(span<=0) return false;
-        const double u=std::clamp((double)(t-a.recv_ns)/(double)span,0.0,1.0);
+        const double u=std::clamp((double)(t-a.sample_ns)/(double)span,0.0,1.0);
         auto angle_lerp=[&](double x0,double x1){
           double d=std::remainder(x1-x0,2.0*M_PI);
           return x0+u*d;
