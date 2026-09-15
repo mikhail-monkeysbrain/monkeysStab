@@ -66,7 +66,7 @@ _run_record_tmp=None
 _run_record_started_wall=0.0
 _run_record_pending=None
 RUN_RECORD_DIR=RUN_ROOT/"recordings"
-RUN_RECORD_COLUMNS=["wall_time","mono_ns","frame","valid","quality","features","tracked","inliers","range_m","range_age_ms","armed","ekf_valid","x_mm","y_mm","z_mm","ekf_drift_mm","raw_of_valid","raw_of_n_mm","raw_of_e_mm","raw_of_drift_mm","raw_of_vn","raw_of_ve","vx","vy","vz","roll_deg","pitch_deg","yaw_deg"]
+RUN_RECORD_COLUMNS=["wall_time","mono_ns","frame","valid","quality","features","tracked","inliers","range_m","range_age_ms","armed","ekf_valid","x_mm","y_mm","z_mm","ekf_drift_mm","raw_of_valid","raw_of_n_mm","raw_of_e_mm","raw_of_drift_mm","raw_of_vn","raw_of_ve","vx","vy","vz","roll_deg","pitch_deg","yaw_deg","ctrl_target_valid","ctrl_target_x","ctrl_target_y","ctrl_target_vx","ctrl_target_vy","att_target_valid","att_target_roll_deg","att_target_pitch_deg","att_target_yaw_deg","att_target_thrust"]
 LIVE_UDP_PORT=int(os.environ.get("MONKEYS_WEB_TELEMETRY_UDP_PORT","8766"))
 FC_ENDPOINT="tcp://127.0.0.1:5760"
 GEOMETRY_PARAMS=["FLOW_POS_X","FLOW_POS_Y","FLOW_POS_Z","RNGFND1_POS_X","RNGFND1_POS_Y","RNGFND1_POS_Z"]
@@ -252,6 +252,16 @@ def live_payload(raw):
         "roll_deg":raw.get("roll_deg",0.0),
         "pitch_deg":raw.get("pitch_deg",0.0),
         "yaw_deg":raw.get("yaw_deg",0.0),
+        "ctrl_target_valid":bool(raw.get("ctrl_target_valid",False)),
+        "ctrl_target_x":raw.get("ctrl_target_x"),
+        "ctrl_target_y":raw.get("ctrl_target_y"),
+        "ctrl_target_vx":raw.get("ctrl_target_vx"),
+        "ctrl_target_vy":raw.get("ctrl_target_vy"),
+        "att_target_valid":bool(raw.get("att_target_valid",False)),
+        "att_target_roll_deg":raw.get("att_target_roll_deg"),
+        "att_target_pitch_deg":raw.get("att_target_pitch_deg"),
+        "att_target_yaw_deg":raw.get("att_target_yaw_deg"),
+        "att_target_thrust":raw.get("att_target_thrust"),
     }
     with _lock:
         _live_latest=out
