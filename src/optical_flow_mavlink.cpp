@@ -902,6 +902,7 @@ int main(int argc,char** argv){
   double bench_takeoff_delta_m=0.0;
   double bench_takeoff_hold_sec=0.40;
   double bench_airborne_height_m=0.60;
+  double bench_takeoff_pulse_sec=1.50;
   double pre_static_sec=5.0;
   double post_static_sec=5.0;
   std::string remote_log_path;
@@ -924,6 +925,7 @@ int main(int argc,char** argv){
     else if(a=="--bench-takeoff-delta" && i+1<argc) bench_takeoff_delta_m=std::stod(argv[++i]);
     else if(a=="--bench-takeoff-hold" && i+1<argc) bench_takeoff_hold_sec=std::stod(argv[++i]);
     else if(a=="--bench-airborne-height" && i+1<argc) bench_airborne_height_m=std::stod(argv[++i]);
+    else if(a=="--bench-takeoff-pulse" && i+1<argc) bench_takeoff_pulse_sec=std::stod(argv[++i]);
     else if(a=="--remote-log" && i+1<argc) remote_log_path=argv[++i];
     else if(a=="--pre-static-sec" && i+1<argc) pre_static_sec=std::stod(argv[++i]);
     else if(a=="--post-static-sec" && i+1<argc) post_static_sec=std::stod(argv[++i]);
@@ -967,6 +969,10 @@ int main(int argc,char** argv){
   }
   if(bench_takeoff_delta_m>0.0 && !(bench_airborne_height_m>=0.51 && bench_airborne_height_m<=2.0)){
     std::cerr<<"ОШИБКА: --bench-airborne-height разрешён только 0.51..2.0 м\n";
+    return 2;
+  }
+  if(bench_takeoff_delta_m>0.0 && !(bench_takeoff_pulse_sec>=0.5 && bench_takeoff_pulse_sec<=5.0)){
+    std::cerr<<"ОШИБКА: --bench-takeoff-pulse разрешён только 0.5..5.0 с\n";
     return 2;
   }
   if(bench_takeoff_delta_m>0.0 && bench_height_override>0.0){
@@ -1049,6 +1055,7 @@ int main(int argc,char** argv){
     std::deque<double> bench_baseline_samples;
     int64_t bench_baseline_begin_ns=0;
     int64_t bench_candidate_since_ns=0;
+    int64_t bench_airborne_latched_ns=0;
 
     double terrain_prev_range_m=0.0;
     bool terrain_prev_range_valid=false;
@@ -1357,6 +1364,7 @@ int main(int argc,char** argv){
             bench_baseline_samples.clear();
             bench_baseline_begin_ns=0;
             bench_candidate_since_ns=0;
+            bench_airborne_latched_ns=0;
           } else {
             if(!bench_arm_seen){
               bench_arm_seen=true;
@@ -1383,9 +1391,11 @@ int main(int argc,char** argv){
                 if(bench_candidate_since_ns==0) bench_candidate_since_ns=now;
                 if((now-bench_candidate_since_ns)*1e-9>=bench_takeoff_hold_sec){
                   bench_airborne=true;
+                  bench_airborne_latched_ns=now;
                   std::cerr<<"BENCH TAKEOFF: AIRBORNE LATCHED; real="<<lm
                            <<" м delta="<<(lm-bench_baseline_m)
-                           <<" м; FC range="<<bench_airborne_height_m<<" м\n";
+                           <<" м; FC range pulse="<<bench_airborne_height_m
+                           <<" м for "<<bench_takeoff_pulse_sec<<" s\n";
                 }
               } else {
                 bench_candidate_since_ns=0;
@@ -1394,9 +1404,19 @@ int main(int argc,char** argv){
           }
         }
 
+        const bool bench_takeoff_pulse_active =
+          bench_takeoff_delta_m>0.0 && bench_airborne &&
+          bench_airborne_latched_ns>0 &&
+          (now-bench_airborne_latched_ns)*1e-9 < bench_takeoff_pulse_sec;
         const double active_bench_height =
-          (bench_takeoff_delta_m>0.0 && bench_airborne) ? bench_airborne_height_m :
+          bench_takeoff_pulse_active ? bench_airborne_height_m :
           ((bench_height_override>0.0) ? bench_height_override : 0.0);
+        static bool bench_pulse_return_logged=false;
+        if(bench_airborne && !bench_takeoff_pulse_active && !bench_pulse_return_logged){
+          std::cerr<<"BENCH TAKEOFF: synthetic pulse complete; FC range returned to REAL TF-Luna\n";
+          bench_pulse_return_logged=true;
+        }
+        if(!bench_airborne) bench_pulse_return_logged=false;
         const double range_to_fc=(active_bench_height>0.0)?active_bench_height:lm;
 
         // A downward rangefinder can jump from table to floor (or back) while the
