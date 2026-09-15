@@ -1959,6 +1959,7 @@ int main(int argc,char** argv){
            <<s.du_px<<','<<s.dv_px<<','<<s.du_norm<<','<<s.dv_norm<<','<<s.yaw_rate_cam_z<<','
            <<s.scale_rate<<','<<s.lk_height_scale<<','
            <<s.flow_cam_x<<','<<s.flow_cam_y<<','<<s.flow_body_x<<','<<s.flow_body_y<<','
+           <<(s.dr_shadow_valid?1:0)<<','<<s.dr_flow_body_x<<','<<s.dr_flow_body_y<<','<<s.dr_scale_rate<<','<<s.dr_interp_gap_ms<<','
            <<(g_fb_shadow_max_px>0.0?1:0)<<','<<g_fb_shadow_max_px<<','<<s.fb_checked<<','<<s.fb_pass<<','<<s.fb_ratio<<','<<s.fb_inliers<<','<<(s.fb_shadow_valid?1:0)<<','<<s.fb_flow_body_x<<','<<s.fb_flow_body_y<<','<<s.fb_t_ms<<','
            <<(s.robust_shadow_valid?1:0)<<','<<s.robust_flow_body_x<<','<<s.robust_flow_body_y<<','<<s.robust_sigma<<','<<s.robust_mean_weight<<','<<s.robust_downweighted<<','<<s.robust_iters<<','
            <<(s.obs_shadow_valid?1:0)<<','<<s.obs_flow_body_x<<','<<s.obs_flow_body_y<<','<<s.obs_median_ratio<<','<<s.obs_mean_weight<<','<<s.obs_downweighted<<','
