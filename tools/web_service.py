@@ -17,7 +17,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from collections import deque
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 ROOT=Path(__file__).resolve().parents[1]
 CONFIG=ROOT/"config"/"runtime.json"
@@ -1730,8 +1730,15 @@ class H(BaseHTTPRequestHandler):
                     with zipfile.ZipFile(bio,"w",zipfile.ZIP_DEFLATED) as z:
                         for fp in files:z.write(fp,arcname=fp.name)
                     data=bio.getvalue();filename="monkeysStab_logs.zip";ctype="application/zip"
+                # BaseHTTPRequestHandler encodes header values as latin-1.
+                # Keep the legacy filename ASCII-only and put the exact Unicode
+                # run name (Cyrillic, ΔR, etc.) into RFC 5987 filename*.
+                safe_ascii=re.sub(r'[^A-Za-z0-9._-]+','_',filename)
+                if not safe_ascii or safe_ascii in ('.','..'):
+                    safe_ascii='run_log.csv' if len(files)==1 else 'monkeysStab_logs.zip'
+                disposition='attachment; filename="'+safe_ascii+'"; filename*=UTF-8\'\''+quote(filename,safe='')
                 self.send_response(200);self.send_header("Content-Type",ctype)
-                self.send_header("Content-Disposition",'attachment; filename="'+filename.replace('"','_')+'"')
+                self.send_header("Content-Disposition",disposition)
                 self.send_header("Content-Length",str(len(data)));self.end_headers();self.wfile.write(data)
             else:self.send_json({"error":"not found"},404)
         except Exception as e:self.send_json({"error":str(e)},500)
