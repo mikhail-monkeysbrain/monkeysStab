@@ -694,10 +694,6 @@ def start_runtime():
         env["MONKEYS_FC"]=FC_ENDPOINT
         env["MONKEYS_WEB_TELEMETRY_UDP_PORT"]=str(LIVE_UDP_PORT)
         env["MONKEYS_WEB_PREVIEW_PATH"]=str(PREVIEW_PATH)
-        # Diagnostic A/B/C/D shadow estimator. Production publish remains arm A.
-        # Keep this explicit in the web lifecycle so a normal START SYSTEM run
-        # captures FB/Huber/observability candidates from the exact same frames.
-        env["MONKEYS_FB_SHADOW_MAX_PX"]="1.0"
         try:
             PREVIEW_PATH.unlink()
         except FileNotFoundError:
