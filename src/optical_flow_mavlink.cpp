@@ -640,6 +640,11 @@ struct FlowStep {
   double gyro_shadow_scale_rate=0.0;
   double gyro_shadow_flow_body_x=0.0,gyro_shadow_flow_body_y=0.0;
   double gyro_shadow_send_x=0.0,gyro_shadow_send_y=0.0;
+  // Sign-forensic diagnostic. For the SAME RANSAC inliers, compare two
+  // hypotheses for the FC-gyro rotational image field. In each arm nuisance
+  // translation X/Y + isotropic scale are refitted; lower residual wins.
+  double gyro_sign_rms_pos=0.0,gyro_sign_rms_neg=0.0;
+  int gyro_sign_samples=0;
 
   // V2 shadow: remove the full known camera rotation ΔR before fitting XY
   // translation/scale. Diagnostic only until A/B tests prove an improvement.
@@ -1101,6 +1106,30 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
         o.gyro_shadow_flow_body_x=gfb[0];o.gyro_shadow_flow_body_y=gfb[1];
         o.gyro_shadow_send_x=gfb[0];o.gyro_shadow_send_y=gfb[1];
         o.gyro_shadow_valid=std::isfinite(o.gyro_shadow_scale_rate)&&std::isfinite(gfb[0])&&std::isfinite(gfb[1]);
+
+        // Direct sign test. Refit nuisance tx/ty/scale under both +gyro and
+        // -gyro rotational hypotheses and record normalized-flow RMS residual.
+        auto signResidual=[&](double sign)->double{
+          cv::Mat As((int)ai.size()*2,3,CV_64F), bs((int)ai.size()*2,1,CV_64F);
+          for(size_t k=0;k<ai.size();++k){
+            const double x=(double)au[k].x,y=(double)au[k].y;
+            const double du=(double)bu[k].x-au[k].x,dv=(double)bu[k].y-au[k].y;
+            const double wx=sign*wc[0],wy=sign*wc[1],wz=sign*wc[2];
+            const double dur=du-(-x*y*wx+(1.0+x*x)*wy-y*wz)*dt;
+            const double dvr=dv-(-(1.0+y*y)*wx+x*y*wy+x*wz)*dt;
+            As.at<double>((int)(2*k),0)=1.0; As.at<double>((int)(2*k),1)=0.0; As.at<double>((int)(2*k),2)=x;
+            bs.at<double>((int)(2*k),0)=dur;
+            As.at<double>((int)(2*k+1),0)=0.0; As.at<double>((int)(2*k+1),1)=1.0; As.at<double>((int)(2*k+1),2)=y;
+            bs.at<double>((int)(2*k+1),0)=dvr;
+          }
+          cv::Mat ss;
+          if(!cv::solve(As,bs,ss,cv::DECOMP_SVD)||ss.rows!=3)return std::numeric_limits<double>::quiet_NaN();
+          const cv::Mat rr=As*ss-bs;
+          return std::sqrt(rr.dot(rr)/std::max(1,rr.rows));
+        };
+        o.gyro_sign_rms_pos=signResidual(+1.0);
+        o.gyro_sign_rms_neg=signResidual(-1.0);
+        o.gyro_sign_samples=(int)ai.size();
       }
     }
   }
@@ -1339,7 +1368,7 @@ int main(int argc,char** argv){
     constexpr std::streamoff kCsvMaxBytes=250LL*1024LL*1024LL;
     bool csv_logging_enabled=true;
     bool csv_limit_reported=false;
-    csv<<"mono_ns,camera_ts_ns,v4l2_timestamp_ns,camera_dequeue_ns,v4l2_flags,v4l2_to_dequeue_ms,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,gyro_shadow_valid,gyro_shadow_scale_rate,gyro_shadow_flow_body_x,gyro_shadow_flow_body_y,gyro_shadow_send_x,gyro_shadow_send_y,lever_valid,lever_production_applied,lever_flow_body_x,lever_flow_body_y,lever_pred_flow_x,lever_pred_flow_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
+    csv<<"mono_ns,camera_ts_ns,v4l2_timestamp_ns,camera_dequeue_ns,v4l2_flags,v4l2_to_dequeue_ms,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,gyro_shadow_valid,gyro_shadow_scale_rate,gyro_shadow_flow_body_x,gyro_shadow_flow_body_y,gyro_shadow_send_x,gyro_shadow_send_y,gyro_sign_rms_pos,gyro_sign_rms_neg,gyro_sign_samples,lever_valid,lever_production_applied,lever_flow_body_x,lever_flow_body_y,lever_pred_flow_x,lever_pred_flow_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
 
     if(g_fb_shadow_max_px>0.0){
       std::cerr<<(g_obs_shadow_enabled?"A/B/C/D SHADOW: ":"A/B/C SHADOW: ")
