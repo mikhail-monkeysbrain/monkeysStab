@@ -1674,10 +1674,25 @@ int main(int argc,char** argv){
           fail("VIDIOC_DQBUF");
         }
         const int64_t bts=(int64_t)b.timestamp.tv_sec*1000000000LL+(int64_t)b.timestamp.tv_usec*1000LL;
+        // V4L2 timestamps are only comparable with monoNs()/ATTITUDE recv_ns
+        // when the driver explicitly marks them MONOTONIC. Some UVC drivers
+        // expose a different clock domain; using b.timestamp directly then
+        // makes frame-aligned ΔR valid only accidentally. Convert each dequeued
+        // frame to our monotonic domain using its dequeue age when possible.
+        const int64_t dq_mono_ns=monoNs();
+        int64_t frame_mono_ns=bts;
+#ifdef V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC
+        if((b.flags & V4L2_BUF_FLAG_TIMESTAMP_MASK)!=V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC){
+          // We cannot infer an absolute offset from an unknown clock safely.
+          // For the freshest-frame policy below, dequeue time is the best
+          // bounded monotonic timestamp and preserves ordering.
+          frame_mono_ns=dq_mono_ns;
+        }
+#endif
         if(!latest_jpeg.empty()) ++camera_queue_dropped;
         const uint8_t* pjpeg=reinterpret_cast<const uint8_t*>(cam.bufs[b.index].p);
         latest_jpeg.assign(pjpeg,pjpeg+b.bytesused);
-        ts=bts;
+        ts=frame_mono_ns;
         if(xioctl(cam.fd,VIDIOC_QBUF,&b)<0)fail("VIDIOC_QBUF");
       }
       if(latest_jpeg.empty()) continue;
