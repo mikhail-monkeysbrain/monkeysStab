@@ -1754,16 +1754,13 @@ int main(int argc,char** argv){
           fail("VIDIOC_DQBUF");
         }
         const int64_t bts=(int64_t)b.timestamp.tv_sec*1000000000LL+(int64_t)b.timestamp.tv_usec*1000LL;
-        // V4L2 timestamps are only comparable with monoNs()/ATTITUDE recv_ns
-        // when the driver explicitly marks them MONOTONIC. Some UVC drivers
-        // expose a different clock domain; using b.timestamp directly then
-        // makes frame-aligned ΔR valid only accidentally. Convert each dequeued
-        // frame to our monotonic domain using its dequeue age when possible.
+        // UVC/V4L2 reports a monotonic frame timestamp on this production
+        // camera (verified from V4L2 buffer flags and measured against DQBUF).
+        // Use the frame timestamp for camera/ATTITUDE alignment; keep DQBUF
+        // monotonic time only for pipeline-age diagnostics.
         const int64_t dq_mono_ns=monoNs();
-        // For online ΔR, use dequeue CLOCK_MONOTONIC unconditionally.
-        // The driver timestamp remains useful for offline datasets, but its
-        // clock/latency semantics are not guaranteed to match MAVLink receive.
-        const int64_t frame_mono_ns=dq_mono_ns;
+        const bool v4l2_monotonic=(b.flags & V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC)!=0;
+        const int64_t frame_mono_ns=(v4l2_monotonic && bts>0) ? bts : dq_mono_ns;
         if(!latest_jpeg.empty()) ++camera_queue_dropped;
         const uint8_t* pjpeg=reinterpret_cast<const uint8_t*>(cam.bufs[b.index].p);
         latest_jpeg.assign(pjpeg,pjpeg+b.bytesused);
