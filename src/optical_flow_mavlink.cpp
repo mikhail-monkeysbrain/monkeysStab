@@ -713,6 +713,13 @@ struct FlowStep {
   double dr_scale_rate=0.0;
   double dr_interp_gap_ms=-1.0;
 
+  // Lever-arm shadow: convert optical flow measured at the displaced camera
+  // focal point to the FC/IMU reference point using v_cam = omega x r.
+  // Diagnostic only: NEVER sent to FC until a yaw regression proves it.
+  bool lever_shadow_valid=false;
+  double lever_flow_body_x=0.0,lever_flow_body_y=0.0;
+  double lever_pred_flow_x=0.0,lever_pred_flow_y=0.0;
+
   // Diagnostic A/B shadow path. A is the production result above. B applies
   // forward/backward KLT consistency to the SAME forward correspondences, then
   // runs the same homography RANSAC and 4-parameter fit. B is never sent to FC.
@@ -1406,7 +1413,7 @@ int main(int argc,char** argv){
     constexpr std::streamoff kCsvMaxBytes=250LL*1024LL*1024LL;
     bool csv_logging_enabled=true;
     bool csv_limit_reported=false;
-    csv<<"mono_ns,camera_ts_ns,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,dr_valid,dr_flow_body_x,dr_flow_body_y,dr_scale_rate,dr_interp_gap_ms,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
+    csv<<"mono_ns,camera_ts_ns,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,dr_valid,dr_flow_body_x,dr_flow_body_y,dr_scale_rate,dr_interp_gap_ms,lever_valid,lever_flow_body_x,lever_flow_body_y,lever_pred_flow_x,lever_pred_flow_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
 
     if(g_fb_shadow_max_px>0.0){
       std::cerr<<(g_obs_shadow_enabled?"A/B/C/D SHADOW: ":"A/B/C SHADOW: ")
@@ -1809,6 +1816,32 @@ int main(int argc,char** argv){
         FlowFcGyro fg{}; double fg_age=1e9; uint64_t fg_samples=0;
         const bool fg_ok=fc.consumeGyroAverage(&fg,&fg_age,&fg_samples);
 
+        // Lever-arm shadow. flow_body_x/y are angular image rates in AP body
+        // convention, not linear velocity. For a downward camera, a camera
+        // translation [vx,vy] produces approximately [-vy/h,+vx/h].
+        // Camera focal-point velocity caused only by body rotation is omega x r.
+        // r is the already audited camera position relative to the FC IMU in FRD.
+        if(s.valid && fg_ok && current_camera_height_valid &&
+           current_camera_height_m>0.05 &&
+           std::isfinite(diag_camera_x_m) && std::isfinite(diag_camera_y_m) &&
+           std::isfinite(diag_camera_z_m)){
+          const cv::Vec3d omega(fg.x,fg.y,fg.z);
+          const cv::Vec3d r_cam(diag_camera_x_m,diag_camera_y_m,diag_camera_z_m);
+          const cv::Vec3d v_lever=omega.cross(r_cam);
+          const double pred_x=-v_lever[1]/current_camera_height_m;
+          const double pred_y= v_lever[0]/current_camera_height_m;
+          const double corrected_x=s.flow_body_x-pred_x;
+          const double corrected_y=s.flow_body_y-pred_y;
+          if(std::isfinite(corrected_x) && std::isfinite(corrected_y) &&
+             std::hypot(corrected_x,corrected_y)<4.0){
+            s.lever_shadow_valid=true;
+            s.lever_pred_flow_x=pred_x;
+            s.lever_pred_flow_y=pred_y;
+            s.lever_flow_body_x=corrected_x;
+            s.lever_flow_body_y=corrected_y;
+          }
+        }
+
         bool flow_sent=false; uint8_t quality=0;
         double flow_send_x=s.flow_body_x, flow_send_y=s.flow_body_y;
         if(s.valid && bench_height_override>0.0){
@@ -1992,6 +2025,8 @@ int main(int argc,char** argv){
            <<s.scale_rate<<','<<s.lk_height_scale<<','
            <<s.flow_cam_x<<','<<s.flow_cam_y<<','<<s.flow_body_x<<','<<s.flow_body_y<<','
            <<(s.dr_shadow_valid?1:0)<<','<<s.dr_flow_body_x<<','<<s.dr_flow_body_y<<','<<s.dr_scale_rate<<','<<s.dr_interp_gap_ms<<','
+           <<(s.lever_shadow_valid?1:0)<<','<<s.lever_flow_body_x<<','<<s.lever_flow_body_y<<','
+           <<s.lever_pred_flow_x<<','<<s.lever_pred_flow_y<<','
            <<(g_fb_shadow_max_px>0.0?1:0)<<','<<g_fb_shadow_max_px<<','<<s.fb_checked<<','<<s.fb_pass<<','<<s.fb_ratio<<','<<s.fb_inliers<<','<<(s.fb_shadow_valid?1:0)<<','<<s.fb_flow_body_x<<','<<s.fb_flow_body_y<<','<<s.fb_t_ms<<','
            <<(s.robust_shadow_valid?1:0)<<','<<s.robust_flow_body_x<<','<<s.robust_flow_body_y<<','<<s.robust_sigma<<','<<s.robust_mean_weight<<','<<s.robust_downweighted<<','<<s.robust_iters<<','
            <<(s.obs_shadow_valid?1:0)<<','<<s.obs_flow_body_x<<','<<s.obs_flow_body_y<<','<<s.obs_median_ratio<<','<<s.obs_mean_weight<<','<<s.obs_downweighted<<','
