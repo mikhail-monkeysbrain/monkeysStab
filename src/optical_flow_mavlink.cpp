@@ -244,6 +244,12 @@ struct FlowFc {
   uint64_t gyro_count=0;
   double gyro_sum_x=0,gyro_sum_y=0,gyro_sum_z=0;
   uint64_t gyro_sum_count=0;
+  // ATTITUDE samples keyed by local monotonic receive time. Camera timestamps
+  // use the same monotonic clock, so optical-flow rotation compensation can
+  // use exactly the samples belonging to [prev_ts, ts] instead of samples
+  // accumulated between two CPU-side consume calls.
+  std::deque<FlowFcGyro> gyro_history;
+  static constexpr int64_t kGyroHistoryNs=2000000000LL;
   bool armed=false;
   bool heartbeat_valid=false;
   int64_t heartbeat_recv_ns=0;
@@ -422,6 +428,10 @@ struct FlowFc {
               gyro.recv_ns=monoNs(); gyro.valid=true; ++gyro_count;
               gyro_sum_x+=q.rollspeed; gyro_sum_y+=q.pitchspeed; gyro_sum_z+=q.yawspeed;
               ++gyro_sum_count;
+              gyro_history.push_back(gyro);
+              const int64_t keep_after=gyro.recv_ns-kGyroHistoryNs;
+              while(!gyro_history.empty() && gyro_history.front().recv_ns<keep_after)
+                gyro_history.pop_front();
             } else if(m.msgid==MAVLINK_MSG_ID_LOCAL_POSITION_NED){
               mavlink_local_position_ned_t q{}; mavlink_msg_local_position_ned_decode(&m,&q);
               std::lock_guard<std::mutex> l(mu);
@@ -539,21 +549,34 @@ struct FlowFc {
     return true;
   }
 
-  bool consumeGyroAverage(FlowFcGyro* out,double* age_ms,uint64_t* sample_count=nullptr){
+  bool gyroAverageForInterval(int64_t begin_ns,int64_t end_ns,
+                              FlowFcGyro* out,double* age_ms,
+                              uint64_t* sample_count=nullptr){
     std::lock_guard<std::mutex> l(mu);
-    if(!gyro.valid)return false;
-    *out=gyro;
-    if(gyro_sum_count>0){
-      out->x=gyro_sum_x/gyro_sum_count;
-      out->y=gyro_sum_y/gyro_sum_count;
-      out->z=gyro_sum_z/gyro_sum_count;
-      if(sample_count)*sample_count=gyro_sum_count;
-      gyro_sum_x=gyro_sum_y=gyro_sum_z=0.0;
-      gyro_sum_count=0;
-    } else {
-      if(sample_count)*sample_count=0;
+    if(!gyro.valid || begin_ns<=0 || end_ns<=begin_ns)return false;
+
+    double sx=0.0,sy=0.0,sz=0.0;
+    double sr=0.0,sp=0.0;
+    double syaw_sin=0.0,syaw_cos=0.0;
+    uint64_t n=0;
+    int64_t newest_ns=0;
+    for(const auto& g:gyro_history){
+      if(g.recv_ns<begin_ns)continue;
+      if(g.recv_ns>end_ns)break;
+      sx+=g.x; sy+=g.y; sz+=g.z;
+      sr+=g.roll; sp+=g.pitch;
+      syaw_sin+=std::sin(g.yaw); syaw_cos+=std::cos(g.yaw);
+      newest_ns=g.recv_ns; ++n;
     }
-    if(age_ms)*age_ms=(monoNs()-gyro.recv_ns)*1e-6;
+    if(n==0)return false;
+
+    *out=gyro;
+    out->x=sx/n; out->y=sy/n; out->z=sz/n;
+    out->roll=sr/n; out->pitch=sp/n;
+    out->yaw=std::atan2(syaw_sin/n,syaw_cos/n);
+    out->recv_ns=newest_ns; out->valid=true;
+    if(sample_count)*sample_count=n;
+    if(age_ms)*age_ms=(monoNs()-newest_ns)*1e-6;
     return true;
   }
 
@@ -1465,11 +1488,11 @@ int main(int argc,char** argv){
           current_camera_height_valid?current_camera_height_m:0.0);
         web_live.sendPreview(now,gray,s.inlier_points,g_feature_roi);
 
-        // Consume the FC gyro for THIS processed camera interval before any
-        // bench-only range remapping.  Pure rotational optical flow must remain
-        // unscaled so ArduPilot can cancel it with bodyRate X/Y.
+        // Time-align FC ATTITUDE/gyro to the actual processed camera interval.
+        // This is deliberately independent of CPU processing cadence/backlog.
         FlowFcGyro fg{}; double fg_age=1e9; uint64_t fg_samples=0;
-        const bool fg_ok=fc.consumeGyroAverage(&fg,&fg_age,&fg_samples);
+        const bool fg_ok=prev_ts>0 &&
+          fc.gyroAverageForInterval(prev_ts,ts,&fg,&fg_age,&fg_samples);
 
         bool flow_sent=false; uint8_t quality=0;
         double flow_send_x=s.flow_body_x, flow_send_y=s.flow_body_y;
