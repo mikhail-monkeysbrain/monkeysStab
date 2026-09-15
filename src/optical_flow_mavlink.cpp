@@ -768,9 +768,10 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
   // image motion that is used to estimate translation: that coupling leaked
   // pure body yaw into tx/ty on the current slightly tilted camera mount.
   //
-  // For normalized OpenCV coordinates and camera angular rate [wx,wy,wz]:
-  //   du_rot/dt = -x*y*wx + (1+x*x)*wy - y*wz
-  //   dv_rot/dt = -(1+y*y)*wx + x*y*wy + x*wz
+  // For a stationary world ray observed by a rotating OpenCV camera,
+  // qdot_C = -omega_C x q_C. In normalized coordinates this gives:
+  //   du_rot/dt =  x*y*wx - (1+x*x)*wy + y*wz
+  //   dv_rot/dt = (1+y*y)*wx - x*y*wy - x*wz
   //
   // After subtracting this known rotational field, fit only translation and
   // isotropic scale (vertical motion).
@@ -781,8 +782,8 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
     const double y=(double)au[k].y;
     const double du=(double)bu[k].x-au[k].x;
     const double dv=(double)bu[k].y-au[k].y;
-    const double du_rot=(-x*y*camera_omega[0] +(1.0+x*x)*camera_omega[1] -y*camera_omega[2])*dt;
-    const double dv_rot=(-(1.0+y*y)*camera_omega[0] +x*y*camera_omega[1] +x*camera_omega[2])*dt;
+    const double du_rot=(x*y*camera_omega[0] -(1.0+x*x)*camera_omega[1] +y*camera_omega[2])*dt;
+    const double dv_rot=((1.0+y*y)*camera_omega[0] -x*y*camera_omega[1] -x*camera_omega[2])*dt;
     A.at<double>((int)(2*k),0)=1.0;
     A.at<double>((int)(2*k),1)=0.0;
     A.at<double>((int)(2*k),2)=x;
@@ -835,8 +836,8 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
         if(cy*3+cx!=ci) continue;
         const double x=(double)au[k].x, y=(double)au[k].y;
         const double sdt=o.scale_rate*dt;
-        const double du_rot=(-x*y*camera_omega[0] +(1.0+x*x)*camera_omega[1] -y*camera_omega[2])*dt;
-        const double dv_rot=(-(1.0+y*y)*camera_omega[0] +x*y*camera_omega[1] +x*camera_omega[2])*dt;
+        const double du_rot=(x*y*camera_omega[0] -(1.0+x*x)*camera_omega[1] +y*camera_omega[2])*dt;
+        const double dv_rot=((1.0+y*y)*camera_omega[0] -x*y*camera_omega[1] -x*camera_omega[2])*dt;
         cdu_clean.push_back(((double)bu[k].x-au[k].x) - du_rot - sdt*x);
         cdv_clean.push_back(((double)bu[k].y-au[k].y) - dv_rot - sdt*y);
       }
