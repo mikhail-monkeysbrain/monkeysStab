@@ -37,13 +37,15 @@ MAX_FEATURES="${MONKEYS_MAX_FEATURES:-$CFG_MAX_FEATURES}"
 LOCAL_GUI="${MONKEYS_LOCAL_GUI:-$CFG_LOCAL_GUI}"
 GEOMETRY_JSON="${MONKEYS_GEOMETRY_JSON:-$ROOT/config/mount_geometry.json}"
 [[ -f "$GEOMETRY_JSON" ]] || { echo "ОШИБКА: geometry config не найден: $GEOMETRY_JSON" >&2; exit 2; }
-read -r CFG_CAMERA_Z CFG_RANGE_Z < <(python3 - "$GEOMETRY_JSON" <<'PY'
+read -r CFG_CAMERA_X CFG_CAMERA_Y CFG_CAMERA_Z CFG_RANGE_Z < <(python3 - "$GEOMETRY_JSON" <<'PY'
 import json,sys
 with open(sys.argv[1], "r", encoding="utf-8") as f:
     g=json.load(f)
-print(g["camera"]["z"], g["rangefinder"]["z"])
+print(g["camera"]["x"], g["camera"]["y"], g["camera"]["z"], g["rangefinder"]["z"])
 PY
 )
+CAMERA_X_M="${MONKEYS_CAMERA_X_M:-$CFG_CAMERA_X}"
+CAMERA_Y_M="${MONKEYS_CAMERA_Y_M:-$CFG_CAMERA_Y}"
 CAMERA_Z_M="${MONKEYS_CAMERA_Z_M:-$CFG_CAMERA_Z}"
 RANGE_Z_M="${MONKEYS_RANGE_Z_M:-$CFG_RANGE_Z}"
 if [[ -z "${MAVLINK_ROOT:-}" ]]; then
@@ -135,6 +137,8 @@ ARGS=(
   "$CAMERA" "$LUNA" "$FC" "$CSV" "$CAMERA_YAML" "$FOCAL_SCALE"
   --feature-roi "$RX0" "$RY0" "$RX1" "$RY1"
   --max-features "$MAX_FEATURES"
+  --diag-camera-x-m "$CAMERA_X_M"
+  --diag-camera-y-m "$CAMERA_Y_M"
   --diag-camera-z-m "$CAMERA_Z_M"
   --diag-range-z-m "$RANGE_Z_M"
 )
