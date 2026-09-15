@@ -632,7 +632,8 @@ struct FlowStep {
 };
 
 FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const CameraCalib& calib,
-                         double prev_camera_height_m=0.0,double curr_camera_height_m=0.0){
+                         double prev_camera_height_m=0.0,double curr_camera_height_m=0.0,
+                         const cv::Vec3d& camera_omega=cv::Vec3d(0,0,0)){
   FlowStep o;
   if(prev.empty()||curr.empty()||!(dt>0&&dt<0.2)){ o.invalid_reason=1; return o; }
 
@@ -762,49 +763,47 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
     cell_du[ci].push_back(du);
     cell_dv[ci].push_back(dv);
   }
-  // Separate horizontal translation from two motions that must NOT become
-  // horizontal velocity:
-  //   1) optical-axis rotation (yaw),
-  //   2) isotropic image scaling caused by vertical motion (change of height).
+  // Remove rotation from every tracked feature using the independent FC gyro
+  // transformed into the real camera frame.  Do not estimate yaw from the same
+  // image motion that is used to estimate translation: that coupling leaked
+  // pure body yaw into tx/ty on the current slightly tilted camera mount.
   //
-  // On undistorted normalized coordinates:
-  //   du = tx + s*x - wz*y
-  //   dv = ty + s*y + wz*x
+  // For normalized OpenCV coordinates and camera angular rate [wx,wy,wz]:
+  //   du_rot/dt = -x*y*wx + (1+x*x)*wy - y*wz
+  //   dv_rot/dt = -(1+y*y)*wx + x*y*wy + x*wz
   //
-  // tx/ty are the constant image translation that ArduPilot needs. s is the
-  // inter-frame scale change (mainly Z motion) and wz is camera-axis rotation.
-  // The old 3-parameter fit omitted s, so a rapid climb/descent could leak the
-  // radial scale field into tx/ty when features were not perfectly symmetric.
-  cv::Mat A((int)ai.size()*2,4,CV_64F);
+  // After subtracting this known rotational field, fit only translation and
+  // isotropic scale (vertical motion).
+  cv::Mat A((int)ai.size()*2,3,CV_64F);
   cv::Mat bb((int)ai.size()*2,1,CV_64F);
   for(size_t k=0;k<ai.size();++k){
     const double x=(double)au[k].x;
     const double y=(double)au[k].y;
     const double du=(double)bu[k].x-au[k].x;
     const double dv=(double)bu[k].y-au[k].y;
-    A.at<double>((int)(2*k),0)=1.0;   // tx
-    A.at<double>((int)(2*k),1)=0.0;   // ty
-    A.at<double>((int)(2*k),2)=x;     // scale
-    A.at<double>((int)(2*k),3)=-y;    // yaw
-    bb.at<double>((int)(2*k),0)=du;
+    const double du_rot=(-x*y*camera_omega[0] +(1.0+x*x)*camera_omega[1] -y*camera_omega[2])*dt;
+    const double dv_rot=(-(1.0+y*y)*camera_omega[0] +x*y*camera_omega[1] +x*camera_omega[2])*dt;
+    A.at<double>((int)(2*k),0)=1.0;
+    A.at<double>((int)(2*k),1)=0.0;
+    A.at<double>((int)(2*k),2)=x;
+    bb.at<double>((int)(2*k),0)=du-du_rot;
     A.at<double>((int)(2*k+1),0)=0.0;
     A.at<double>((int)(2*k+1),1)=1.0;
     A.at<double>((int)(2*k+1),2)=y;
-    A.at<double>((int)(2*k+1),3)=x;
-    bb.at<double>((int)(2*k+1),0)=dv;
+    bb.at<double>((int)(2*k+1),0)=dv-dv_rot;
   }
   cv::Mat sol;
   const bool fit_ok=cv::solve(A,bb,sol,cv::DECOMP_SVD);
-  if(fit_ok && sol.rows==4){
+  if(fit_ok && sol.rows==3){
     o.du_norm=sol.at<double>(0,0);
     o.dv_norm=sol.at<double>(1,0);
     o.scale_rate=sol.at<double>(2,0)/dt;
-    o.yaw_rate_cam_z=sol.at<double>(3,0)/dt;
+    o.yaw_rate_cam_z=camera_omega[2];
   } else {
     o.du_norm=median(dun);
     o.dv_norm=median(dvn);
     o.scale_rate=0.0;
-    o.yaw_rate_cam_z=0.0;
+    o.yaw_rate_cam_z=camera_omega[2];
   }
   o.du_px=median(dup); o.dv_px=median(dvp);
 
@@ -835,10 +834,11 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
         const int cy=std::clamp((int)std::floor(ny*3.0),0,2);
         if(cy*3+cx!=ci) continue;
         const double x=(double)au[k].x, y=(double)au[k].y;
-        const double wzdt=o.yaw_rate_cam_z*dt;
         const double sdt=o.scale_rate*dt;
-        cdu_clean.push_back(((double)bu[k].x-au[k].x) - sdt*x + wzdt*y);
-        cdv_clean.push_back(((double)bu[k].y-au[k].y) - sdt*y - wzdt*x);
+        const double du_rot=(-x*y*camera_omega[0] +(1.0+x*x)*camera_omega[1] -y*camera_omega[2])*dt;
+        const double dv_rot=(-(1.0+y*y)*camera_omega[0] +x*y*camera_omega[1] +x*camera_omega[2])*dt;
+        cdu_clean.push_back(((double)bu[k].x-au[k].x) - du_rot - sdt*x);
+        cdv_clean.push_back(((double)bu[k].y-au[k].y) - dv_rot - sdt*y);
       }
       const double cdu=cdu_clean.empty()?median(cell_du[ci]):median(cdu_clean);
       const double cdv=cdv_clean.empty()?median(cell_dv[ci]):median(cdv_clean);
@@ -1458,18 +1458,25 @@ int main(int argc,char** argv){
         }
 
         const double dt=prev_ts?(ts-prev_ts)*1e-9:0.0;
+
+        // Consume the FC gyro over this camera interval before estimating flow.
+        // ATTITUDE rates are body FRD. Convert FRD -> body FLU, then body FLU
+        // -> camera using the audited T_BS rotation.
+        FlowFcGyro fg{}; double fg_age=1e9; uint64_t fg_samples=0;
+        const bool fg_ok=fc.consumeGyroAverage(&fg,&fg_age,&fg_samples);
+        cv::Vec3d camera_omega(0,0,0);
+        if(fg_ok){
+          const cv::Vec3d omega_body_flu(fg.x,-fg.y,-fg.z);
+          camera_omega=calib.B_R_C.t()*omega_body_flu;
+        }
+
         FlowStep s;
         if(!prev.empty())s=estimateRawFlow(
           prev,gray,dt,calib,
           prev_camera_height_valid?prev_camera_height_m:0.0,
-          current_camera_height_valid?current_camera_height_m:0.0);
+          current_camera_height_valid?current_camera_height_m:0.0,
+          camera_omega);
         web_live.sendPreview(now,gray,s.inlier_points,g_feature_roi);
-
-        // Consume the FC gyro for THIS processed camera interval before any
-        // bench-only range remapping.  Pure rotational optical flow must remain
-        // unscaled so ArduPilot can cancel it with bodyRate X/Y.
-        FlowFcGyro fg{}; double fg_age=1e9; uint64_t fg_samples=0;
-        const bool fg_ok=fc.consumeGyroAverage(&fg,&fg_age,&fg_samples);
 
         bool flow_sent=false; uint8_t quality=0;
         double flow_send_x=s.flow_body_x, flow_send_y=s.flow_body_y;
