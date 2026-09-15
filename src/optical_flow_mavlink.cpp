@@ -779,45 +779,6 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
   o.tracked=(int)a.size();
   if(a.size()<20){ o.invalid_reason=3; return o; }
 
-  // Targeted dropout forensic: run only on suspicious high-motion / low-consensus
-  // candidates would be too late because production RANSAC is below.  The deep
-  // homography is cheap on healthy frames in practice, and is diagnostic only.
-  {
-    const int64_t td0=monoNs();
-    cv::Mat deep_mask;
-    cv::findHomography(a,b,cv::RANSAC,2.0,deep_mask,5000,0.999);
-    o.dropout_deep_ransac_ms=(monoNs()-td0)*1e-6;
-    if(!deep_mask.empty()){
-      o.dropout_deep_inliers=cv::countNonZero(deep_mask);
-      o.dropout_deep_ratio=(double)o.dropout_deep_inliers/std::max<size_t>(1,a.size());
-    }
-
-    const int64_t tf0=monoNs();
-    o.dropout_fb_checked=(int)a.size();
-    std::vector<cv::Point2f> back;
-    std::vector<uchar> st_back;
-    std::vector<float> err_back;
-    cv::calcOpticalFlowPyrLK(curr,prev,b,back,st_back,err_back,{21,21},3,
-                             cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,30,0.01),
-                             0,1e-4);
-    std::vector<cv::Point2f> af,bf;
-    af.reserve(a.size()); bf.reserve(a.size());
-    constexpr double kDropoutFbMaxPx=1.5;
-    for(size_t i=0;i<a.size();++i){
-      if(!st_back[i]) continue;
-      const double e=cv::norm(back[i]-a[i]);
-      if(std::isfinite(e) && e<=kDropoutFbMaxPx){ af.push_back(a[i]); bf.push_back(b[i]); }
-    }
-    o.dropout_fb_pass=(int)af.size();
-    o.dropout_fb_ratio=(double)o.dropout_fb_pass/std::max(1,o.dropout_fb_checked);
-    if(af.size()>=20){
-      cv::Mat fb_mask;
-      cv::findHomography(af,bf,cv::RANSAC,2.0,fb_mask,5000,0.999);
-      if(!fb_mask.empty()) o.dropout_fb_deep_inliers=cv::countNonZero(fb_mask);
-    }
-    o.dropout_fb_ms=(monoNs()-tf0)*1e-6;
-  }
-
   // B shadow: forward/backward consistency on exactly the correspondences used
   // by production A. This makes A/B share frames, GFTT points, forward KLT and
   // dt; only the FB gate differs. The extra work exists only in explicit A/B
@@ -1039,6 +1000,49 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
   o.inliers=(int)ai.size();
   o.inlier_ratio=a.empty()?0.0:(double)ai.size()/a.size();
   o.inlier_points=bi;
+
+  // Consensus-dropout forensic: expensive shadows run only when production
+  // consensus is suspicious. Production acceptance and published flow remain
+  // unchanged. Keep this before the <20-inlier return so invalid dropout
+  // frames are diagnosed too.
+  constexpr double kDropoutDiagRatio=0.20;
+  constexpr int kDropoutDiagInliers=80;
+  if(o.inlier_ratio<kDropoutDiagRatio || o.inliers<kDropoutDiagInliers){
+    const int64_t td0=monoNs();
+    cv::Mat deep_mask;
+    cv::findHomography(a,b,cv::RANSAC,2.0,deep_mask,5000,0.999);
+    o.dropout_deep_ransac_ms=(monoNs()-td0)*1e-6;
+    if(!deep_mask.empty()){
+      o.dropout_deep_inliers=cv::countNonZero(deep_mask);
+      o.dropout_deep_ratio=(double)o.dropout_deep_inliers/std::max<size_t>(1,a.size());
+    }
+
+    const int64_t tf0=monoNs();
+    o.dropout_fb_checked=(int)a.size();
+    std::vector<cv::Point2f> back;
+    std::vector<uchar> st_back;
+    std::vector<float> err_back;
+    cv::calcOpticalFlowPyrLK(curr,prev,b,back,st_back,err_back,{21,21},3,
+                             cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,30,0.01),
+                             0,1e-4);
+    std::vector<cv::Point2f> af,bf;
+    af.reserve(a.size()); bf.reserve(a.size());
+    constexpr double kDropoutFbMaxPx=1.5;
+    for(size_t i=0;i<a.size();++i){
+      if(!st_back[i]) continue;
+      const double e=cv::norm(back[i]-a[i]);
+      if(std::isfinite(e) && e<=kDropoutFbMaxPx){ af.push_back(a[i]); bf.push_back(b[i]); }
+    }
+    o.dropout_fb_pass=(int)af.size();
+    o.dropout_fb_ratio=(double)o.dropout_fb_pass/std::max(1,o.dropout_fb_checked);
+    if(af.size()>=20){
+      cv::Mat fb_mask;
+      cv::findHomography(af,bf,cv::RANSAC,2.0,fb_mask,5000,0.999);
+      if(!fb_mask.empty()) o.dropout_fb_deep_inliers=cv::countNonZero(fb_mask);
+    }
+    o.dropout_fb_ms=(monoNs()-tf0)*1e-6;
+  }
+
   if(ai.size()<20){ o.invalid_reason=5; return o; }
 
   const int64_t t_post0=monoNs();
