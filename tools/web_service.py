@@ -2,6 +2,7 @@
 import base64
 import csv
 import hashlib
+import io
 import json
 import math
 import re
@@ -12,10 +13,11 @@ import socket
 import subprocess
 import threading
 import time
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from collections import deque
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 ROOT=Path(__file__).resolve().parents[1]
 CONFIG=ROOT/"config"/"runtime.json"
@@ -58,6 +60,17 @@ _live_udp_bad=0
 _camera_jpeg=None
 _camera_last_wall=0.0
 _last_rc_zero_seq=None
+_run_record_handle=None
+_run_record_tmp=None
+_run_record_started_wall=0.0
+_run_record_pending=None
+RUN_RECORD_DIR=RUN_ROOT/"recordings"
+RUN_RECORD_COLUMNS=[
+    "wall_time","mono_ns","frame","valid","quality","features","tracked","inliers",
+    "range_m","range_age_ms","armed","ekf_valid","x_mm","y_mm","z_mm","ekf_drift_mm",
+    "raw_of_valid","raw_of_n_mm","raw_of_e_mm","raw_of_drift_mm","raw_of_vn","raw_of_ve",
+    "vx","vy","vz","roll_deg","pitch_deg","yaw_deg"
+]
 LIVE_UDP_PORT=int(os.environ.get("MONKEYS_WEB_TELEMETRY_UDP_PORT","8766"))
 FC_ENDPOINT="tcp://127.0.0.1:5760"
 GEOMETRY_PARAMS=["FLOW_POS_X","FLOW_POS_Y","FLOW_POS_Z","RNGFND1_POS_X","RNGFND1_POS_Y","RNGFND1_POS_Z"]
@@ -247,6 +260,7 @@ def live_payload(raw):
     with _lock:
         _live_latest=out
         _live_last_wall=time.time()
+    _record_sample(out)
     return out
 
 def start_live_udp_listener():
@@ -354,6 +368,104 @@ def websocket_session(handler):
         pass
     finally:
         with _ws_lock:_ws_clients.discard(sock)
+
+def _record_sample(sample):
+    global _run_record_handle
+    with _lock:
+        h=_run_record_handle
+        if h is None:
+            return
+        row={"wall_time":time.time()}
+        row.update(sample)
+        try:
+            csv.writer(h).writerow([row.get(k,"") for k in RUN_RECORD_COLUMNS])
+            h.flush()
+        except Exception as e:
+            log_event("ERROR","Ошибка записи прогона: "+str(e))
+
+def run_record_status():
+    with _lock:
+        return {
+            "recording":_run_record_handle is not None,
+            "started_wall":_run_record_started_wall or None,
+            "pending_name":_run_record_pending is not None,
+        }
+
+def start_run_record():
+    global _run_record_handle,_run_record_tmp,_run_record_started_wall,_run_record_pending
+    with _lock:
+        if _run_record_handle is not None:
+            return {"ok":True,**run_record_status()}
+        if _run_record_pending is not None:
+            raise RuntimeError("Сначала сохраните имя предыдущего прогона")
+        RUN_RECORD_DIR.mkdir(parents=True,exist_ok=True)
+        stamp=time.strftime("%Y%m%d_%H%M%S")
+        _run_record_tmp=RUN_RECORD_DIR/(".active_"+stamp+".csv")
+        _run_record_handle=open(_run_record_tmp,"w",encoding="utf-8",newline="",buffering=1)
+        csv.writer(_run_record_handle).writerow(RUN_RECORD_COLUMNS)
+        _run_record_started_wall=time.time()
+    log_event("INFO","Запись прогона начата")
+    return {"ok":True,**run_record_status()}
+
+def stop_run_record():
+    global _run_record_handle,_run_record_pending
+    with _lock:
+        if _run_record_handle is None:
+            return {"ok":True,**run_record_status()}
+        try:_run_record_handle.close()
+        finally:_run_record_handle=None
+        _run_record_pending=_run_record_tmp
+    log_event("INFO","Запись прогона остановлена — ожидается имя")
+    return {"ok":True,**run_record_status()}
+
+def _safe_run_name(name):
+    name=str(name or "").strip()
+    if not name:
+        raise ValueError("Введите название прогона")
+    name=re.sub(r'[\\/:*?"<>|]+',"_",name)
+    name=re.sub(r"\s+"," ",name).strip(" .")
+    if not name:
+        raise ValueError("Некорректное название прогона")
+    return name[:100]
+
+def finalize_run_record(name):
+    global _run_record_pending,_run_record_tmp,_run_record_started_wall
+    with _lock:
+        src=_run_record_pending
+        if src is None or not Path(src).exists():
+            raise RuntimeError("Нет остановленного прогона для сохранения")
+        clean=_safe_run_name(name)
+        stamp=time.strftime("%Y%m%d_%H%M%S",time.localtime(_run_record_started_wall or time.time()))
+        dst=RUN_RECORD_DIR/(stamp+"_"+clean+".csv")
+        n=2
+        while dst.exists():
+            dst=RUN_RECORD_DIR/(stamp+"_"+clean+f"_{n}.csv");n+=1
+        os.replace(src,dst)
+        _run_record_pending=None
+        _run_record_tmp=None
+        _run_record_started_wall=0.0
+    log_event("INFO","Прогон сохранён: "+dst.name)
+    return {"ok":True,"name":dst.name}
+
+def list_run_records():
+    RUN_RECORD_DIR.mkdir(parents=True,exist_ok=True)
+    out=[]
+    for p in RUN_RECORD_DIR.glob("*.csv"):
+        if p.name.startswith(".active_"):continue
+        try:
+            st=p.stat()
+            out.append({"name":p.name,"size":st.st_size,"mtime":st.st_mtime})
+        except OSError:pass
+    out.sort(key=lambda x:x["mtime"],reverse=True)
+    return out
+
+def _selected_run_files(names):
+    available={x["name"]:RUN_RECORD_DIR/x["name"] for x in list_run_records()}
+    selected=[]
+    for name in names:
+        if name in available:selected.append(available[name])
+    if not selected:raise ValueError("Не выбраны логи")
+    return selected
 
 def log_event(level,text):
     with _lock:
@@ -917,6 +1029,7 @@ button{cursor:pointer}
    <div id="saveMsg" style="font-size:11px;color:#7798ae;margin-top:5px"></div>
    <button class="startBig" onclick="start()">▶ ЗАПУСТИТЬ СИСТЕМУ</button>
    <button class="stopBig" onclick="stop()">■ ОСТАНОВИТЬ</button>
+   <button id="runRecordBtn" class="btn blue" style="width:100%;margin-top:8px" onclick="toggleRunRecord()">● ЗАПИСЬ ПРОГОНА</button>
    <div id="runtimeError" style="display:none;margin-top:8px;padding:8px;border:1px solid #8b3038;border-radius:5px;background:#271018;color:#ff7b86;font:11px/1.35 ui-monospace,monospace;white-space:pre-wrap;max-height:180px;overflow:auto"></div>
   </div>
 
@@ -1079,9 +1192,30 @@ button{cursor:pointer}
  <div class="viewPage">
   <h2>Журнал Web UI / Runtime</h2>
   <p style="color:#86a7bf">До 500 последних событий приложения. Сообщения ArduPilot STATUSTEXT находятся на view «Полёт».</p>
+  <div class="actionBar" style="margin-bottom:12px"><button class="btn blue" onclick="openLogsModal()">СКАЧАТЬ ЛОГИ</button></div>
   <div id="journalEvents" class="eventList"></div>
  </div>
 </section>
+
+<div id="runNameModal" style="display:none;position:fixed;inset:0;background:#000a;z-index:100;align-items:center;justify-content:center">
+ <div class="card" style="width:min(520px,92vw);padding:18px">
+  <h3 style="margin-top:0">Название прогона</h3>
+  <input id="runNameInput" type="text" maxlength="100" placeholder="Например: X+500_return_01" style="width:100%;margin:10px 0">
+  <div id="runNameMsg" style="color:#ff7b86;font-size:12px;min-height:18px"></div>
+  <div class="actionBar"><button class="btn green" onclick="saveRunName()">СОХРАНИТЬ ПРОГОН</button></div>
+ </div>
+</div>
+
+<div id="logsModal" style="display:none;position:fixed;inset:0;background:#000a;z-index:100;align-items:center;justify-content:center">
+ <div class="card" style="width:min(720px,94vw);max-height:80vh;overflow:auto;padding:18px">
+  <h3 style="margin-top:0">Сохранённые прогоны</h3>
+  <div id="logsList"></div>
+  <div class="actionBar" style="margin-top:14px">
+   <button class="btn green" onclick="downloadSelectedLogs()">СКАЧАТЬ ВЫБРАННЫЕ</button>
+   <button class="btn" onclick="closeLogsModal()">ЗАКРЫТЬ</button>
+  </div>
+ </div>
+</div>
 
 <section id="view-system" class="appView">
  <div class="viewPage">
@@ -1213,6 +1347,48 @@ async function writeGeometry(){
  $('geometryMsg').textContent='Запись и проверка...';
  try{await api('/api/geometry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values})});$('geometryMsg').textContent='Геометрия записана и синхронизирована';await loadGeometry();await loadConfig()}
  catch(e){$('geometryMsg').textContent='Ошибка: '+e.message;alert(e.message)}
+}
+let runRecording=false;
+async function refreshRunRecordStatus(){
+ try{
+  let j=await api('/api/run-record/status');runRecording=!!j.recording;
+  let b=$('runRecordBtn');if(b){b.textContent=runRecording?'■ ОСТАНОВКА ПРОГОНА':'● ЗАПИСЬ ПРОГОНА';b.classList.toggle('red',runRecording)}
+  if(j.pending_name && !$('runNameModal').style.display.includes('flex'))openRunNameModal();
+ }catch(e){}
+}
+async function toggleRunRecord(){
+ try{
+  if(!runRecording){
+   await api('/api/run-record/start',{method:'POST'});runRecording=true;
+  }else{
+   await api('/api/run-record/stop',{method:'POST'});runRecording=false;openRunNameModal();
+  }
+  await refreshRunRecordStatus();
+ }catch(e){alert(e.message)}
+}
+function openRunNameModal(){
+ $('runNameModal').style.display='flex';$('runNameInput').value='';$('runNameMsg').textContent='';
+ setTimeout(()=>$('runNameInput').focus(),50);
+}
+async function saveRunName(){
+ let name=$('runNameInput').value.trim();if(!name){$('runNameMsg').textContent='Введите название прогона';return}
+ try{
+  await api('/api/run-record/finalize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+  $('runNameModal').style.display='none';await refreshJournal();
+ }catch(e){$('runNameMsg').textContent=e.message}
+}
+async function openLogsModal(){
+ $('logsModal').style.display='flex';$('logsList').innerHTML='Загрузка...';
+ try{
+  let j=await api('/api/run-logs'),logs=j.logs||[];
+  $('logsList').innerHTML=logs.length?logs.map((x,i)=>'<label style="display:grid;grid-template-columns:24px 1fr auto;gap:8px;padding:8px;border-bottom:1px solid #173047"><input type="checkbox" class="runLogCheck" value="'+escapeHtml(x.name)+'"><span>'+escapeHtml(x.name)+'</span><span style="color:#86a7bf">'+(x.size/1024).toFixed(1)+' КБ</span></label>').join(''):'Логов пока нет';
+ }catch(e){$('logsList').textContent='Ошибка: '+e.message}
+}
+function closeLogsModal(){$('logsModal').style.display='none'}
+function downloadSelectedLogs(){
+ let names=[...document.querySelectorAll('.runLogCheck:checked')].map(x=>x.value);
+ if(!names.length){alert('Выберите хотя бы один лог');return}
+ location.href='/api/run-logs/download?names='+encodeURIComponent(names.join('\n'));
 }
 async function refreshJournal(){
  if(!$('journalEvents'))return;
@@ -1468,8 +1644,8 @@ async function refreshVoPreview(){
  }catch(e){st.textContent='нет кадра'}
  finally{voPreviewBusy=false}
 }
-loadConfig();initGL();connectTelemetryWs();refreshRuntimeStatus();refreshMessages();refreshFc();refreshJournal();refreshVoPreview();
-setInterval(refreshRuntimeStatus,1000);setInterval(refreshMessages,1800);setInterval(refreshFc,1800);setInterval(refreshJournal,3000);setInterval(refreshVoPreview,200);
+loadConfig();initGL();connectTelemetryWs();refreshRuntimeStatus();refreshMessages();refreshFc();refreshJournal();refreshRunRecordStatus();refreshVoPreview();
+setInterval(refreshRuntimeStatus,1000);setInterval(refreshMessages,1800);setInterval(refreshFc,1800);setInterval(refreshJournal,3000);setInterval(refreshRunRecordStatus,1500);setInterval(refreshVoPreview,200);
 window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';if(vm==='light'&&latest)drawLightScene(latest);else renderScene();if(latest)drawHistory(latest.history||[])});
 </script>
 </body>
@@ -1553,6 +1729,24 @@ class H(BaseHTTPRequestHandler):
                 with _lock: self.send_json({"events":list(_messages)})
             elif p=="/api/journal":
                 self.send_json({"events":journal_events()})
+            elif p=="/api/run-record/status":
+                self.send_json(run_record_status())
+            elif p=="/api/run-logs":
+                self.send_json({"logs":list_run_records()})
+            elif p=="/api/run-logs/download":
+                q=parse_qs(urlparse(self.path).query)
+                names=(q.get("names",[""])[0]).split("\n")
+                files=_selected_run_files(names)
+                if len(files)==1:
+                    fp=files[0];data=fp.read_bytes();filename=fp.name;ctype="text/csv; charset=utf-8"
+                else:
+                    bio=io.BytesIO()
+                    with zipfile.ZipFile(bio,"w",zipfile.ZIP_DEFLATED) as z:
+                        for fp in files:z.write(fp,arcname=fp.name)
+                    data=bio.getvalue();filename="monkeysStab_logs.zip";ctype="application/zip"
+                self.send_response(200);self.send_header("Content-Type",ctype)
+                self.send_header("Content-Disposition",'attachment; filename="'+filename.replace('"','_')+'"')
+                self.send_header("Content-Length",str(len(data)));self.end_headers();self.wfile.write(data)
             else:self.send_json({"error":"not found"},404)
         except Exception as e:self.send_json({"error":str(e)},500)
     def do_POST(self):
@@ -1564,6 +1758,9 @@ class H(BaseHTTPRequestHandler):
             elif p=="/api/start": self.send_json(start_runtime())
             elif p=="/api/stop": self.send_json(stop_runtime())
             elif p=="/api/zero": set_zero();self.send_json({"ok":True})
+            elif p=="/api/run-record/start": self.send_json(start_run_record())
+            elif p=="/api/run-record/stop": self.send_json(stop_run_record())
+            elif p=="/api/run-record/finalize": self.send_json(finalize_run_record(self.body_json().get("name","")))
             elif p=="/api/fc/arm":
                 out=fc_control("arm");log_event("WARN","ARM подтверждён FC");self.send_json(out)
             elif p=="/api/fc/disarm":

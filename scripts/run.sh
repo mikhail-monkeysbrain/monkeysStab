@@ -94,7 +94,7 @@ fi
 }
 
 STAMP="$(date +%Y%m%d_%H%M%S)"
-RUN_DIR="$RUN_ROOT/${STAMP}_OPTICAL_FLOW"
+RUN_DIR="${MONKEYS_RUN_DIR:-$RUN_ROOT/${STAMP}_OPTICAL_FLOW}"
 mkdir -p "$RUN_DIR"
 BIN="$RUN_DIR/monkeysstab_optical_flow"
 CSV="$RUN_DIR/optical_flow_mavlink.csv"
@@ -140,6 +140,33 @@ ARGS=(
 )
 if [[ "$LOCAL_GUI" == "1" || "$LOCAL_GUI" == "true" || "$LOCAL_GUI" == "yes" ]]; then
   ARGS+=(--rotation-gui)
+fi
+if [[ -n "${MONKEYS_DATASET_DIR:-}" ]]; then
+  ARGS+=(--dataset-dir "$MONKEYS_DATASET_DIR")
+fi
+if [[ -n "${MONKEYS_DATASET_SURFACE:-}" ]]; then
+  ARGS+=(--dataset-surface "$MONKEYS_DATASET_SURFACE")
+fi
+if [[ -n "${MONKEYS_DATASET_DURATION_SEC:-}" ]]; then
+  ARGS+=(--dataset-duration-sec "$MONKEYS_DATASET_DURATION_SEC")
+fi
+if [[ -n "${MONKEYS_FB_SHADOW_MAX_PX:-}" ]]; then
+  ARGS+=(--fb-shadow-max-px "$MONKEYS_FB_SHADOW_MAX_PX")
+fi
+if [[ "${MONKEYS_NO_OBS_SHADOW:-0}" == "1" ]]; then
+  ARGS+=(--no-obs-shadow)
+fi
+if [[ -n "${MONKEYS_GUIDED_MM:-}" ]]; then
+  ARGS+=(--guided-mm "$MONKEYS_GUIDED_MM")
+fi
+if [[ -n "${MONKEYS_CONTINUOUS_LEGS:-}" ]]; then
+  ARGS+=(--continuous-legs "$MONKEYS_CONTINUOUS_LEGS")
+fi
+if [[ -n "${MONKEYS_PRE_STATIC_SEC:-}" ]]; then
+  ARGS+=(--pre-static-sec "$MONKEYS_PRE_STATIC_SEC")
+fi
+if [[ -n "${MONKEYS_POST_STATIC_SEC:-}" ]]; then
+  ARGS+=(--post-static-sec "$MONKEYS_POST_STATIC_SEC")
 fi
 
 # Diagnostic-only environment hooks. They do not change the default web/flight runtime.
