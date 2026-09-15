@@ -899,6 +899,9 @@ int main(int argc,char** argv){
   double diag_range_z_m=std::numeric_limits<double>::quiet_NaN();
   double bench_height_override=0.0;
   double bench_true_camera_height=0.0;
+  double bench_takeoff_delta_m=0.0;
+  double bench_takeoff_hold_sec=0.40;
+  double bench_airborne_height_m=0.60;
   double pre_static_sec=5.0;
   double post_static_sec=5.0;
   std::string remote_log_path;
@@ -918,6 +921,9 @@ int main(int argc,char** argv){
     else if(a=="--diag-range-z-m" && i+1<argc) diag_range_z_m=std::stod(argv[++i]);
     else if(a=="--bench-height" && i+1<argc) bench_height_override=std::stod(argv[++i]);
     else if(a=="--bench-true-camera-height" && i+1<argc) bench_true_camera_height=std::stod(argv[++i]);
+    else if(a=="--bench-takeoff-delta" && i+1<argc) bench_takeoff_delta_m=std::stod(argv[++i]);
+    else if(a=="--bench-takeoff-hold" && i+1<argc) bench_takeoff_hold_sec=std::stod(argv[++i]);
+    else if(a=="--bench-airborne-height" && i+1<argc) bench_airborne_height_m=std::stod(argv[++i]);
     else if(a=="--remote-log" && i+1<argc) remote_log_path=argv[++i];
     else if(a=="--pre-static-sec" && i+1<argc) pre_static_sec=std::stod(argv[++i]);
     else if(a=="--post-static-sec" && i+1<argc) post_static_sec=std::stod(argv[++i]);
@@ -949,6 +955,22 @@ int main(int argc,char** argv){
   }
   if(bench_true_camera_height>0.0 && bench_height_override<=0.0){
     std::cerr<<"ОШИБКА: --bench-true-camera-height требует --bench-height\n";
+    return 2;
+  }
+  if(bench_takeoff_delta_m!=0.0 && !(bench_takeoff_delta_m>=0.02 && bench_takeoff_delta_m<=0.30)){
+    std::cerr<<"ОШИБКА: --bench-takeoff-delta разрешён только 0.02..0.30 м\n";
+    return 2;
+  }
+  if(bench_takeoff_delta_m>0.0 && !(bench_takeoff_hold_sec>=0.10 && bench_takeoff_hold_sec<=2.0)){
+    std::cerr<<"ОШИБКА: --bench-takeoff-hold разрешён только 0.10..2.0 с\n";
+    return 2;
+  }
+  if(bench_takeoff_delta_m>0.0 && !(bench_airborne_height_m>=0.51 && bench_airborne_height_m<=2.0)){
+    std::cerr<<"ОШИБКА: --bench-airborne-height разрешён только 0.51..2.0 м\n";
+    return 2;
+  }
+  if(bench_takeoff_delta_m>0.0 && bench_height_override>0.0){
+    std::cerr<<"ОШИБКА: dynamic bench takeoff нельзя совмещать с постоянным --bench-height\n";
     return 2;
   }
   if(!(pre_static_sec>=1.0&&pre_static_sec<=30.0) || !(post_static_sec>=1.0&&post_static_sec<=30.0)){
@@ -1013,6 +1035,21 @@ int main(int argc,char** argv){
     uint64_t terrain_step_reject_total=0;
     bool bridge_pending=false;
     int64_t last_range_send_ns=0;
+
+    // Web bench takeoff detector.  It deliberately does NOT modify ArduPilot
+    // state.  Before a physical lift it publishes the real TF-Luna range.
+    // After an ARMED lift of +delta sustained for hold_sec it latches AIRBORNE
+    // until DISARM and only then publishes a synthetic >0.5 m range to bypass
+    // EKF3's pre-takeoff optical-flow zeroing.  The real TF-Luna continues to
+    // set the metric optical-flow scale.
+    bool bench_airborne=false;
+    bool bench_arm_seen=false;
+    bool bench_baseline_valid=false;
+    double bench_baseline_m=0.0;
+    std::deque<double> bench_baseline_samples;
+    int64_t bench_baseline_begin_ns=0;
+    int64_t bench_candidate_since_ns=0;
+
     double terrain_prev_range_m=0.0;
     bool terrain_prev_range_valid=false;
     int64_t terrain_guard_until_ns=0;
@@ -1241,6 +1278,14 @@ int main(int argc,char** argv){
                <<" m range_z="<<diag_range_z_m
                <<" m, camera-range dz="<<(diag_camera_z_m-diag_range_z_m)<<" m\n";
     }
+    if(bench_takeoff_delta_m>0.0){
+      std::cerr<<"BENCH TAKEOFF DETECTOR: после ARM фиксируется стартовый TF-Luna; "
+               <<"подъём +"<<bench_takeoff_delta_m<<" м в течение "
+               <<bench_takeoff_hold_sec<<" с защёлкивает AIRBORNE до DISARM.\n"
+               <<"До AIRBORNE FC получает реальный range; после AIRBORNE FC получает "
+               <<bench_airborne_height_m<<" м, а реальный TF-Luna остаётся масштабом flow.\n"
+               <<"ЭТО ТОЛЬКО СТЕНДОВАЯ ДИАГНОСТИКА, НЕ FLIGHT-РЕЖИМ.\n";
+    }
     if(bench_height_override>0.0){
       std::cerr<<"BENCH HEIGHT OVERRIDE: FC получает "<<bench_height_override
                <<" м вместо реального TF-Luna.\n";
@@ -1297,14 +1342,69 @@ int main(int argc,char** argv){
         const bool hl=luna.latest(&lm,&strength,&lns);
         const double lage=hl?(now-lns)*1e-6:1e9;
         bool range_sent=false;
-        const double range_to_fc=(bench_height_override>0.0)?bench_height_override:lm;
+
+        bool arm_for_bench=false; double arm_for_bench_age=1e9;
+        const bool arm_for_bench_ok=fc.latestArm(&arm_for_bench,&arm_for_bench_age) &&
+                                    arm_for_bench_age<2500.0;
+        if(bench_takeoff_delta_m>0.0){
+          if(!arm_for_bench_ok || !arm_for_bench){
+            if(bench_arm_seen || bench_airborne || bench_baseline_valid){
+              std::cerr<<"BENCH TAKEOFF: DISARM/heartbeat loss -> reset to ON_GROUND\n";
+            }
+            bench_airborne=false;
+            bench_arm_seen=false;
+            bench_baseline_valid=false;
+            bench_baseline_samples.clear();
+            bench_baseline_begin_ns=0;
+            bench_candidate_since_ns=0;
+          } else {
+            if(!bench_arm_seen){
+              bench_arm_seen=true;
+              bench_baseline_samples.clear();
+              bench_baseline_begin_ns=now;
+              bench_candidate_since_ns=0;
+              std::cerr<<"BENCH TAKEOFF: ARMED; собираю стартовую высоту TF-Luna ~1 с\n";
+            }
+            if(!bench_baseline_valid && hl && lage<100.0 && lm>0.05){
+              bench_baseline_samples.push_back(lm);
+              if(bench_baseline_samples.size()>100) bench_baseline_samples.pop_front();
+              if(now-bench_baseline_begin_ns>=1000000000LL && bench_baseline_samples.size()>=10){
+                std::vector<double> v(bench_baseline_samples.begin(),bench_baseline_samples.end());
+                std::sort(v.begin(),v.end());
+                bench_baseline_m=v[v.size()/2];
+                bench_baseline_valid=true;
+                std::cerr<<"BENCH TAKEOFF: H_start="<<bench_baseline_m
+                         <<" м; порог="<<(bench_baseline_m+bench_takeoff_delta_m)<<" м\n";
+              }
+            }
+            if(bench_baseline_valid && !bench_airborne && hl && lage<100.0){
+              const bool above=(lm-bench_baseline_m)>=bench_takeoff_delta_m;
+              if(above){
+                if(bench_candidate_since_ns==0) bench_candidate_since_ns=now;
+                if((now-bench_candidate_since_ns)*1e-9>=bench_takeoff_hold_sec){
+                  bench_airborne=true;
+                  std::cerr<<"BENCH TAKEOFF: AIRBORNE LATCHED; real="<<lm
+                           <<" м delta="<<(lm-bench_baseline_m)
+                           <<" м; FC range="<<bench_airborne_height_m<<" м\n";
+                }
+              } else {
+                bench_candidate_since_ns=0;
+              }
+            }
+          }
+        }
+
+        const double active_bench_height =
+          (bench_takeoff_delta_m>0.0 && bench_airborne) ? bench_airborne_height_m :
+          ((bench_height_override>0.0) ? bench_height_override : 0.0);
+        const double range_to_fc=(active_bench_height>0.0)?active_bench_height:lm;
 
         // A downward rangefinder can jump from table to floor (or back) while the
         // vehicle itself has not moved vertically. During that short transition
         // the camera often sees BOTH depth planes, so there is no single metric
         // scale for optical flow. Do not feed those mixed-plane frames to EKF.
         // Resume automatically after 0.4 s with the newest frame anchor.
-        if(bench_height_override<=0.0 && hl && lage<100.0 && lm>0.05){
+        if(active_bench_height<=0.0 && hl && lage<100.0 && lm>0.05){
           if(terrain_prev_range_valid){
             const double d=std::abs(lm-terrain_prev_range_m);
             const double ratio=std::max(lm,terrain_prev_range_m)/
@@ -1353,11 +1453,11 @@ int main(int argc,char** argv){
 
         bool flow_sent=false; uint8_t quality=0;
         double flow_send_x=s.flow_body_x, flow_send_y=s.flow_body_y;
-        if(s.valid && bench_height_override>0.0){
+        if(s.valid && active_bench_height>0.0){
           double real_camera_height=0.0;
-          double fake_camera_height=bench_height_override;
+          double fake_camera_height=active_bench_height;
           if(std::isfinite(diag_camera_z_m) && std::isfinite(diag_range_z_m)){
-            fake_camera_height=bench_height_override-(diag_camera_z_m-diag_range_z_m);
+            fake_camera_height=active_bench_height-(diag_camera_z_m-diag_range_z_m);
           }
 
           if(bench_true_camera_height>0.0){
@@ -1614,8 +1714,8 @@ int main(int argc,char** argv){
 
         if(flight_ready_gate && !flight_ready){
           const double speed_h=efresh?std::hypot((double)ep.vx,(double)ep.vy):1e9;
-          const double ready_range=(bench_height_override>0.0)?bench_height_override:lm;
-          const bool luna_ok=(bench_true_camera_height>0.0 && bench_height_override>0.0)
+          const double ready_range=(active_bench_height>0.0)?active_bench_height:lm;
+          const bool luna_ok=(bench_true_camera_height>0.0 && active_bench_height>0.0)
             ? (ready_range>=kReadyMinRangeM && ready_range<=kReadyMaxRangeM)
             : (hl && lage>=-2.0 && lage<100.0 &&
                ready_range>=kReadyMinRangeM && ready_range<=kReadyMaxRangeM);
@@ -1633,7 +1733,7 @@ int main(int argc,char** argv){
               flight_ready=true;
               std::cerr<<"\n======================================================================\n"
                        <<"СИСТЕМА ГОТОВА\n"
-                       <<"range="<<((bench_height_override>0.0)?bench_height_override:lm)
+                       <<"range="<<((active_bench_height>0.0)?active_bench_height:lm)
                        <<" m, flow valid, EKF velH/posRel valid, |vH|="
                        <<speed_h<<" m/s\n"
                        <<"Состояние было непрерывно стабильным "<<kReadyStableSec<<" с.\n"
