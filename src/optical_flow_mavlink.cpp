@@ -1997,6 +1997,7 @@ int main(int argc,char** argv){
            <<(s.gyro_shadow_valid?1:0)<<','<<s.gyro_shadow_scale_rate<<','
            <<s.gyro_shadow_flow_body_x<<','<<s.gyro_shadow_flow_body_y<<','
            <<s.gyro_shadow_send_x<<','<<s.gyro_shadow_send_y<<','
+           <<s.gyro_sign_rms_pos<<','<<s.gyro_sign_rms_neg<<','<<s.gyro_sign_samples<<','
            <<(s.lever_shadow_valid?1:0)<<','<<(lever_production_applied?1:0)<<','<<s.lever_flow_body_x<<','<<s.lever_flow_body_y<<','
            <<s.lever_pred_flow_x<<','<<s.lever_pred_flow_y<<','
            <<(g_fb_shadow_max_px>0.0?1:0)<<','<<g_fb_shadow_max_px<<','<<s.fb_checked<<','<<s.fb_pass<<','<<s.fb_ratio<<','<<s.fb_inliers<<','<<(s.fb_shadow_valid?1:0)<<','<<s.fb_flow_body_x<<','<<s.fb_flow_body_y<<','<<s.fb_t_ms<<','
