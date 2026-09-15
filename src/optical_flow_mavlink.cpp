@@ -690,6 +690,7 @@ struct FlowStep {
 
 FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const CameraCalib& calib,
                          double prev_camera_height_m=0.0,double curr_camera_height_m=0.0,
+                         const cv::Vec3d* body_gyro_frd=nullptr,
                          const cv::Matx33d* C1_R_C0=nullptr,double dr_interp_gap_ms=-1.0){
   FlowStep o;
   if(prev.empty()||curr.empty()||!(dt>0&&dt<0.2)){ o.invalid_reason=1; return o; }
