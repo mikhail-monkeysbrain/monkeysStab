@@ -1273,6 +1273,8 @@ int main(int argc,char** argv){
   std::string dataset_dir;
   std::string dataset_surface;
   double dataset_duration_sec=0.0;
+  double diag_camera_x_m=std::numeric_limits<double>::quiet_NaN();
+  double diag_camera_y_m=std::numeric_limits<double>::quiet_NaN();
   double diag_camera_z_m=std::numeric_limits<double>::quiet_NaN();
   double diag_range_z_m=std::numeric_limits<double>::quiet_NaN();
   double bench_height_override=0.0;
@@ -1295,6 +1297,8 @@ int main(int argc,char** argv){
     else if(a=="--dataset-dir" && i+1<argc) dataset_dir=argv[++i];
     else if(a=="--dataset-surface" && i+1<argc) dataset_surface=argv[++i];
     else if(a=="--dataset-duration-sec" && i+1<argc) dataset_duration_sec=std::stod(argv[++i]);
+    else if(a=="--diag-camera-x-m" && i+1<argc) diag_camera_x_m=std::stod(argv[++i]);
+    else if(a=="--diag-camera-y-m" && i+1<argc) diag_camera_y_m=std::stod(argv[++i]);
     else if(a=="--diag-camera-z-m" && i+1<argc) diag_camera_z_m=std::stod(argv[++i]);
     else if(a=="--diag-range-z-m" && i+1<argc) diag_range_z_m=std::stod(argv[++i]);
     else if(a=="--bench-height" && i+1<argc) bench_height_override=std::stod(argv[++i]);
