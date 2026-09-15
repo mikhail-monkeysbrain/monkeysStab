@@ -239,6 +239,7 @@ struct FlowFc {
   FlowFcAttTarget att_target{};
   FlowFcOutputs outputs{};
   FlowFcRc rc{};
+  std::deque<FlowFcGyro> attitude_history; // monotonic receive-time history for frame-aligned ΔR
   uint64_t local_count=0;
   uint64_t ekf_count=0;
   uint64_t gyro_count=0;
@@ -420,6 +421,10 @@ struct FlowFc {
               gyro.roll=q.roll; gyro.pitch=q.pitch; gyro.yaw=q.yaw;
               gyro.x=q.rollspeed; gyro.y=q.pitchspeed; gyro.z=q.yawspeed;
               gyro.recv_ns=monoNs(); gyro.valid=true; ++gyro_count;
+              attitude_history.push_back(gyro);
+              while(attitude_history.size()>2 &&
+                    gyro.recv_ns-attitude_history.front().recv_ns>3000000000LL)
+                attitude_history.pop_front();
               gyro_sum_x+=q.rollspeed; gyro_sum_y+=q.pitchspeed; gyro_sum_z+=q.yawspeed;
               ++gyro_sum_count;
             } else if(m.msgid==MAVLINK_MSG_ID_LOCAL_POSITION_NED){
@@ -473,6 +478,60 @@ struct FlowFc {
         }
       }
     });
+  }
+
+  bool relativeCameraRotation(int64_t t0_ns,int64_t t1_ns,const CameraCalib& calib,
+                              cv::Matx33d* C1_R_C0,double* max_interp_gap_ms=nullptr){
+    std::lock_guard<std::mutex> l(mu);
+    if(!C1_R_C0 || attitude_history.size()<2 || !(t1_ns>t0_ns)) return false;
+
+    auto interp=[&](int64_t t,FlowFcGyro* out,double* gap_ms)->bool{
+      if(t<attitude_history.front().recv_ns || t>attitude_history.back().recv_ns) return false;
+      for(size_t i=1;i<attitude_history.size();++i){
+        const auto& a=attitude_history[i-1];
+        const auto& b=attitude_history[i];
+        if(t>b.recv_ns) continue;
+        const int64_t span=b.recv_ns-a.recv_ns;
+        if(span<=0) return false;
+        const double u=std::clamp((double)(t-a.recv_ns)/(double)span,0.0,1.0);
+        auto angle_lerp=[&](double x0,double x1){
+          double d=std::remainder(x1-x0,2.0*M_PI);
+          return x0+u*d;
+        };
+        out->roll=angle_lerp(a.roll,b.roll);
+        out->pitch=angle_lerp(a.pitch,b.pitch);
+        out->yaw=angle_lerp(a.yaw,b.yaw);
+        out->recv_ns=t; out->valid=true;
+        if(gap_ms) *gap_ms=span*1e-6;
+        return true;
+      }
+      return false;
+    };
+
+    FlowFcGyro a{},b{}; double g0=0.0,g1=0.0;
+    if(!interp(t0_ns,&a,&g0) || !interp(t1_ns,&b,&g1)) return false;
+    // Reject sparse attitude brackets: interpolation across a telemetry hole
+    // is worse than leaving the production estimator untouched.
+    if(g0>40.0 || g1>40.0) return false;
+
+    auto N_R_B=[](double roll,double pitch,double yaw){
+      const double cr=std::cos(roll), sr=std::sin(roll);
+      const double cp=std::cos(pitch),sp=std::sin(pitch);
+      const double cy=std::cos(yaw),  sy=std::sin(yaw);
+      return cv::Matx33d(
+        cy*cp, cy*sp*sr-sy*cr, cy*sp*cr+sy*sr,
+        sy*cp, sy*sp*sr+cy*cr, sy*sp*cr-cy*sr,
+        -sp,   cp*sr,          cp*cr);
+    };
+    const cv::Matx33d N_R_B0=N_R_B(a.roll,a.pitch,a.yaw);
+    const cv::Matx33d N_R_B1=N_R_B(b.roll,b.pitch,b.yaw);
+    const cv::Matx33d FLU_TO_FRD(1,0,0, 0,-1,0, 0,0,-1);
+    const cv::Matx33d B_R_C=FLU_TO_FRD*calib.B_R_C;
+    // A stationary world ray expressed in C0 appears in C1 as:
+    // C1_R_C0 = B_R_C^T * (N_R_B1)^T * N_R_B0 * B_R_C.
+    *C1_R_C0=B_R_C.t()*N_R_B1.t()*N_R_B0*B_R_C;
+    if(max_interp_gap_ms) *max_interp_gap_ms=std::max(g0,g1);
+    return true;
   }
 
   bool latestLocal(FlowFcLocal* out,double* age_ms,uint64_t* count=nullptr){
@@ -625,6 +684,13 @@ struct FlowStep {
   double flow_cam_x=0,flow_cam_y=0;
   double flow_body_x=0,flow_body_y=0;
 
+  // V2 shadow: remove the full known camera rotation ΔR before fitting XY
+  // translation/scale. Diagnostic only until A/B tests prove an improvement.
+  bool dr_shadow_valid=false;
+  double dr_flow_body_x=0.0,dr_flow_body_y=0.0;
+  double dr_scale_rate=0.0;
+  double dr_interp_gap_ms=-1.0;
+
   // Diagnostic A/B shadow path. A is the production result above. B applies
   // forward/backward KLT consistency to the SAME forward correspondences, then
   // runs the same homography RANSAC and 4-parameter fit. B is never sent to FC.
@@ -665,7 +731,8 @@ struct FlowStep {
 };
 
 FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const CameraCalib& calib,
-                         double prev_camera_height_m=0.0,double curr_camera_height_m=0.0){
+                         double prev_camera_height_m=0.0,double curr_camera_height_m=0.0,
+                         const cv::Matx33d* C1_R_C0=nullptr,double dr_interp_gap_ms=-1.0){
   FlowStep o;
   if(prev.empty()||curr.empty()||!(dt>0&&dt<0.2)){ o.invalid_reason=1; return o; }
 
@@ -977,6 +1044,47 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
   cv::undistortPoints(ai,au,calib.K,calib.D);
   cv::undistortPoints(bi,bu,calib.K,calib.D);
 
+  if(C1_R_C0 && ai.size()>=20){
+    cv::Mat A_dr((int)ai.size()*2,3,CV_64F);
+    cv::Mat b_dr((int)ai.size()*2,1,CV_64F);
+    bool dr_geometry_ok=true;
+    for(size_t k=0;k<ai.size();++k){
+      const double x=(double)au[k].x, y=(double)au[k].y;
+      const cv::Vec3d rr=(*C1_R_C0)*cv::Vec3d(x,y,1.0);
+      if(!std::isfinite(rr[2]) || std::abs(rr[2])<1e-9){ dr_geometry_ok=false; break; }
+      const double xr=rr[0]/rr[2], yr=rr[1]/rr[2];
+      // Remove the exact image displacement predicted from body attitude.
+      const double du_trans=(double)bu[k].x-xr;
+      const double dv_trans=(double)bu[k].y-yr;
+      A_dr.at<double>((int)(2*k),0)=1.0;
+      A_dr.at<double>((int)(2*k),1)=0.0;
+      A_dr.at<double>((int)(2*k),2)=x;
+      b_dr.at<double>((int)(2*k),0)=du_trans;
+      A_dr.at<double>((int)(2*k+1),0)=0.0;
+      A_dr.at<double>((int)(2*k+1),1)=1.0;
+      A_dr.at<double>((int)(2*k+1),2)=y;
+      b_dr.at<double>((int)(2*k+1),0)=dv_trans;
+    }
+    cv::Mat sol_dr;
+    if(dr_geometry_ok && cv::solve(A_dr,b_dr,sol_dr,cv::DECOMP_SVD) && sol_dr.rows==3){
+      const double du_dr=sol_dr.at<double>(0,0);
+      const double dv_dr=sol_dr.at<double>(1,0);
+      const double fcx=dv_dr/dt;
+      const double fcy=-du_dr/dt;
+      const cv::Matx33d FLU_TO_FRD_DR(1,0,0, 0,-1,0, 0,0,-1);
+      const cv::Matx33d FRD_R_C_DR=FLU_TO_FRD_DR*calib.B_R_C;
+      const cv::Vec3d fb=FRD_R_C_DR*cv::Vec3d(fcx,fcy,0.0);
+      const double mag=std::hypot(fb[0],fb[1]);
+      if(std::isfinite(mag) && mag<4.0){
+        o.dr_shadow_valid=true;
+        o.dr_flow_body_x=fb[0];
+        o.dr_flow_body_y=fb[1];
+        o.dr_scale_rate=sol_dr.at<double>(2,0)/dt;
+        o.dr_interp_gap_ms=dr_interp_gap_ms;
+      }
+    }
+  }
+
   std::vector<double> dun,dvn,dup,dvp;
   dun.reserve(ai.size()); dvn.reserve(ai.size()); dup.reserve(ai.size()); dvp.reserve(ai.size());
 
@@ -1276,7 +1384,7 @@ int main(int argc,char** argv){
     constexpr std::streamoff kCsvMaxBytes=250LL*1024LL*1024LL;
     bool csv_logging_enabled=true;
     bool csv_limit_reported=false;
-    csv<<"mono_ns,camera_ts_ns,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
+    csv<<"mono_ns,camera_ts_ns,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,dr_valid,dr_flow_body_x,dr_flow_body_y,dr_scale_rate,dr_interp_gap_ms,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
 
     if(g_fb_shadow_max_px>0.0){
       std::cerr<<(g_obs_shadow_enabled?"A/B/C/D SHADOW: ":"A/B/C SHADOW: ")
@@ -1651,11 +1759,16 @@ int main(int argc,char** argv){
         }
 
         const double dt=prev_ts?(ts-prev_ts)*1e-9:0.0;
+        cv::Matx33d dr_C1_R_C0=cv::Matx33d::eye();
+        double dr_interp_gap_ms=-1.0;
+        const bool dr_rotation_ok = prev_ts>0 &&
+          fc.relativeCameraRotation(prev_ts,ts,calib,&dr_C1_R_C0,&dr_interp_gap_ms);
         FlowStep s;
         if(!prev.empty())s=estimateRawFlow(
           prev,gray,dt,calib,
           prev_camera_height_valid?prev_camera_height_m:0.0,
-          current_camera_height_valid?current_camera_height_m:0.0);
+          current_camera_height_valid?current_camera_height_m:0.0,
+          dr_rotation_ok?&dr_C1_R_C0:nullptr,dr_interp_gap_ms);
         web_live.sendPreview(now,gray,s.inlier_points,g_feature_roi);
 
         // Consume the FC gyro for THIS processed camera interval before any
