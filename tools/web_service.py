@@ -594,7 +594,8 @@ def start_runtime():
         env["MONKEYS_BENCH_TAKEOFF_DELTA"]="0.05"
         env["MONKEYS_BENCH_TAKEOFF_HOLD"]="0.40"
         env["MONKEYS_BENCH_AIRBORNE_HEIGHT"]="0.60"
-        _log_handle.write("WEB BENCH TAKEOFF: H_start(real) +0.05 m for 0.40 s -> AIRBORNE latch; FC range=0.60 m until DISARM\n")
+        env["MONKEYS_BENCH_TAKEOFF_PULSE"]="1.50"
+        _log_handle.write("WEB BENCH TAKEOFF: H_start(real) +0.05 m for 0.40 s -> 1.50 s FC range pulse=0.60 m; then REAL TF-Luna\n")
         try:
             PREVIEW_PATH.unlink()
         except FileNotFoundError:
