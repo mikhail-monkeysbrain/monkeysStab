@@ -242,7 +242,6 @@ struct FlowFc {
   FlowFcOutputs outputs{};
   FlowFcRc rc{};
   std::deque<FlowFcGyro> attitude_history; // FC sample times mapped to RPi monotonic clock
-  int64_t attitude_boot_to_mono_ns=std::numeric_limits<int64_t>::max();
   uint64_t local_count=0;
   uint64_t ekf_count=0;
   uint64_t gyro_count=0;
@@ -424,18 +423,10 @@ struct FlowFc {
               gyro.roll=q.roll; gyro.pitch=q.pitch; gyro.yaw=q.yaw;
               gyro.x=q.rollspeed; gyro.y=q.pitchspeed; gyro.z=q.yawspeed;
               gyro.recv_ns=monoNs(); gyro.time_boot_ms=q.time_boot_ms;
-              // ATTITUDE carries the FC measurement timestamp. Map FC boot time
-              // into RPi CLOCK_MONOTONIC using the minimum observed receive
-              // offset, which removes variable serial/scheduler latency instead
-              // of pretending recv_ns is the measurement time.
-              {
-                const int64_t boot_ns=(int64_t)q.time_boot_ms*1000000LL;
-                const int64_t observed_offset=gyro.recv_ns-boot_ns;
-                if(attitude_boot_to_mono_ns==std::numeric_limits<int64_t>::max() ||
-                   observed_offset<attitude_boot_to_mono_ns)
-                  attitude_boot_to_mono_ns=observed_offset;
-                gyro.sample_ns=boot_ns+attitude_boot_to_mono_ns;
-              }
+              // Online ΔR uses one RPi monotonic clock for both camera dequeue
+              // and MAVLink receive.  This deliberately avoids mixing FC boot
+              // time with a live frame whose transport latency is not known.
+              gyro.sample_ns=gyro.recv_ns;
               gyro.valid=true; ++gyro_count;
               attitude_history.push_back(gyro);
               while(attitude_history.size()>2 &&
@@ -502,7 +493,22 @@ struct FlowFc {
     if(!C1_R_C0 || attitude_history.size()<2 || !(t1_ns>t0_ns)) return false;
 
     auto interp=[&](int64_t t,FlowFcGyro* out,double* gap_ms)->bool{
-      if(t<attitude_history.front().sample_ns || t>attitude_history.back().sample_ns) return false;
+      if(t<attitude_history.front().sample_ns) return false;
+      // A just-dequeued frame is commonly a few milliseconds newer than the
+      // latest ATTITUDE packet. Extrapolate only across a tightly bounded tail.
+      if(t>attitude_history.back().sample_ns){
+        const auto& b=attitude_history.back();
+        const double tail_ms=(t-b.sample_ns)*1e-6;
+        if(tail_ms>30.0) return false;
+        *out=b;
+        const double dt=(t-b.sample_ns)*1e-9;
+        out->roll += b.x*dt;
+        out->pitch += b.y*dt;
+        out->yaw += b.z*dt;
+        out->recv_ns=t; out->sample_ns=t; out->valid=true;
+        if(gap_ms) *gap_ms=tail_ms;
+        return true;
+      }
       for(size_t i=1;i<attitude_history.size();++i){
         const auto& a=attitude_history[i-1];
         const auto& b=attitude_history[i];
@@ -1696,15 +1702,10 @@ int main(int argc,char** argv){
         // makes frame-aligned ΔR valid only accidentally. Convert each dequeued
         // frame to our monotonic domain using its dequeue age when possible.
         const int64_t dq_mono_ns=monoNs();
-        int64_t frame_mono_ns=bts;
-#ifdef V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC
-        if((b.flags & V4L2_BUF_FLAG_TIMESTAMP_MASK)!=V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC){
-          // We cannot infer an absolute offset from an unknown clock safely.
-          // For the freshest-frame policy below, dequeue time is the best
-          // bounded monotonic timestamp and preserves ordering.
-          frame_mono_ns=dq_mono_ns;
-        }
-#endif
+        // For online ΔR, use dequeue CLOCK_MONOTONIC unconditionally.
+        // The driver timestamp remains useful for offline datasets, but its
+        // clock/latency semantics are not guaranteed to match MAVLink receive.
+        const int64_t frame_mono_ns=dq_mono_ns;
         if(!latest_jpeg.empty()) ++camera_queue_dropped;
         const uint8_t* pjpeg=reinterpret_cast<const uint8_t*>(cam.bufs[b.index].p);
         latest_jpeg.assign(pjpeg,pjpeg+b.bytesused);
