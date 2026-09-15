@@ -506,7 +506,7 @@ struct FlowFc {
       for(size_t i=1;i<attitude_history.size();++i){
         const auto& a=attitude_history[i-1];
         const auto& b=attitude_history[i];
-        if(t>b.recv_ns) continue;
+        if(t>b.sample_ns) continue;
         const int64_t span=b.sample_ns-a.sample_ns;
         if(span<=0) return false;
         const double u=std::clamp((double)(t-a.sample_ns)/(double)span,0.0,1.0);
