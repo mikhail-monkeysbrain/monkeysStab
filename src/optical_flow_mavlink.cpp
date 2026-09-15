@@ -698,35 +698,31 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
   std::vector<cv::Point2f> p0,p1;
   const int64_t t_feat0=monoNs();
 
-  // Detect corners independently in a 3x3 grid. A single global GFTT call
-  // normalises quality against the strongest corner in the whole ROI, so a
-  // pair of bright/high-contrast patches can consume nearly all features.
-  // Per-cell GFTT preserves the same qualityLevel/minDistance while allowing
-  // weaker textured regions to contribute real corners. This also improves
-  // conditioning of the downstream translation/scale/yaw fit.
+  // Global-quality + spatial-cap detector.
+  // First ask GFTT for a larger pool using ONE quality threshold for the full
+  // ROI.  Then cap over-populated 3x3 cells.  Empty/weak cells are never
+  // forced to contribute low-quality corners merely to satisfy a quota.
   constexpr int kFeatureGrid=3;
-  const int per_cell=std::max(1,(g_max_features+kFeatureGrid*kFeatureGrid-1)/
-                                (kFeatureGrid*kFeatureGrid));
-  p0.reserve(g_max_features);
-  for(int gy=0;gy<kFeatureGrid;gy++){
-    const int cy0=y0+(y1-y0)*gy/kFeatureGrid;
-    const int cy1=y0+(y1-y0)*(gy+1)/kFeatureGrid;
-    for(int gx=0;gx<kFeatureGrid;gx++){
-      const int cx0=x0+(x1-x0)*gx/kFeatureGrid;
-      const int cx1=x0+(x1-x0)*(gx+1)/kFeatureGrid;
-      if(cx1<=cx0 || cy1<=cy0) continue;
+  constexpr int kCandidateMultiplier=3;
+  cv::Mat feature_mask(prev.size(),CV_8UC1,cv::Scalar(0));
+  feature_mask(cv::Rect(x0,y0,x1-x0,y1-y0)).setTo(255);
+  std::vector<cv::Point2f> candidates;
+  cv::goodFeaturesToTrack(prev,candidates,g_max_features*kCandidateMultiplier,
+                          0.01,7,feature_mask);
 
-      const cv::Rect cell(cx0,cy0,cx1-cx0,cy1-cy0);
-      std::vector<cv::Point2f> local;
-      cv::goodFeaturesToTrack(prev(cell),local,per_cell,0.01,7);
-      for(auto p:local){
-        p.x+=(float)cell.x;
-        p.y+=(float)cell.y;
-        p0.push_back(p);
-        if((int)p0.size()>=g_max_features) break;
-      }
-      if((int)p0.size()>=g_max_features) break;
-    }
+  const int cell_cap=std::max(1,(g_max_features+kFeatureGrid*kFeatureGrid-1)/
+                               (kFeatureGrid*kFeatureGrid));
+  std::array<int,kFeatureGrid*kFeatureGrid> cell_used{};
+  p0.reserve(std::min<int>(g_max_features,(int)candidates.size()));
+  for(const auto& p:candidates){
+    const int gx=std::clamp((int)((p.x-x0)*kFeatureGrid/std::max(1,x1-x0)),
+                            0,kFeatureGrid-1);
+    const int gy=std::clamp((int)((p.y-y0)*kFeatureGrid/std::max(1,y1-y0)),
+                            0,kFeatureGrid-1);
+    const int ci=gy*kFeatureGrid+gx;
+    if(cell_used[ci]>=cell_cap) continue;
+    p0.push_back(p);
+    cell_used[ci]++;
     if((int)p0.size()>=g_max_features) break;
   }
 
