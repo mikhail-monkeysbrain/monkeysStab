@@ -1796,6 +1796,17 @@ if __name__=="__main__":
         start_statustext_monitor()
         log_event("INFO","Web UI запущен")
         print("MAVLink router: ГОТОВ, Mission Planner UDP 14550",flush=True)
+        # Normal operating mode: starting the Web UI also starts the flight
+        # runtime. start_runtime() already performs the runtime-side startup
+        # checks, so do not add a second preflight/test cycle here.
+        try:
+            start_runtime()
+            print("Flight runtime: АВТОЗАПУСК ГОТОВ",flush=True)
+        except Exception as e:
+            # Keep Web UI alive so the operator can inspect the exact startup
+            # error and retry manually after fixing its cause.
+            log_event("ERROR","Автозапуск flight runtime: "+str(e))
+            print("Flight runtime: АВТОЗАПУСК ОШИБКА: "+str(e),flush=True)
         ThreadingHTTPServer((a.host,a.port),H).serve_forever()
     except KeyboardInterrupt:
         pass
