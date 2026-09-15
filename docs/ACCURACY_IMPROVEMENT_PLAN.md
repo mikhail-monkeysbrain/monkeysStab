@@ -38,6 +38,18 @@ OPTICAL_FLOW → ArduPilot EKF3
 
 При невозможности вычислить lever-arm компенсацию runtime автоматически отправляет прежний raw OF, поэтому потеря gyro/range не блокирует поток.
 
+## Статус feature-estimator экспериментов (2026-09-15)
+
+После production lever-arm отдельно проверены следующие способы на Raspberry Pi:
+
+- **Global-quality + spatial-cap feature grid — отклонён.** По сравнению с текущим production 3×3 per-cell GFTT уменьшились средние features/inliers, ухудшилась пространственная заполненность, а GFTT стал примерно в 3.5 раза дороже. Текущий per-cell grid остаётся production baseline.
+- **Forward-backward LK ≤ 1 px — отклонён для постоянного production.** В синхронном A/B/C/D прогоне FB прошло около 97.9% tracks; после уже существующего RANSAC отличие составило примерно два inlier на кадр, тогда как дополнительный FB проход стоил около 22–23 ms/кадр.
+- **FB + adaptive Huber IRLS — не принят.** На тех же кадрах доказанного улучшения покоя/OF относительно production не получено.
+- **FB + structure-tensor observability weighting — не принят.** Изменения относительно production малы и не дают практического выигрыша.
+- Shadow-код A/B/C/D сохранён для специальных диагностических запусков через `MONKEYS_FB_SHADOW_MAX_PX`, но в обычном Web runtime он выключен и не расходует CPU.
+
+Практический вывод: текущие correspondences уже имеют высокий RANSAC/FB consistency, поэтому следующий приоритет — не усложнение GFTT/LK/RANSAC, а качество/uncertainty публикуемого Optical Flow и его использования EKF.
+
 ## Сводная таблица
 
 | № | Способ | Что исправляет | Ожидаемый эффект | Риск сломать baseline | Сложность | Приоритет |
