@@ -1871,10 +1871,14 @@ int main(int argc,char** argv){
             hcam=current_camera_height_m;
           }
           if(hcam>0.02 && std::isfinite(hcam)){
-            const double native_fx=s.flow_body_x;
-            const double native_fy=s.flow_body_y;
-            const double comp_x=-native_fx + fg.x;
-            const double comp_y=-native_fy + fg.y;
+            // Diagnostic RAW must integrate the exact same production flow
+            // that is sent to ArduPilot.  In particular, include the production
+            // lever-arm correction so EKF-vs-RAW compares only the downstream
+            // integration/fusion paths, not two different OF estimators.
+            const double production_fx=flow_send_x;
+            const double production_fy=flow_send_y;
+            const double comp_x=-production_fx + fg.x;
+            const double comp_y=-production_fy + fg.y;
             const double vbx=(-comp_y)*hcam;
             const double vby=( comp_x)*hcam;
 
