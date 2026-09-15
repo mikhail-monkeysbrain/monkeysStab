@@ -636,6 +636,10 @@ struct FlowStep {
   double lk_height_scale=1; // initial KLT scale guess from TF-Luna, curr image / prev image
   double flow_cam_x=0,flow_cam_y=0;
   double flow_body_x=0,flow_body_y=0;
+  bool gyro_shadow_valid=false;
+  double gyro_shadow_scale_rate=0.0;
+  double gyro_shadow_flow_body_x=0.0,gyro_shadow_flow_body_y=0.0;
+  double gyro_shadow_send_x=0.0,gyro_shadow_send_y=0.0;
 
   // V2 shadow: remove the full known camera rotation ΔR before fitting XY
   // translation/scale. Diagnostic only until A/B tests prove an improvement.
@@ -1068,6 +1072,38 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
   }
   o.du_px=median(dup); o.dv_px=median(dvp);
 
+  // Diagnostic only: subtract full FC-gyro rotational image field before a
+  // translation X/Y + isotropic-scale fit. Production output is untouched.
+  if(body_gyro_frd && dt>0.0){
+    const cv::Matx33d FLU_TO_FRD_G(1,0,0, 0,-1,0, 0,0,-1);
+    const cv::Matx33d FRD_R_C_G=FLU_TO_FRD_G*calib.B_R_C;
+    const cv::Vec3d wc=FRD_R_C_G.t()*(*body_gyro_frd);
+    if(std::isfinite(wc[0])&&std::isfinite(wc[1])&&std::isfinite(wc[2])){
+      cv::Mat Ag((int)ai.size()*2,3,CV_64F), bg((int)ai.size()*2,1,CV_64F);
+      for(size_t k=0;k<ai.size();++k){
+        const double x=(double)au[k].x,y=(double)au[k].y;
+        const double du=(double)bu[k].x-au[k].x,dv=(double)bu[k].y-au[k].y;
+        const double wx=wc[0],wy=wc[1],wz=wc[2];
+        // Same optical sign convention as production yaw: du=-wz*y,dv=+wz*x.
+        const double du_rot=(-x*y*wx+(1.0+x*x)*wy-y*wz)*dt;
+        const double dv_rot=(-(1.0+y*y)*wx+x*y*wy+x*wz)*dt;
+        Ag.at<double>((int)(2*k),0)=1.0; Ag.at<double>((int)(2*k),1)=0.0; Ag.at<double>((int)(2*k),2)=x;
+        bg.at<double>((int)(2*k),0)=du-du_rot;
+        Ag.at<double>((int)(2*k+1),0)=0.0; Ag.at<double>((int)(2*k+1),1)=1.0; Ag.at<double>((int)(2*k+1),2)=y;
+        bg.at<double>((int)(2*k+1),0)=dv-dv_rot;
+      }
+      cv::Mat sg;
+      if(cv::solve(Ag,bg,sg,cv::DECOMP_SVD)&&sg.rows==3){
+        const double gx=sg.at<double>(1,0)/dt,gy=-sg.at<double>(0,0)/dt;
+        const cv::Vec3d gfb=FRD_R_C_G*cv::Vec3d(gx,gy,0.0);
+        o.gyro_shadow_scale_rate=sg.at<double>(2,0)/dt;
+        o.gyro_shadow_flow_body_x=gfb[0];o.gyro_shadow_flow_body_y=gfb[1];
+        o.gyro_shadow_send_x=gfb[0];o.gyro_shadow_send_y=gfb[1];
+        o.gyro_shadow_valid=std::isfinite(o.gyro_shadow_scale_rate)&&std::isfinite(gfb[0])&&std::isfinite(gfb[1]);
+      }
+    }
+  }
+
   // OpenCV camera: +X image-right, +Y image-down, +Z optical-forward.
   // Positive RH camera rotation about Cx -> +dv, about Cy -> -du.
   o.flow_cam_x=o.dv_norm/dt;
@@ -1302,7 +1338,7 @@ int main(int argc,char** argv){
     constexpr std::streamoff kCsvMaxBytes=250LL*1024LL*1024LL;
     bool csv_logging_enabled=true;
     bool csv_limit_reported=false;
-    csv<<"mono_ns,camera_ts_ns,v4l2_timestamp_ns,camera_dequeue_ns,v4l2_flags,v4l2_to_dequeue_ms,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,lever_valid,lever_production_applied,lever_flow_body_x,lever_flow_body_y,lever_pred_flow_x,lever_pred_flow_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
+    csv<<"mono_ns,camera_ts_ns,v4l2_timestamp_ns,camera_dequeue_ns,v4l2_flags,v4l2_to_dequeue_ms,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,gyro_shadow_valid,gyro_shadow_scale_rate,gyro_shadow_flow_body_x,gyro_shadow_flow_body_y,gyro_shadow_send_x,gyro_shadow_send_y,lever_valid,lever_production_applied,lever_flow_body_x,lever_flow_body_y,lever_pred_flow_x,lever_pred_flow_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
 
     if(g_fb_shadow_max_px>0.0){
       std::cerr<<(g_obs_shadow_enabled?"A/B/C/D SHADOW: ":"A/B/C SHADOW: ")
@@ -1690,18 +1726,16 @@ int main(int argc,char** argv){
         }
 
         const double dt=prev_ts?(ts-prev_ts)*1e-9:0.0;
+        FlowFcGyro fg{}; double fg_age=1e9; uint64_t fg_samples=0;
+        const bool fg_ok=fc.consumeGyroAverage(&fg,&fg_age,&fg_samples);
+        const cv::Vec3d gyro_frd(fg.x,fg.y,fg.z);
         FlowStep s;
         if(!prev.empty())s=estimateRawFlow(
           prev,gray,dt,calib,
           prev_camera_height_valid?prev_camera_height_m:0.0,
-          current_camera_height_valid?current_camera_height_m:0.0);
+          current_camera_height_valid?current_camera_height_m:0.0,
+          fg_ok?&gyro_frd:nullptr);
         web_live.sendPreview(now,gray,s.inlier_points,g_feature_roi);
-
-        // Consume the FC gyro for THIS processed camera interval before any
-        // bench-only range remapping.  Pure rotational optical flow must remain
-        // unscaled so ArduPilot can cancel it with bodyRate X/Y.
-        FlowFcGyro fg{}; double fg_age=1e9; uint64_t fg_samples=0;
-        const bool fg_ok=fc.consumeGyroAverage(&fg,&fg_age,&fg_samples);
 
         // Production lever-arm candidate. flow_body_x/y are angular image rates in AP body
         // convention, not linear velocity. For a downward camera, a camera
@@ -1726,6 +1760,10 @@ int main(int argc,char** argv){
             s.lever_pred_flow_y=pred_y;
             s.lever_flow_body_x=corrected_x;
             s.lever_flow_body_y=corrected_y;
+            if(s.gyro_shadow_valid){
+              s.gyro_shadow_send_x=s.gyro_shadow_flow_body_x-pred_x;
+              s.gyro_shadow_send_y=s.gyro_shadow_flow_body_y-pred_y;
+            }
           }
         }
 
@@ -1926,6 +1964,9 @@ int main(int argc,char** argv){
            <<s.du_px<<','<<s.dv_px<<','<<s.du_norm<<','<<s.dv_norm<<','<<s.yaw_rate_cam_z<<','
            <<s.scale_rate<<','<<s.lk_height_scale<<','
            <<s.flow_cam_x<<','<<s.flow_cam_y<<','<<s.flow_body_x<<','<<s.flow_body_y<<','
+           <<(s.gyro_shadow_valid?1:0)<<','<<s.gyro_shadow_scale_rate<<','
+           <<s.gyro_shadow_flow_body_x<<','<<s.gyro_shadow_flow_body_y<<','
+           <<s.gyro_shadow_send_x<<','<<s.gyro_shadow_send_y<<','
            <<(s.lever_shadow_valid?1:0)<<','<<(lever_production_applied?1:0)<<','<<s.lever_flow_body_x<<','<<s.lever_flow_body_y<<','
            <<s.lever_pred_flow_x<<','<<s.lever_pred_flow_y<<','
            <<(g_fb_shadow_max_px>0.0?1:0)<<','<<g_fb_shadow_max_px<<','<<s.fb_checked<<','<<s.fb_pass<<','<<s.fb_ratio<<','<<s.fb_inliers<<','<<(s.fb_shadow_valid?1:0)<<','<<s.fb_flow_body_x<<','<<s.fb_flow_body_y<<','<<s.fb_t_ms<<','
