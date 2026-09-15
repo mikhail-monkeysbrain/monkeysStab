@@ -1727,6 +1727,16 @@ int main(int argc,char** argv){
             <<",\"roll_deg\":"<<jsonNumber(fg_ok?fg.roll*180.0/M_PI:0.0)
             <<",\"pitch_deg\":"<<jsonNumber(fg_ok?fg.pitch*180.0/M_PI:0.0)
             <<",\"yaw_deg\":"<<jsonNumber(fg_ok?fg.yaw*180.0/M_PI:0.0)
+            <<",\"ctrl_target_valid\":"<<(csv_ct_ok?"true":"false")
+            <<",\"ctrl_target_x\":"<<jsonNumber(csv_ct.x)
+            <<",\"ctrl_target_y\":"<<jsonNumber(csv_ct.y)
+            <<",\"ctrl_target_vx\":"<<jsonNumber(csv_ct.vx)
+            <<",\"ctrl_target_vy\":"<<jsonNumber(csv_ct.vy)
+            <<",\"att_target_valid\":"<<(csv_ca_ok?"true":"false")
+            <<",\"att_target_roll_deg\":"<<jsonNumber(csv_ca.roll*180.0/M_PI)
+            <<",\"att_target_pitch_deg\":"<<jsonNumber(csv_ca.pitch*180.0/M_PI)
+            <<",\"att_target_yaw_deg\":"<<jsonNumber(csv_ca.yaw*180.0/M_PI)
+            <<",\"att_target_thrust\":"<<jsonNumber(csv_ca.thrust)
             <<"}";
           web_live.send(now,js.str());
         }
