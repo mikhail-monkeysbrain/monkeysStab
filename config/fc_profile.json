@@ -19,10 +19,10 @@
     "EK3_SRC1_VELXY": 5,
     "EK3_SRC1_POSZ": 2,
     "EK3_SRC1_VELZ": 0,
-    "EK3_SRC1_YAW": 0,
+    "EK3_SRC1_YAW": 1,
     "EK3_SRC_OPTIONS": 0,
     "COMPASS_ENABLE": 1,
-    "COMPASS_USE": 0,
+    "COMPASS_USE": 1,
     "VISO_TYPE": 0
   }
 }
