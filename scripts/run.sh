@@ -165,6 +165,7 @@ if [[ -n "${MONKEYS_BENCH_TAKEOFF_DELTA:-}" ]]; then
   ARGS+=(--bench-takeoff-delta "$MONKEYS_BENCH_TAKEOFF_DELTA")
   ARGS+=(--bench-takeoff-hold "${MONKEYS_BENCH_TAKEOFF_HOLD:-0.40}")
   ARGS+=(--bench-airborne-height "${MONKEYS_BENCH_AIRBORNE_HEIGHT:-0.60}")
+  ARGS+=(--bench-takeoff-pulse "${MONKEYS_BENCH_TAKEOFF_PULSE:-1.50}")
 fi
 
 exec "$BIN" "${ARGS[@]}"
