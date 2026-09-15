@@ -583,14 +583,18 @@ def start_runtime():
         env["MONKEYS_WEB_TELEMETRY_UDP_PORT"]=str(LIVE_UDP_PORT)
         env["MONKEYS_WEB_PREVIEW_PATH"]=str(PREVIEW_PATH)
 
-        # ARMED hand-test branch only: ArduPilot EKF3 zeros optical-flow
-        # measurements before takeoff while AGL < 0.5 m. The Web UI must
-        # reproduce the same corrected bench condition as the CLI diagnostic:
-        # publish 0.60 m to FC, while the real TF-Luna remains the metric
-        # height source inside the optical-flow estimator.
-        env["MONKEYS_BENCH_HEIGHT"]="0.60"
+        # Experimental Web bench takeoff detector:
+        # start with the REAL TF-Luna range.  After ARMED, establish H_start
+        # from ~1 s of range samples.  A sustained +5 cm rise latches AIRBORNE
+        # until DISARM.  Only while latched does FC receive 0.60 m to bypass
+        # EKF3's pre-takeoff (<0.5 m) optical-flow zeroing; the estimator keeps
+        # using the real TF-Luna for metric flow scale.
+        env.pop("MONKEYS_BENCH_HEIGHT",None)
         env.pop("MONKEYS_BENCH_TRUE_CAMERA_HEIGHT",None)
-        _log_handle.write("WEB BENCH TEST: synthetic FC range=0.60 m; real TF-Luna kept for optical-flow scale\n")
+        env["MONKEYS_BENCH_TAKEOFF_DELTA"]="0.05"
+        env["MONKEYS_BENCH_TAKEOFF_HOLD"]="0.40"
+        env["MONKEYS_BENCH_AIRBORNE_HEIGHT"]="0.60"
+        _log_handle.write("WEB BENCH TAKEOFF: H_start(real) +0.05 m for 0.40 s -> AIRBORNE latch; FC range=0.60 m until DISARM\n")
         try:
             PREVIEW_PATH.unlink()
         except FileNotFoundError:
