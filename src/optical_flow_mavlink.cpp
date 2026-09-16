@@ -2068,24 +2068,32 @@ int main(int argc,char** argv){
             if(flight_ready_since_ns==0) flight_ready_since_ns=now;
             if((now-flight_ready_since_ns)*1e-9>=kReadyStableSec){
               flight_ready=true;
-              std::cerr<<"\n======================================================================\n"
-                       <<"СИСТЕМА ГОТОВА\n"
-                       <<"range="<<((bench_height_override>0.0)?bench_height_override:lm)
-                       <<" m, flow valid, EKF velH/posRel valid, |vH|="
-                       <<speed_h<<" m/s\n"
-                       <<"Состояние было непрерывно стабильным "<<kReadyStableSec<<" с.\n"
-                       <<"======================================================================\n";
+              if(return_cli){
+                std::cerr<<"\nСИСТЕМА ГОТОВА.\n"
+                         <<"ПОЛОЖИ БПЛА В ТОЧКУ A.\n"
+                         <<"После полной остановки нажми SPACE.\n";
+              } else {
+                std::cerr<<"\n======================================================================\n"
+                         <<"СИСТЕМА ГОТОВА\n"
+                         <<"range="<<((bench_height_override>0.0)?bench_height_override:lm)
+                         <<" m, flow valid, EKF velH/posRel valid, |vH|="
+                         <<speed_h<<" m/s\n"
+                         <<"Состояние было непрерывно стабильным "<<kReadyStableSec<<" с.\n"
+                         <<"======================================================================\n";
+              }
             }
           }else{
             flight_ready_since_ns=0;
             if(last_not_ready_print_ns==0 || now-last_not_ready_print_ns>1000000000LL){
-              std::cerr<<"\nНЕ ГОТОВО:"
-                       <<" luna="<<(luna_ok?"OK":"NO")
-                       <<" flow="<<(flow_ok?"OK":"NO")
-                       <<" ekf="<<(ekf_ok?"OK":"NO")
-                       <<" local="<<(local_ok?"OK":"NO")
-                       <<" range="<<((bench_height_override>0.0)?bench_height_override:(hl?lm:-1.0))
-                       <<" vH="<<(efresh?speed_h:-1.0)<<"\n";
+              if(!return_cli){
+                std::cerr<<"\nНЕ ГОТОВО:"
+                         <<" luna="<<(luna_ok?"OK":"NO")
+                         <<" flow="<<(flow_ok?"OK":"NO")
+                         <<" ekf="<<(ekf_ok?"OK":"NO")
+                         <<" local="<<(local_ok?"OK":"NO")
+                         <<" range="<<((bench_height_override>0.0)?bench_height_override:(hl?lm:-1.0))
+                         <<" vH="<<(efresh?speed_h:-1.0)<<"\n";
+              }
               last_not_ready_print_ns=now;
             }
           }
