@@ -14,7 +14,7 @@ struct Meta { long long frame=0, cam=0, mono=0; size_t size=0; };
 struct Step { bool valid=false; int features=0,tracked=0,inliers=0; double du=0,dv=0,rate=0; std::string reason="PRECHECK"; };
 static std::vector<std::string> split(const std::string&s){std::vector<std::string>v;std::stringstream q(s);std::string x;while(std::getline(q,x,','))v.push_back(x);return v;}
 
-static Step estimate(const cv::Mat& prev,const cv::Mat& curr,double dt,const cv::Mat& K,const cv::Mat&D){
+static Step estimate(const cv::Mat& prev,const cv::Mat& curr,double dt,const cv::Mat& K,const cv::Mat&D,bool fb=false){
  Step o;if(prev.empty()||curr.empty()||!(dt>0&&dt<0.2))return o;
  const double rx0=.20,ry0=.32,rx1=.80,ry1=.90; const int maxf=500;
  int x0=std::clamp((int)std::lround(rx0*prev.cols),0,prev.cols-1),y0=std::clamp((int)std::lround(ry0*prev.rows),0,prev.rows-1);
@@ -24,7 +24,7 @@ static Step estimate(const cv::Mat& prev,const cv::Mat& curr,double dt,const cv:
  if(p0.size()<30){cv::Mat m(prev.size(),CV_8UC1,cv::Scalar(0));int fx0=std::clamp((int)std::lround(.05*prev.cols),0,prev.cols-1),fy0=std::clamp((int)std::lround(.25*prev.rows),0,prev.rows-1),fx1=std::clamp((int)std::lround(.95*prev.cols),fx0+1,prev.cols),fy1=std::clamp((int)std::lround(.98*prev.rows),fy0+1,prev.rows);m(cv::Rect(fx0,fy0,fx1-fx0,fy1-fy0)).setTo(255);std::vector<cv::Point2f>pf;cv::goodFeaturesToTrack(prev,pf,maxf,.005,5,m);if(pf.size()>p0.size())p0.swap(pf);}
  o.features=p0.size(); if(p0.size()<30){o.reason="FEATURES_LT30";return o;}
  std::vector<uchar>st;std::vector<float>err;cv::calcOpticalFlowPyrLK(prev,curr,p0,p1,st,err,{21,21},3,cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,30,.01),0,1e-4);
- std::vector<cv::Point2f>a,b;for(size_t i=0;i<p0.size();i++)if(st[i]){a.push_back(p0[i]);b.push_back(p1[i]);}o.tracked=a.size();if(a.size()<20){o.reason="TRACKED_LT20";return o;}
+ std::vector<cv::Point2f>a,b;for(size_t i=0;i<p0.size();i++)if(st[i]){a.push_back(p0[i]);b.push_back(p1[i]);}\n if(fb&&!a.empty()){std::vector<cv::Point2f>back;std::vector<uchar>st2;std::vector<float>er2;cv::calcOpticalFlowPyrLK(curr,prev,b,back,st2,er2,{21,21},3,cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,30,.01),0,1e-4);std::vector<cv::Point2f>aa,bb;for(size_t i=0;i<a.size();i++)if(st2[i]&&cv::norm(back[i]-a[i])<=2.0){aa.push_back(a[i]);bb.push_back(b[i]);}a.swap(aa);b.swap(bb);}\n o.tracked=a.size();if(a.size()<20){o.reason="TRACKED_LT20";return o;}
  cv::Mat mask;cv::findHomography(a,b,cv::RANSAC,2.0,mask,350,.99);if(mask.empty()){o.reason="HOMOGRAPHY_EMPTY";return o;}std::vector<cv::Point2f>ai,bi;for(size_t i=0;i<a.size();i++)if(mask.at<uchar>((int)i)){ai.push_back(a[i]);bi.push_back(b[i]);}o.inliers=ai.size();if(ai.size()<20){o.reason="INLIERS_LT20";return o;}
  std::vector<cv::Point2f>au,bu;cv::undistortPoints(ai,au,K,D);cv::undistortPoints(bi,bu,K,D);cv::Mat A(ai.size()*2,4,CV_64F),bb(ai.size()*2,1,CV_64F);
  for(size_t k=0;k<ai.size();k++){double x=au[k].x,y=au[k].y,du=bu[k].x-au[k].x,dv=bu[k].y-au[k].y;int r=2*k;A.at<double>(r,0)=1;A.at<double>(r,1)=0;A.at<double>(r,2)=x;A.at<double>(r,3)=-y;bb.at<double>(r)=du;A.at<double>(r+1,0)=0;A.at<double>(r+1,1)=1;A.at<double>(r+1,2)=y;A.at<double>(r+1,3)=x;bb.at<double>(r+1)=dv;}
@@ -41,10 +41,10 @@ static void forensic(const std::vector<cv::Mat>&im,const std::vector<Meta>&m,int
  std::cout<<"sum pair-error magnitudes: "<<total<<"\\n";
  std::cout<<"top10 share: "<<(total?100*top10/total:NAN)<<" %; top50 share: "<<(total?100*top50/total:NAN)<<" %\\n";
 }
-static Sum run(const std::vector<cv::Mat>& im,const std::vector<Meta>& m,int lo,int hi,bool reverse,const cv::Mat&K,const cv::Mat&D){
+static Sum run(const std::vector<cv::Mat>& im,const std::vector<Meta>& m,int lo,int hi,bool reverse,const cv::Mat&K,const cv::Mat&D,bool fb=false){
  Sum s;
- if(!reverse){for(int i=lo+1;i<=hi;i++){double dt=(m[i].cam-m[i-1].cam)*1e-9;Step q=estimate(im[i-1],im[i],dt,K,D);if(q.valid){s.x+=q.du;s.y+=q.dv;s.valid++;}else s.invalid++;}}
- else {for(int i=hi;i>lo;i--){double dt=(m[i].cam-m[i-1].cam)*1e-9;Step q=estimate(im[i],im[i-1],dt,K,D);if(q.valid){s.x+=q.du;s.y+=q.dv;s.valid++;}else s.invalid++;}}
+ if(!reverse){for(int i=lo+1;i<=hi;i++){double dt=(m[i].cam-m[i-1].cam)*1e-9;Step q=estimate(im[i-1],im[i],dt,K,D,fb);if(q.valid){s.x+=q.du;s.y+=q.dv;s.valid++;}else s.invalid++;}}
+ else {for(int i=hi;i>lo;i--){double dt=(m[i].cam-m[i-1].cam)*1e-9;Step q=estimate(im[i],im[i-1],dt,K,D,fb);if(q.valid){s.x+=q.du;s.y+=q.dv;s.valid++;}else s.invalid++;}}
  return s;
 }
 static void report(const char*name,const Sum&f,const Sum&r){
@@ -68,6 +68,6 @@ int main(int argc,char**argv){
  double fs=.931;cv::Mat K=(cv::Mat_<double>(3,3)<<568.53170752165227*fs,0,315.98271077441063,0,569.68005562865858*fs,239.88148589100641,0,0,1);cv::Mat D=(cv::Mat_<double>(1,5)<<.073569192194028493,-.095253893789117,-.010810530757187299,-.0022843373576970235,.082177400802757483);
  std::cout<<"events frames: A1="<<fa<<" B="<<fbf<<" A2="<<fcf<<"\n";
  Sum abf=run(im,m,a,b,false,K,D),abr=run(im,m,a,b,true,K,D);report("PHYSICAL A->B",abf,abr);
- Sum baf=run(im,m,b,c,false,K,D),bar=run(im,m,b,c,true,K,D);report("PHYSICAL B->A",baf,bar); forensic(im,m,b,c,K,D);
+ Sum baf=run(im,m,b,c,false,K,D),bar=run(im,m,b,c,true,K,D);report("PHYSICAL B->A",baf,bar); forensic(im,m,b,c,K,D);\n std::cout<<"\\n===== EXACT ESTIMATOR: BASELINE vs +FB (forward physical legs) =====\\n";\n Sum abfb=run(im,m,a,b,false,K,D,true),bafb=run(im,m,b,c,false,K,D,true);\n auto leg=[&](const char*n,const Sum&s){std::cout<<n<<" X="<<s.x<<" Y="<<s.y<<" mag="<<std::hypot(s.x,s.y)<<" valid/invalid="<<s.valid<<"/"<<s.invalid<<"\\n";};\n leg("A->B BASE",abf);leg("A->B +FB ",abfb);leg("B->A BASE",baf);leg("B->A +FB ",bafb);\n auto cl=[&](const char*n,const Sum&A,const Sum&B){double ma=std::hypot(A.x,A.y),cx=A.x+B.x,cy=A.y+B.y;std::cout<<n<<" closure="<<std::hypot(cx,cy)<<" = "<<100.0*std::hypot(cx,cy)/ma<<" % of |AB|; BA/AB="<<std::hypot(B.x,B.y)/ma<<"\\n";};cl("BASE",abf,baf);cl("+FB ",abfb,bafb);
  return 0;
 }
