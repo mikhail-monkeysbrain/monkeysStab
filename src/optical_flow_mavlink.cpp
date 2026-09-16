@@ -2560,35 +2560,37 @@ int main(int argc,char** argv){
             pending_return_event=3;
             return_home_marked=true;
 
+            // Canonical metric must measure the same native optical-flow quantity
+            // that is published by the frozen production estimator.  Do NOT use
+            // gyro-compensated return_ned_* here: that is a separate EKF forensic
+            // diagnostic and previously produced a misleading 31..137 mm report.
             auto metric=[&](const char* name,
-                            double ab_n,double ab_e,double total_n,double total_e){
-              const double ab=1000.0*std::hypot(ab_n,ab_e);
-              const double ba=1000.0*std::hypot(total_n-ab_n,total_e-ab_e);
-              const double close=1000.0*std::hypot(total_n,total_e);
+                            double ab_x,double ab_y,double total_x,double total_y){
+              const double ab=1000.0*std::hypot(ab_x,ab_y);
+              const double ba=1000.0*std::hypot(total_x-ab_x,total_y-ab_y);
+              const double close=1000.0*std::hypot(total_x,total_y);
               const double ab_err=ab-canonical_gt_mm;
               const double ba_err=ba-canonical_gt_mm;
               std::cerr<<name<<"\n"
-                       <<"  A->B: N/E=("<<ab_n*1000.0<<", "<<ab_e*1000.0<<") mm  mag="<<ab
+                       <<"  A->B: X/Y=("<<ab_x*1000.0<<", "<<ab_y*1000.0<<") mm  mag="<<ab
                        <<" mm  error="<<ab_err<<" mm ("<<(100.0*ab_err/canonical_gt_mm)<<" %)\n"
-                       <<"  B->A: N/E=("<<(total_n-ab_n)*1000.0<<", "<<(total_e-ab_e)*1000.0
+                       <<"  B->A: X/Y=("<<(total_x-ab_x)*1000.0<<", "<<(total_y-ab_y)*1000.0
                        <<") mm  mag="<<ba<<" mm  error="<<ba_err<<" mm ("<<(100.0*ba_err/canonical_gt_mm)<<" %)\n"
-                       <<"  CLOSURE: N/E=("<<total_n*1000.0<<", "<<total_e*1000.0
+                       <<"  CLOSURE: X/Y=("<<total_x*1000.0<<", "<<total_y*1000.0
                        <<") mm  mag="<<close<<" mm ("<<(100.0*close/canonical_gt_mm)<<" % GT)\n";
-              return std::array<double,3>{std::abs(ab_err),std::abs(ba_err),close};
             };
 
             std::cerr<<"\n======================================================================\n"
-                     <<"CANONICAL METRIC A/B RESULT\n"
+                     <<"CANONICAL NATIVE METRIC RESULT\n"
                      <<"PHYSICAL GT A->B = "<<canonical_gt_mm<<" mm\n"
+                     <<"Metric: native production flow_body * real TF-Luna camera height * dt\n"
+                     <<"FB shadow: NOT USED in this result\n"
                      <<"======================================================================\n";
-            const auto mb=metric("BASE",return_b_ned_n,return_b_ned_e,return_ned_n,return_ned_e);
-            const auto mf=metric("FB SHADOW",return_b_fb_ned_n,return_b_fb_ned_e,
-                                 return_fb_ned_n,return_fb_ned_e);
-            std::cerr<<"FB - BASE (negative = improvement)\n"
-                     <<"  |A->B error| change: "<<(mf[0]-mb[0])<<" mm\n"
-                     <<"  |B->A error| change: "<<(mf[1]-mb[1])<<" mm\n"
-                     <<"  closure change:      "<<(mf[2]-mb[2])<<" mm\n"
-                     <<"======================================================================\n";
+            metric("NATIVE",return_b_raw_x,return_b_raw_y,return_raw_x,return_raw_y);
+            std::cerr<<"---------------------------------------------------------------------\n"
+                     <<"GYRO-COMPENSATED EKF FORENSIC (diagnostic only; NOT metric result)\n";
+            metric("EKF_FORENSIC",return_b_ned_n,return_b_ned_e,return_ned_n,return_ned_e);
+            std::cerr<<"======================================================================\n";
             canonical_state=5;
             std::cerr<<"ТЕСТ ЗАВЕРШЁН.\n";
             g_running=false;
