@@ -31,7 +31,8 @@ def main():
   zone=None;good=False;reason="need >=8 corners";cx=cy=0.;d=None;nov=0.
   if cc is not None and nc>=8:
    p=cc.reshape(-1,2);cx,cy=p.mean(0);zx=min(2,max(0,int(cx/(640/3))));zy=min(2,max(0,int(cy/(480/3))));zone=(zy,zx);d=descriptor(cc)
-   if cy<a.top_mask: reason="stand-ring masked area"\n   elif counts[zy,zx]>=a.per_zone:reason="zone full"
+   if cy<a.top_mask: reason="stand-ring masked area"
+   elif counts[zy,zx]>=a.per_zone:reason="zone full"
    else:
     old=descs[zy][zx]
     nov=999. if not old else min(float(np.linalg.norm((d-o)*np.array([2.,2.,1.,1.]))) for o in old)
@@ -41,7 +42,9 @@ def main():
   if mi is not None:cv2.aruco.drawDetectedMarkers(vis,mc,mi)
   if cc is not None:cv2.aruco.drawDetectedCornersCharuco(vis,cc,ci)
   for x in (213,426):cv2.line(vis,(x,0),(x,479),(255,255,255),1)
-  cv2.rectangle(vis,(0,0),(639,a.top_mask),(80,80,80),2)\n  cv2.putText(vis,"MASK: STAND RING / NOT CALIBRATION COVERAGE",(8,145),cv2.FONT_HERSHEY_SIMPLEX,.48,(255,255,255),2)\n  cv2.line(vis,(0,320),(639,320),(255,255,255),1)
+  cv2.rectangle(vis,(0,0),(639,a.top_mask),(80,80,80),2)
+  cv2.putText(vis,"MASK: STAND RING / NOT CALIBRATION COVERAGE",(8,145),cv2.FONT_HERSHEY_SIMPLEX,.48,(255,255,255),2)
+  cv2.line(vis,(0,320),(639,320),(255,255,255),1)
   for yy in range(1,3):
    for xx in range(3):
     cv2.putText(vis,f"{counts[yy,xx]}/{a.per_zone}",(xx*213+8,yy*160+22),cv2.FONT_HERSHEY_SIMPLEX,.55,(0,255,0) if counts[yy,xx]>=a.per_zone else (255,255,255),2)
