@@ -3,7 +3,8 @@
 Физические размеры зафиксированы до расчёта: square=27.315 mm, marker=20.031 mm.
 Считает несколько distortion-моделей, per-view errors и leave-one-out.
 """
-import sys,glob,cv2,numpy as np\nimport time
+import sys,glob,cv2,numpy as np
+import time
 from pathlib import Path
 if len(sys.argv)!=2: raise SystemExit("usage: analyze_charuco_independent_series.py /path/to/series")
 root=Path(sys.argv[1]); files=sorted(glob.glob(str(root/"frame_*.jpg")))
