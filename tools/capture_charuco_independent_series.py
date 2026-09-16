@@ -5,7 +5,7 @@
 """
 import argparse,time,csv
 from pathlib import Path
-import cv2,numpy as np
+import cv2,numpy as np\nfrom collections import deque
 S=.027315;M=.020031
 dic=cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 try: board=cv2.aruco.CharucoBoard((7,5),S,M,dic)
@@ -31,8 +31,8 @@ def main():
  out=Path(f"/home/vio/charuco_series_{a.series}_{time.strftime('%Y%m%d_%H%M%S')}");out.mkdir(parents=True)
  cap=cv2.VideoCapture(a.camera,cv2.CAP_V4L2);cap.set(cv2.CAP_PROP_FOURCC,cv2.VideoWriter_fourcc(*"MJPG"));cap.set(cv2.CAP_PROP_FRAME_WIDTH,640);cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480);cap.set(cv2.CAP_PROP_FPS,120)
  if not cap.isOpened():raise SystemExit("camera open failed")
- saved=[];descs=[];meta=[]
- print(f"SERIES_{a.series}: SPACE save, >=8 corners + diversity gate; Q finish.")
+ saved=[];descs=[];meta=[];window=deque(maxlen=24)
+ print(f"SERIES_{a.series}: SPACE saves best stable frame from 24-frame window; median >=6 + diversity gate; Q finish.")
  while True:
   ok,im=cap.read()
   if not ok:continue
@@ -43,9 +43,9 @@ def main():
   vis=im.copy()
   if mi is not None:cv2.aruco.drawDetectedMarkers(vis,mc,mi)
   if cc is not None:cv2.aruco.drawDetectedCornersCharuco(vis,cc,ci)
-  msg=f"saved {len(saved)}/{a.count} markers {nm}/17 corners {nc}/24 novelty {dist:.3f}"
+  msg=f"saved {len(saved)}/{a.count} now {nc}/24 med {med:.1f} best {(best[0] if best else 0)}/24 novelty {bdist:.3f}"
   cv2.putText(vis,msg,(8,24),cv2.FONT_HERSHEY_SIMPLEX,.48,(0,255,0) if good else (0,0,255),2)
-  cv2.putText(vis,"SPACE ACCEPT" if good else ("need >=8 corners" if nc<8 else "move/tilt/scale board"),(8,47),cv2.FONT_HERSHEY_SIMPLEX,.55,(0,255,0) if good else (0,0,255),2)
+  cv2.putText(vis,"SPACE ACCEPT" if good else ("hold: need median >=6" if not stable else "move/tilt/scale board"),(8,47),cv2.FONT_HERSHEY_SIMPLEX,.55,(0,255,0) if good else (0,0,255),2)
   cv2.imshow(f"ChArUco SERIES_{a.series}",vis);k=cv2.waitKey(1)&255
   if k==32:
    if not good:print("REJECT",msg);continue
