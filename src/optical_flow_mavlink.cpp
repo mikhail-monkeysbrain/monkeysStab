@@ -2884,7 +2884,7 @@ int main(int argc,char** argv){
         }
 
         // В guided-режиме подробная телеметрия остаётся в CSV, но не засоряет терминал.
-        if(!guided && !return_cli && frame%100==0){
+        if(!guided && !return_cli && !blind4_cli && frame%100==0){
           std::cerr<<"OF frame="<<frame
                    <<" valid="<<(s.valid?1:0)
                    <<" rateFRD=("<<s.flow_body_x<<","<<s.flow_body_y<<") rad/s"
