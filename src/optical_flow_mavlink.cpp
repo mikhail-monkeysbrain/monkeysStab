@@ -1438,6 +1438,10 @@ int main(int argc,char** argv){
     if(return_cli && !cli_terminal.active)
       throw std::runtime_error("--return-cli требует интерактивный TTY stdin");
 
+    // Strict one-way state machine for the canonical hand test.
+    // 0=WAIT_A, 1=GO_B, 2=RETURN_A, 3=FINISHED.
+    int canonical_state=0;
+
     if(return_gui || rotation_gui) initGuiFont();
     if(return_gui){
       cv::namedWindow(return_window_name,cv::WINDOW_NORMAL);
@@ -2464,7 +2468,8 @@ int main(int argc,char** argv){
 
         if(return_cli){
           const int key=cli_terminal.readKey();
-          if(key==' ' && efresh){
+
+          if(canonical_state==0 && key==' ' && efresh){
             return_target_n=ep.x; return_target_e=ep.y;
             return_target_set=true; return_trail.clear();
             return_view_halfspan_m=0.50;
@@ -2475,9 +2480,11 @@ int main(int argc,char** argv){
             return_home_marked=false;
             if(fg_ok){ return_yaw0=fg.yaw; return_yaw0_set=true; }
             pending_return_event=1;
+            canonical_state=1;
             std::cerr<<"CANONICAL A MARK: N="<<return_target_n<<" E="<<return_target_e
                      <<" yaw_deg="<<(return_yaw0_set?return_yaw0*180.0/M_PI:0.0)<<"\n";
-          } else if((key=='b'||key=='B') && efresh && return_target_set){
+
+          } else if(canonical_state==1 && (key=='b'||key=='B') && efresh){
             return_b_marked=true;
             return_b_n=ep.x; return_b_e=ep.y;
             return_b_raw_x=return_raw_x; return_b_raw_y=return_raw_y;
@@ -2485,14 +2492,17 @@ int main(int argc,char** argv){
             return_b_ned_n=return_ned_n; return_b_ned_e=return_ned_e;
             return_b_yaw=fg_ok?fg.yaw:0.0;
             pending_return_event=2;
+            canonical_state=2;
             std::cerr<<"CANONICAL B MARK: EKF_from_A="<<1000.0*std::hypot(ep.x-return_target_n,ep.y-return_target_e)
                      <<" mm RAW_NED_from_A="<<1000.0*std::hypot(return_ned_n,return_ned_e)
                      <<" mm RAW_BODY_from_A="<<1000.0*std::hypot(return_body_dx,return_body_dy)
                      <<" mm RAW_LOS_legacy="<<1000.0*std::hypot(return_raw_x,return_raw_y)
                      <<" mm dYaw="<<(fg_ok&&return_yaw0_set?std::remainder(fg.yaw-return_yaw0,2.0*M_PI)*180.0/M_PI:0.0)<<" deg\n";
-          } else if((key=='h'||key=='H') && efresh && return_target_set){
+
+          } else if(canonical_state==2 && (key=='h'||key=='H') && efresh){
             pending_return_event=3;
             return_home_marked=true;
+            canonical_state=3;
             const double ekf_close=1000.0*std::hypot(ep.x-return_target_n,ep.y-return_target_e);
             const double raw_close=1000.0*std::hypot(return_raw_x,return_raw_y);
             const double raw_body_close=1000.0*std::hypot(return_body_dx,return_body_dy);
@@ -2507,9 +2517,11 @@ int main(int argc,char** argv){
                        <<" mm B_H_RAW_NED="<<1000.0*std::hypot(return_ned_n-return_b_ned_n,return_ned_e-return_b_ned_e)<<" mm";
             }
             std::cerr<<"\n";
-          } else if(key=='q'||key=='Q'||key==27){
+
+          } else if(canonical_state==3 && (key=='q'||key=='Q'||key==27)){
             g_running=false;
           }
+          // Every other key is intentionally ignored. A/B/H cannot be repeated.
         }
 
         if(return_gui){
