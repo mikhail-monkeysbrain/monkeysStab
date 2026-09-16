@@ -104,8 +104,11 @@ def main():
             if hm is not None:
                 d,area=hm;fs=focus_score(g,cc);zx=cell(d[0],3);zy=cell(d[1],3)
                 sc=0 if d[2]<.28 else (1 if d[2]<.48 else 2)
-                # Homography projective terms: sign gives opposite tilt families.
-                tx,ty=d[4],d[5];thr=.0012
+                pt=pose_tilt(cc,ci)
+                if pt is None:
+                    reason="pose solve failed"
+                    continue
+                tx,ty=pt;thr=8.0
                 if abs(tx)<thr and abs(ty)<thr:tc=0
                 elif abs(tx)>=abs(ty):tc=1 if tx<0 else 2
                 else:tc=3 if ty<0 else 4
