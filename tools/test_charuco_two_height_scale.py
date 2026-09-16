@@ -22,22 +22,22 @@ WINDOW = "JT-Zero ChArUco two-height BURST"
 
 
 def get_z(frame, min_corners):
-    """Use the exact detector path already validated by SERIES_D/analyzer."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    mc, mi, _ = cv2.aruco.detectMarkers(gray, DICT)
-    if mi is None or len(mi) < 2:
+    marker_corners, marker_ids, _ = cv2.aruco.detectMarkers(gray, DICT)
+    if marker_ids is None or len(marker_ids) < 2:
         return None
-    _, cc, ci = cv2.aruco.interpolateCornersCharuco(mc, mi, gray, BOARD)
+    _, cc, ci = cv2.aruco.interpolateCornersCharuco(
+        marker_corners, marker_ids, gray, BOARD
+    )
     if cc is None or ci is None or len(ci) < min_corners:
         return None
     ids = ci.reshape(-1).astype(int)
     obj = OBJ[ids].astype(np.float32)
     img = cc.reshape(-1, 2).astype(np.float32)
-    ok, rvec, tvec = cv2.solvePnP(obj, img, K, D, flags=cv2.SOLVEPNP_ITERATIVE)
+    ok, rvec, tvec = cv2.solvePnP(
+        obj, img, K, D, flags=cv2.SOLVEPNP_ITERATIVE
+    )
     if not ok:
         return None
-    # BOARD lies in Z=0. solvePnP tvec is board-origin in camera coordinates.
-    # For the two-height delta we need perpendicular board-plane distance,
-    # i.e. camera-frame Z of the board plane/origin, not camera center Z in board frame.
     return abs(float(tvec[2, 0])) * 1000.0, len(ids)
 
