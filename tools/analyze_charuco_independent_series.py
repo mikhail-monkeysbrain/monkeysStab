@@ -3,7 +3,7 @@
 Физические размеры зафиксированы до расчёта: square=27.315 mm, marker=20.031 mm.
 Считает несколько distortion-моделей, per-view errors и leave-one-out.
 """
-import sys,glob,cv2,numpy as np
+import sys,glob,cv2,numpy as np\nimport time
 from pathlib import Path
 if len(sys.argv)!=2: raise SystemExit("usage: analyze_charuco_independent_series.py /path/to/series")
 root=Path(sys.argv[1]); files=sorted(glob.glob(str(root/"frame_*.jpg")))
@@ -39,14 +39,26 @@ for (fn,o,p),r,t in zip(obs,rv,tv):
  errs.append((Path(fn).name,float(np.sqrt(np.mean(e*e))),len(e)))
 print("\n===== WORST VIEWS FREE_5D =====")
 for x in sorted(errs,key=lambda z:z[1],reverse=True)[:10]:print(f"{x[0]} RMS={x[1]:.4f}px corners={x[2]}")
-print("\n===== LEAVE-ONE-OUT FREE_5D =====")
-loo=[]
-for i in range(len(obs)):
+print("\n===== SUBSAMPLE STABILITY FREE_5D =====",flush=True)
+# Full LOO is both expensive and weak for a large, highly redundant set.
+# Use deterministic geometry-preserving subsets: sort by filename, then take
+# interleaved 75% subsets. This gives a quick sensitivity test without hours of LOO.
+subs=[]
+n=len(obs)
+for phase in range(4):
+ items=[x for i,x in enumerate(obs) if (i+phase)%4 != 0]
+ t0=time.time(); print(f"subset {phase+1}/4: {len(items)} views ...",flush=True)
  try:
-  rr,kk,dd,_,_=cal(obs[:i]+obs[i+1:],0);loo.append([kk[0,0],kk[1,1],kk[0,2],kk[1,2],rr])
- except cv2.error:pass
-a=np.asarray(loo)
-for j,n in enumerate(["fx","fy","cx","cy","rms"]):print(f"{n}: min={a[:,j].min():.3f} median={np.median(a[:,j]):.3f} max={a[:,j].max():.3f} std={a[:,j].std():.3f}")
+  rr,kk,dd,_,_=cal(items,0)
+  subs.append([kk[0,0],kk[1,1],kk[0,2],kk[1,2],rr])
+  print(f"  fx={kk[0,0]:.3f} fy={kk[1,1]:.3f} cx={kk[0,2]:.3f} cy={kk[1,2]:.3f} RMS={rr:.4f} time={time.time()-t0:.1f}s",flush=True)
+ except cv2.error as e:
+  print("  FAILED:",e,flush=True)
+a=np.asarray(subs)
+if len(a):
+ print("spread across 4 x 75% subsets:")
+ for j,nm in enumerate(["fx","fy","cx","cy","rms"]):
+  print(f"{nm}: min={a[:,j].min():.3f} median={np.median(a[:,j]):.3f} max={a[:,j].max():.3f} std={a[:,j].std():.3f}")
 print("\n===== REFERENCE RATIOS (report only; NOT fitted) =====")
 print("FREE_5D fx/568.5317075 =",K[0,0]/568.5317075)
 print("FREE_5D fy/569.6800556 =",K[1,1]/569.6800556)
