@@ -59,6 +59,8 @@ echo "Запуск. Подготовка камеры и FC может заня�
 echo
 
 set +e
+# IMPORTANT: keep stdin/stdout/stderr attached directly to the real terminal.
+# Do not put this interactive runtime behind tee/awk: --return-cli requires a TTY.
 MONKEYS_RUN_DIR="$DATASET_DIR" \
 MONKEYS_DATASET_DIR="$DATASET_DIR" \
 MONKEYS_DATASET_SURFACE="$SURFACE" \
@@ -66,31 +68,9 @@ MONKEYS_RETURN_GUI=0 \
 MONKEYS_RETURN_CLI=1 \
 MONKEYS_RETURN_MANUAL_TARGET=1 \
 MONKEYS_LOCAL_GUI=0 \
-bash "$ROOT/scripts/run.sh" 2>&1 \
-  | tee "$DATASET_DIR/runtime.log" \
-  | awk '
-      BEGIN { fflush() }
-      /CANONICAL A MARK:/ {
-        print "\nТОЧКА A ЗАФИКСИРОВАНА."
-        print "Перенеси БПЛА в точку B. После полной остановки нажми B."
-        fflush(); next
-      }
-      /CANONICAL B MARK:/ {
-        print "\nТОЧКА B ЗАФИКСИРОВАНА."
-        print "НЕ ДВИГАЙ БПЛА. Измерь рулеткой фактическое расстояние A→B."
-        print "После измерения верни БПЛА физически в точку A и после полной остановки нажми H."
-        fflush(); next
-      }
-      /CANONICAL H MARK:/ {
-        print "\nВОЗВРАТ В A ЗАФИКСИРОВАН."
-        print "Нажми Q для завершения теста."
-        fflush(); next
-      }
-      /ОШИБКА:|DATASET CAPTURE COMPLETE:|Остановлено\. CSV:/ {
-        print; fflush(); next
-      }
-    '
-RC=${PIPESTATUS[0]}
+bash "$ROOT/scripts/run.sh"
+RC=$?
+
 set -e
 
 {
