@@ -90,6 +90,7 @@ def main():
     if not cap.isOpened():raise SystemExit("camera open failed")
     coverage=np.zeros((3,3),int)
     tilt=np.zeros(5,int) # frontal,left,right,up,down projective classes
+    tnames=["FRONTAL","LEFT","RIGHT","NOSE_DOWN","NOSE_UP"]
     scale=np.zeros(3,int)
     desc=[];meta=[];last=0.;fpsq=deque(maxlen=120);frames_seen=0
     print("SERIES_D AUTO: move AND tilt UAV continuously; Q/ESC stops. No fixed target count.")
