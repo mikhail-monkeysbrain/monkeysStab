@@ -54,34 +54,35 @@ echo "Далее: перенеси в B, после остановки нажм�
 echo "В B НЕ ДВИГАЙ аппарат и измерь A→B рулеткой."
 echo "Фактическое расстояние запиши в PHYSICAL_TEST_NOTES.txt."
 echo "После измерения верни аппарат в A и нажми H."
-echo "Для завершения нажми Q или ESC."
+echo "Для завершения нажми Q."
 echo
 
 set +e
 MONKEYS_RUN_DIR="$DATASET_DIR" \
 MONKEYS_DATASET_DIR="$DATASET_DIR" \
 MONKEYS_DATASET_SURFACE="$SURFACE" \
-MONKEYS_RETURN_GUI=1 \
+MONKEYS_RETURN_GUI=0 \
+MONKEYS_RETURN_CLI=1 \
 MONKEYS_RETURN_MANUAL_TARGET=1 \
 MONKEYS_LOCAL_GUI=0 \
 bash "$ROOT/scripts/run.sh" 2>&1 \
   | tee "$DATASET_DIR/runtime.log" \
   | awk \'
       BEGIN { fflush() }
-      /RETURN GUI TARGET SET:|RETURN GUI TARGET RESET:/ {
+      /CANONICAL A MARK:/ {
         print "\nТОЧКА A ЗАФИКСИРОВАНА."
         print "Перенеси БПЛА в точку B. После полной остановки нажми B."
         fflush(); next
       }
-      /RETURN GUI B MARK:/ {
+      /CANONICAL B MARK:/ {
         print "\nТОЧКА B ЗАФИКСИРОВАНА."
         print "НЕ ДВИГАЙ БПЛА. Измерь рулеткой фактическое расстояние A→B."
         print "После измерения верни БПЛА физически в точку A и после полной остановки нажми H."
         fflush(); next
       }
-      /RETURN CLOSURE MARK \(PHYSICAL HOME\)/ {
+      /CANONICAL H MARK:/ {
         print "\nВОЗВРАТ В A ЗАФИКСИРОВАН."
-        print "Подержи БПЛА неподвижно 2–3 секунды, затем нажми Q или ESC."
+        print "Нажми Q для завершения теста."
         fflush(); next
       }
       /ОШИБКА:|DATASET CAPTURE COMPLETE:|Остановлено\. CSV:/ {
