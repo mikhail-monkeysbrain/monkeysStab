@@ -2481,8 +2481,8 @@ int main(int argc,char** argv){
             if(fg_ok){ return_yaw0=fg.yaw; return_yaw0_set=true; }
             pending_return_event=1;
             canonical_state=1;
-            std::cerr<<"CANONICAL A MARK: N="<<return_target_n<<" E="<<return_target_e
-                     <<" yaw_deg="<<(return_yaw0_set?return_yaw0*180.0/M_PI:0.0)<<"\n";
+            std::cerr<<"\nТОЧКА A ЗАФИКСИРОВАНА.\n"
+                     <<"Перенеси БПЛА в B. После полной остановки нажми B.\n";
 
           } else if(canonical_state==1 && (key=='b'||key=='B') && efresh){
             return_b_marked=true;
@@ -2493,11 +2493,9 @@ int main(int argc,char** argv){
             return_b_yaw=fg_ok?fg.yaw:0.0;
             pending_return_event=2;
             canonical_state=2;
-            std::cerr<<"CANONICAL B MARK: EKF_from_A="<<1000.0*std::hypot(ep.x-return_target_n,ep.y-return_target_e)
-                     <<" mm RAW_NED_from_A="<<1000.0*std::hypot(return_ned_n,return_ned_e)
-                     <<" mm RAW_BODY_from_A="<<1000.0*std::hypot(return_body_dx,return_body_dy)
-                     <<" mm RAW_LOS_legacy="<<1000.0*std::hypot(return_raw_x,return_raw_y)
-                     <<" mm dYaw="<<(fg_ok&&return_yaw0_set?std::remainder(fg.yaw-return_yaw0,2.0*M_PI)*180.0/M_PI:0.0)<<" deg\n";
+            std::cerr<<"\nТОЧКА B ЗАФИКСИРОВАНА.\n"
+                     <<"НЕ ДВИГАЙ БПЛА. Измерь рулеткой A->B.\n"
+                     <<"После измерения верни БПЛА в A и после полной остановки нажми H.\n";
 
           } else if(canonical_state==2 && (key=='h'||key=='H') && efresh){
             pending_return_event=3;
@@ -2507,16 +2505,11 @@ int main(int argc,char** argv){
             const double raw_close=1000.0*std::hypot(return_raw_x,return_raw_y);
             const double raw_body_close=1000.0*std::hypot(return_body_dx,return_body_dy);
             const double raw_ned_close=1000.0*std::hypot(return_ned_n,return_ned_e);
-            std::cerr<<"CANONICAL H MARK: EKF_closure="<<ekf_close
-                     <<" mm RAW_NED_closure="<<raw_ned_close
-                     <<" mm RAW_BODY_closure="<<raw_body_close
-                     <<" mm RAW_LOS_closure="<<raw_close<<" mm";
-            if(return_b_marked){
-              std::cerr<<" A_B_EKF="<<1000.0*std::hypot(return_b_n-return_target_n,return_b_e-return_target_e)
-                       <<" mm A_B_RAW_NED="<<1000.0*std::hypot(return_b_ned_n,return_b_ned_e)
-                       <<" mm B_H_RAW_NED="<<1000.0*std::hypot(return_ned_n-return_b_ned_n,return_ned_e-return_b_ned_e)<<" mm";
-            }
-            std::cerr<<"\n";
+            // Values are still written to the production CSV via pending_return_event.
+            // Keep the operator terminal intentionally quiet.
+            (void)ekf_close; (void)raw_close; (void)raw_body_close; (void)raw_ned_close;
+            std::cerr<<"\nВОЗВРАТ В A ЗАФИКСИРОВАН.\n"
+                     <<"Нажми Q для завершения теста.\n";
 
           } else if(canonical_state==3 && (key=='q'||key=='Q'||key==27)){
             g_running=false;
