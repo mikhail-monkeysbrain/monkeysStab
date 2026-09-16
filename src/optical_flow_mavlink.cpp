@@ -1439,8 +1439,15 @@ int main(int argc,char** argv){
       throw std::runtime_error("--return-cli требует интерактивный TTY stdin");
 
     // Strict one-way state machine for the canonical hand test.
-    // 0=WAIT_A, 1=GO_B, 2=RETURN_A, 3=FINISHED.
+    // Canonical metric A/B protocol:
+    // 0=WAIT_A, 1=GO_B, 2=ENTER_GT, 3=WAIT_RETURN_SPACE, 4=RETURN_A.
     int canonical_state=0;
+    std::string canonical_gt_buf;
+    double canonical_gt_mm=0.0;
+    double return_fb_body_dx=0.0,return_fb_body_dy=0.0;
+    double return_fb_ned_n=0.0,return_fb_ned_e=0.0;
+    double return_b_fb_body_dx=0.0,return_b_fb_body_dy=0.0;
+    double return_b_fb_ned_n=0.0,return_b_fb_ned_e=0.0;
 
     if(return_gui || rotation_gui) initGuiFont();
     if(return_gui){
@@ -2150,6 +2157,19 @@ int main(int argc,char** argv){
               const double r11=sy*sp*sr+cy*cr;
               return_ned_n += r00*dbx + r01*dby;
               return_ned_e += r10*dbx + r11*dby;
+
+              // FB shadow metric integral on the exact same accepted camera interval.
+              // Diagnostic only: never published to FC.
+              if(g_fb_shadow_max_px>0.0 && s.fb_shadow_valid){
+                const double fb_comp_x=-s.fb_flow_body_x + fg.x;
+                const double fb_comp_y=-s.fb_flow_body_y + fg.y;
+                const double fb_dbx=(-fb_comp_y)*hcam*dt;
+                const double fb_dby=( fb_comp_x)*hcam*dt;
+                return_fb_body_dx += fb_dbx;
+                return_fb_body_dy += fb_dby;
+                return_fb_ned_n += r00*fb_dbx + r01*fb_dby;
+                return_fb_ned_e += r10*fb_dbx + r11*fb_dby;
+              }
             }
           }
         }
@@ -2484,45 +2504,95 @@ int main(int argc,char** argv){
             return_raw_x=return_raw_y=0.0;
             return_body_dx=return_body_dy=0.0;
             return_ned_n=return_ned_e=0.0;
+            return_fb_body_dx=return_fb_body_dy=0.0;
+            return_fb_ned_n=return_fb_ned_e=0.0;
             return_b_marked=false;
             return_home_marked=false;
+            canonical_gt_buf.clear(); canonical_gt_mm=0.0;
             if(fg_ok){ return_yaw0=fg.yaw; return_yaw0_set=true; }
             pending_return_event=1;
             canonical_state=1;
             std::cerr<<"\nТОЧКА A ЗАФИКСИРОВАНА.\n"
-                     <<"Перенеси БПЛА в B. После полной остановки нажми B.\n";
+                     <<"Двигай БПЛА по столу в B. После полной остановки нажми SPACE.\n";
 
-          } else if(canonical_state==1 && (key=='b'||key=='B') && efresh){
+          } else if(canonical_state==1 && key==' ' && efresh){
             return_b_marked=true;
             return_b_n=ep.x; return_b_e=ep.y;
             return_b_raw_x=return_raw_x; return_b_raw_y=return_raw_y;
             return_b_body_dx=return_body_dx; return_b_body_dy=return_body_dy;
             return_b_ned_n=return_ned_n; return_b_ned_e=return_ned_e;
+            return_b_fb_body_dx=return_fb_body_dx; return_b_fb_body_dy=return_fb_body_dy;
+            return_b_fb_ned_n=return_fb_ned_n; return_b_fb_ned_e=return_fb_ned_e;
             return_b_yaw=fg_ok?fg.yaw:0.0;
             pending_return_event=2;
             canonical_state=2;
-            std::cerr<<"\nТОЧКА B ЗАФИКСИРОВАНА.\n"
-                     <<"НЕ ДВИГАЙ БПЛА. Измерь рулеткой A->B.\n"
-                     <<"После измерения верни БПЛА в A и после полной остановки нажми H.\n";
+            canonical_gt_buf.clear();
+            std::cerr<<"\nТОЧКА B ЗАФИКСИРОВАНА. БПЛА НЕ ДВИГАТЬ.\n"
+                     <<"Измерь физическое A->B и введи расстояние в мм, затем ENTER.\n"
+                     <<"GT mm: "<<std::flush;
 
-          } else if(canonical_state==2 && (key=='h'||key=='H') && efresh){
+          } else if(canonical_state==2){
+            if((key>='0'&&key<='9') || key=='.' || key==','){
+              const char ch=(key==',')?'.':(char)key;
+              canonical_gt_buf.push_back(ch);
+              std::cerr<<ch<<std::flush;
+            } else if((key==8 || key==127) && !canonical_gt_buf.empty()){
+              canonical_gt_buf.pop_back();
+              std::cerr<<"\b \b"<<std::flush;
+            } else if(key=='\r' || key=='\n'){
+              try{ canonical_gt_mm=std::stod(canonical_gt_buf); }catch(...){ canonical_gt_mm=0.0; }
+              if(canonical_gt_mm>=50.0 && canonical_gt_mm<=2000.0){
+                canonical_state=3;
+                std::cerr<<"\nGT ПРИНЯТ: "<<canonical_gt_mm<<" мм.\n"
+                         <<"Нажми SPACE, затем возвращай БПЛА в физическую точку A.\n";
+              } else {
+                canonical_gt_buf.clear(); canonical_gt_mm=0.0;
+                std::cerr<<"\nОШИБКА: расстояние должно быть 50..2000 мм. Введи заново.\nGT mm: "<<std::flush;
+              }
+            }
+
+          } else if(canonical_state==3 && key==' '){
+            canonical_state=4;
+            std::cerr<<"\nОБРАТНЫЙ ПРОХОД НАЧАТ. Верни БПЛА в A.\n"
+                     <<"После полной остановки нажми SPACE.\n";
+
+          } else if(canonical_state==4 && key==' ' && efresh){
             pending_return_event=3;
             return_home_marked=true;
-            canonical_state=3;
-            const double ekf_close=1000.0*std::hypot(ep.x-return_target_n,ep.y-return_target_e);
-            const double raw_close=1000.0*std::hypot(return_raw_x,return_raw_y);
-            const double raw_body_close=1000.0*std::hypot(return_body_dx,return_body_dy);
-            const double raw_ned_close=1000.0*std::hypot(return_ned_n,return_ned_e);
-            // Values are still written to the production CSV via pending_return_event.
-            // Keep the operator terminal intentionally quiet.
-            (void)ekf_close; (void)raw_close; (void)raw_body_close; (void)raw_ned_close;
-            std::cerr<<"\nВОЗВРАТ В A ЗАФИКСИРОВАН.\n"
-                     <<"Нажми Q для завершения теста.\n";
 
-          } else if(canonical_state==3 && (key=='q'||key=='Q'||key==27)){
+            auto metric=[&](const char* name,
+                            double ab_n,double ab_e,double total_n,double total_e){
+              const double ab=1000.0*std::hypot(ab_n,ab_e);
+              const double ba=1000.0*std::hypot(total_n-ab_n,total_e-ab_e);
+              const double close=1000.0*std::hypot(total_n,total_e);
+              const double ab_err=ab-canonical_gt_mm;
+              const double ba_err=ba-canonical_gt_mm;
+              std::cerr<<name<<"\n"
+                       <<"  A->B: N/E=("<<ab_n*1000.0<<", "<<ab_e*1000.0<<") mm  mag="<<ab
+                       <<" mm  error="<<ab_err<<" mm ("<<(100.0*ab_err/canonical_gt_mm)<<" %)\n"
+                       <<"  B->A: N/E=("<<(total_n-ab_n)*1000.0<<", "<<(total_e-ab_e)*1000.0
+                       <<") mm  mag="<<ba<<" mm  error="<<ba_err<<" mm ("<<(100.0*ba_err/canonical_gt_mm)<<" %)\n"
+                       <<"  CLOSURE: N/E=("<<total_n*1000.0<<", "<<total_e*1000.0
+                       <<") mm  mag="<<close<<" mm ("<<(100.0*close/canonical_gt_mm)<<" % GT)\n";
+              return std::array<double,3>{std::abs(ab_err),std::abs(ba_err),close};
+            };
+
+            std::cerr<<"\n======================================================================\n"
+                     <<"CANONICAL METRIC A/B RESULT\n"
+                     <<"PHYSICAL GT A->B = "<<canonical_gt_mm<<" mm\n"
+                     <<"======================================================================\n";
+            const auto mb=metric("BASE",return_b_ned_n,return_b_ned_e,return_ned_n,return_ned_e);
+            const auto mf=metric("FB SHADOW",return_b_fb_ned_n,return_b_fb_ned_e,
+                                 return_fb_ned_n,return_fb_ned_e);
+            std::cerr<<"FB - BASE (negative = improvement)\n"
+                     <<"  |A->B error| change: "<<(mf[0]-mb[0])<<" mm\n"
+                     <<"  |B->A error| change: "<<(mf[1]-mb[1])<<" mm\n"
+                     <<"  closure change:      "<<(mf[2]-mb[2])<<" mm\n"
+                     <<"======================================================================\n";
+            canonical_state=5;
+            std::cerr<<"ТЕСТ ЗАВЕРШЁН.\n";
             g_running=false;
           }
-          // Every other key is intentionally ignored. A/B/H cannot be repeated.
         }
 
         if(return_gui){
