@@ -19,6 +19,9 @@ dic=cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 try: board=cv2.aruco.CharucoBoard((7,5),S,M,dic)
 except TypeError: board=cv2.aruco.CharucoBoard_create(7,5,S,M,dic)
 OBJ=np.asarray(board.getChessboardCorners(),np.float32)
+# Approximate K is used ONLY for pose/guidance classification, never as calibration output.
+K_GUIDE=np.array([[568.5317075,0,320.0],[0,569.6800556,240.0],[0,0,1]],np.float64)
+D_GUIDE=np.zeros(5,np.float64)
 
 def detect(g):
     mc,mi,_=cv2.aruco.detectMarkers(g,dic)
@@ -40,6 +43,21 @@ def homography_metrics(cc,ci):
     x0,y0=p.min(0);x1,y1=p.max(0);cx,cy=p.mean(0)
     area=max(1.,float((x1-x0)*(y1-y0)))
     return np.array([cx/W,cy/H,(x1-x0)/W,(y1-y0)/H,px*S,py*S],float),area
+
+def pose_tilt(cc,ci):
+    """Return board-normal tilt_x/tilt_y degrees using approximate K for guidance."""
+    ids=ci.reshape(-1).astype(int)
+    obj=OBJ[ids].astype(np.float32)
+    img=cc.reshape(-1,2).astype(np.float32)
+    if len(obj)<6:return None
+    ok,rvec,tvec=cv2.solvePnP(obj,img,K_GUIDE,D_GUIDE,flags=cv2.SOLVEPNP_ITERATIVE)
+    if not ok:return None
+    R,_=cv2.Rodrigues(rvec)
+    n=R[:,2].astype(float)
+    if n[2]<0:n=-n
+    tx=math.degrees(math.atan2(n[0],max(1e-9,n[2])))
+    ty=math.degrees(math.atan2(n[1],max(1e-9,n[2])))
+    return tx,ty
 
 def focus_score(g,cc):
     p=cc.reshape(-1,2);x0,y0=np.floor(p.min(0)-8).astype(int);x1,y1=np.ceil(p.max(0)+8).astype(int)
@@ -96,8 +114,8 @@ def main():
         if ready:
             n=len(meta)+1;fn=f"frame_{n:04d}.jpg";cv2.imwrite(str(out/fn),im)
             coverage[zy,zx]+=1;tilt[tc]+=1;scale[sc]+=1;desc.append(d.copy());last=now
-            meta.append([fn,frames_seen,nm,nc,fs,nov,*d,zy,zx,tc,sc])
-            print(f"SAVE {n:04d} cell={zy},{zx} tilt={tc} scale={sc} corners={nc} focus={fs:.0f} novelty={nov:.3f}")
+            meta.append([fn,frames_seen,nm,nc,fs,nov,*d,tx,ty,zy,zx,tc,sc])
+            print(f"SAVE {n:04d} cell={zy},{zx} tilt={tc} pose=({tx:+.1f},{ty:+.1f})deg scale={sc} corners={nc} focus={fs:.0f} novelty={nov:.3f}")
         vis=im.copy()
         if mi is not None:cv2.aruco.drawDetectedMarkers(vis,mc,mi)
         if cc is not None:cv2.aruco.drawDetectedCornersCharuco(vis,cc,ci)
@@ -118,7 +136,7 @@ def main():
         if k in (27,ord('q'),ord('Q')):break
     cap.release();cv2.destroyAllWindows()
     with (out/"capture.csv").open("w",newline="") as f:
-        w=csv.writer(f);w.writerow(["file","source_frame","markers","corners","focus","novelty","cx_norm","cy_norm","w_norm","h_norm","proj_x","proj_y","cell_y","cell_x","tilt_class","scale_class"]);w.writerows(meta)
+        w=csv.writer(f);w.writerow(["file","source_frame","markers","corners","focus","novelty","cx_norm","cy_norm","w_norm","h_norm","proj_x","proj_y","pose_tilt_x_deg","pose_tilt_y_deg","cell_y","cell_x","tilt_class","scale_class"]);w.writerows(meta)
     np.savetxt(out/"coverage_3x3.csv",coverage,fmt="%d",delimiter=",")
     print("\nSaved:",out);print("source frames inspected:",frames_seen,"accepted:",len(meta));print("coverage 3x3:\n",coverage);print("tilt [front,L,R,U,D]:",tilt.tolist());print("scale [far,mid,near]:",scale.tolist())
 
