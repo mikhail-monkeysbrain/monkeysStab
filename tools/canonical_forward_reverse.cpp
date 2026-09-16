@@ -11,7 +11,7 @@
 #include <vector>
 
 struct Meta { long long frame=0, cam=0, mono=0; size_t size=0; };
-struct Step { bool valid=false; int features=0,tracked=0,inliers=0; double du=0,dv=0; };
+struct Step { bool valid=false; int features=0,tracked=0,inliers=0; double du=0,dv=0,rate=0; std::string reason="PRECHECK"; };
 static std::vector<std::string> split(const std::string&s){std::vector<std::string>v;std::stringstream q(s);std::string x;while(std::getline(q,x,','))v.push_back(x);return v;}
 
 static Step estimate(const cv::Mat& prev,const cv::Mat& curr,double dt,const cv::Mat& K,const cv::Mat&D){
@@ -22,22 +22,22 @@ static Step estimate(const cv::Mat& prev,const cv::Mat& curr,double dt,const cv:
  std::vector<cv::Point2f>p0,p1; constexpr int G=3; int per=std::max(1,(maxf+G*G-1)/(G*G)); p0.reserve(maxf);
  for(int gy=0;gy<G;gy++){int cy0=y0+(y1-y0)*gy/G,cy1=y0+(y1-y0)*(gy+1)/G;for(int gx=0;gx<G;gx++){int cx0=x0+(x1-x0)*gx/G,cx1=x0+(x1-x0)*(gx+1)/G;if(cx1<=cx0||cy1<=cy0)continue;cv::Rect cell(cx0,cy0,cx1-cx0,cy1-cy0);std::vector<cv::Point2f>local;cv::goodFeaturesToTrack(prev(cell),local,per,.01,7);for(auto p:local){p.x+=cell.x;p.y+=cell.y;p0.push_back(p);if((int)p0.size()>=maxf)break;}if((int)p0.size()>=maxf)break;}if((int)p0.size()>=maxf)break;}
  if(p0.size()<30){cv::Mat m(prev.size(),CV_8UC1,cv::Scalar(0));int fx0=std::clamp((int)std::lround(.05*prev.cols),0,prev.cols-1),fy0=std::clamp((int)std::lround(.25*prev.rows),0,prev.rows-1),fx1=std::clamp((int)std::lround(.95*prev.cols),fx0+1,prev.cols),fy1=std::clamp((int)std::lround(.98*prev.rows),fy0+1,prev.rows);m(cv::Rect(fx0,fy0,fx1-fx0,fy1-fy0)).setTo(255);std::vector<cv::Point2f>pf;cv::goodFeaturesToTrack(prev,pf,maxf,.005,5,m);if(pf.size()>p0.size())p0.swap(pf);}
- o.features=p0.size(); if(p0.size()<30)return o;
+ o.features=p0.size(); if(p0.size()<30){o.reason="FEATURES_LT30";return o;}
  std::vector<uchar>st;std::vector<float>err;cv::calcOpticalFlowPyrLK(prev,curr,p0,p1,st,err,{21,21},3,cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,30,.01),0,1e-4);
- std::vector<cv::Point2f>a,b;for(size_t i=0;i<p0.size();i++)if(st[i]){a.push_back(p0[i]);b.push_back(p1[i]);}o.tracked=a.size();if(a.size()<20)return o;
- cv::Mat mask;cv::findHomography(a,b,cv::RANSAC,2.0,mask,350,.99);if(mask.empty())return o;std::vector<cv::Point2f>ai,bi;for(size_t i=0;i<a.size();i++)if(mask.at<uchar>((int)i)){ai.push_back(a[i]);bi.push_back(b[i]);}o.inliers=ai.size();if(ai.size()<20)return o;
+ std::vector<cv::Point2f>a,b;for(size_t i=0;i<p0.size();i++)if(st[i]){a.push_back(p0[i]);b.push_back(p1[i]);}o.tracked=a.size();if(a.size()<20){o.reason="TRACKED_LT20";return o;}
+ cv::Mat mask;cv::findHomography(a,b,cv::RANSAC,2.0,mask,350,.99);if(mask.empty()){o.reason="HOMOGRAPHY_EMPTY";return o;}std::vector<cv::Point2f>ai,bi;for(size_t i=0;i<a.size();i++)if(mask.at<uchar>((int)i)){ai.push_back(a[i]);bi.push_back(b[i]);}o.inliers=ai.size();if(ai.size()<20){o.reason="INLIERS_LT20";return o;}
  std::vector<cv::Point2f>au,bu;cv::undistortPoints(ai,au,K,D);cv::undistortPoints(bi,bu,K,D);cv::Mat A(ai.size()*2,4,CV_64F),bb(ai.size()*2,1,CV_64F);
  for(size_t k=0;k<ai.size();k++){double x=au[k].x,y=au[k].y,du=bu[k].x-au[k].x,dv=bu[k].y-au[k].y;int r=2*k;A.at<double>(r,0)=1;A.at<double>(r,1)=0;A.at<double>(r,2)=x;A.at<double>(r,3)=-y;bb.at<double>(r)=du;A.at<double>(r+1,0)=0;A.at<double>(r+1,1)=1;A.at<double>(r+1,2)=y;A.at<double>(r+1,3)=x;bb.at<double>(r+1)=dv;}
- cv::Mat sol;if(!cv::solve(A,bb,sol,cv::DECOMP_SVD))return o;o.du=sol.at<double>(0);o.dv=sol.at<double>(1);o.valid=std::hypot(o.dv/dt,-o.du/dt)<4.0;return o;
+ cv::Mat sol;if(!cv::solve(A,bb,sol,cv::DECOMP_SVD)){o.reason="SOLVE_FAIL";return o;}o.du=sol.at<double>(0);o.dv=sol.at<double>(1);o.rate=std::hypot(o.dv/dt,-o.du/dt);o.valid=o.rate<4.0;o.reason=o.valid?"OK":"RATE_GE4";return o;
 }
 struct Sum{double x=0,y=0;long long valid=0,invalid=0;};
 static void forensic(const std::vector<cv::Mat>&im,const std::vector<Meta>&m,int lo,int hi,const cv::Mat&K,const cv::Mat&D){
- struct R{int i;double e,fx,fy,rx,ry;int fv,rv,ffi,rfi,ft,rt;};std::vector<R>v;double total=0;
- for(int i=lo+1;i<=hi;i++){double dt=(m[i].cam-m[i-1].cam)*1e-9;Step f=estimate(im[i-1],im[i],dt,K,D),r=estimate(im[i],im[i-1],dt,K,D);double ex=(f.valid?f.du:0)+(r.valid?r.du:0),ey=(f.valid?f.dv:0)+(r.valid?r.dv:0),e=std::hypot(ex,ey);total+=e;v.push_back({i,e,f.du,f.dv,r.du,r.dv,f.valid,r.valid,f.features,r.features,f.tracked,r.tracked});}
+ struct R{int i;double e,fx,fy,rx,ry,fr,rr;int fv,rv,ffi,rfi,ft,rt,fi,ri;std::string freason,rreason;};std::vector<R>v;double total=0;
+ for(int i=lo+1;i<=hi;i++){double dt=(m[i].cam-m[i-1].cam)*1e-9;Step f=estimate(im[i-1],im[i],dt,K,D),r=estimate(im[i],im[i-1],dt,K,D);double ex=(f.valid?f.du:0)+(r.valid?r.du:0),ey=(f.valid?f.dv:0)+(r.valid?r.dv:0),e=std::hypot(ex,ey);total+=e;v.push_back({i,e,f.du,f.dv,r.du,r.dv,f.rate,r.rate,f.valid,r.valid,f.features,r.features,f.tracked,r.tracked,f.inliers,r.inliers,f.reason,r.reason});}
  std::sort(v.begin(),v.end(),[](const R&a,const R&b){return a.e>b.e;});
  std::cout<<"\\n===== B->A TOP SAME-PAIR RECIPROCITY ERRORS =====\\n";
- std::cout<<"rank frame0 frame1 err f_valid r_valid f_feat r_feat f_trk r_trk f_du f_dv r_du r_dv\\n";
- double top10=0,top50=0;for(size_t k=0;k<v.size();k++){if(k<10)top10+=v[k].e;if(k<50)top50+=v[k].e;if(k<25){auto&q=v[k];std::cout<<k+1<<" "<<m[q.i-1].frame<<" "<<m[q.i].frame<<" "<<q.e<<" "<<q.fv<<" "<<q.rv<<" "<<q.ffi<<" "<<q.rfi<<" "<<q.ft<<" "<<q.rt<<" "<<q.fx<<" "<<q.fy<<" "<<q.rx<<" "<<q.ry<<"\\n";}}
+ std::cout<<"rank frame0 frame1 err f_valid r_valid f_reason r_reason f_feat r_feat f_trk r_trk f_inl r_inl f_rate r_rate f_du f_dv r_du r_dv\\n";
+ double top10=0,top50=0;for(size_t k=0;k<v.size();k++){if(k<10)top10+=v[k].e;if(k<50)top50+=v[k].e;if(k<25){auto&q=v[k];std::cout<<k+1<<" "<<m[q.i-1].frame<<" "<<m[q.i].frame<<" "<<q.e<<" "<<q.fv<<" "<<q.rv<<" "<<q.freason<<" "<<q.rreason<<" "<<q.ffi<<" "<<q.rfi<<" "<<q.ft<<" "<<q.rt<<" "<<q.fi<<" "<<q.ri<<" "<<q.fr<<" "<<q.rr<<" "<<q.fx<<" "<<q.fy<<" "<<q.rx<<" "<<q.ry<<"\\n";}}
  std::cout<<"sum pair-error magnitudes: "<<total<<"\\n";
  std::cout<<"top10 share: "<<(total?100*top10/total:NAN)<<" %; top50 share: "<<(total?100*top50/total:NAN)<<" %\\n";
 }
