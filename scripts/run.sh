@@ -64,10 +64,6 @@ export MAVLINK_ROOT
 RUN_ROOT="${MONKEYS_RUN_ROOT:-$HOME/monkeysStab_runs}"
 mkdir -p "$RUN_ROOT"
 
-# SD-card guard.  Do not start a new flight runtime when the root filesystem is
-# already critically full.  A low-space warning is allowed so the operator can
-# still fly, while the in-process CSV cap prevents the logger from consuming
-# the remaining filesystem.
 FREE_KB="$(df -Pk "$RUN_ROOT" | awk 'NR==2 {print $4}')"
 FREE_MB=$((FREE_KB / 1024))
 if (( FREE_MB < 300 )); then
@@ -162,6 +158,9 @@ if [[ -n "${MONKEYS_DATASET_SURFACE:-}" ]]; then
 fi
 if [[ -n "${MONKEYS_DATASET_DURATION_SEC:-}" ]]; then
   ARGS+=(--dataset-duration-sec "$MONKEYS_DATASET_DURATION_SEC")
+fi
+if [[ -n "${MONKEYS_REMOTE_LOG:-}" ]]; then
+  ARGS+=(--remote-log "$MONKEYS_REMOTE_LOG")
 fi
 if [[ -n "${MONKEYS_FB_SHADOW_MAX_PX:-}" ]]; then
   ARGS+=(--fb-shadow-max-px "$MONKEYS_FB_SHADOW_MAX_PX")
