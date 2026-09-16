@@ -44,7 +44,7 @@ def main():
     cap.set(cv2.CAP_PROP_FOURCC,cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,640); cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480); cap.set(cv2.CAP_PROP_FPS,120)
     if not cap.isOpened(): raise SystemExit("camera open failed")
-    saved=[]; descs=[]; meta=[]; window=deque(maxlen=24)
+    saved=[]; descs=[]; meta=[]; window=deque(maxlen=24)\n    flash_text=""; flash_until=0.0
     print(f"SERIES_{a.series}: SPACE saves best stable frame from 24-frame window; median >=6 + diversity gate; Q finish.")
     while True:
         ok,im=cap.read()
@@ -68,7 +68,20 @@ def main():
         bcnt=best[0] if best else 0
         msg=f"saved {len(saved)}/{a.count} now {nc}/24 med {med:.1f} best {bcnt}/24 novelty {bdist:.3f}"
         cv2.putText(vis,msg,(8,24),cv2.FONT_HERSHEY_SIMPLEX,.48,(0,255,0) if good else (0,0,255),2)
-        status="SPACE ACCEPT" if good else ("hold: need median >=6" if not stable else "move/tilt/scale board")
+        if good:
+            status="SPACE = SAVE"
+        elif len(window)<12:
+            status=f"WAIT: window {len(window)}/12"
+        elif med<6:
+            status=f"BLOCKED: median corners {med:.1f} < 6"
+        elif best is None:
+            status="BLOCKED: no usable frame"
+        elif not bnov:
+            status=f"BLOCKED: too similar novelty {bdist:.3f} < 0.055"
+        else:
+            status="BLOCKED"
+        if time.time()<flash_until:
+            status=flash_text
         cv2.putText(vis,status,(8,47),cv2.FONT_HERSHEY_SIMPLEX,.55,(0,255,0) if good else (0,0,255),2)
         cv2.imshow(f"ChArUco SERIES_{a.series}",vis)
         k=cv2.waitKey(1)&255
