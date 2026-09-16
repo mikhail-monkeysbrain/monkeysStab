@@ -114,7 +114,9 @@ def main():
                 else:tc=3 if ty<0 else 4
                 weights=np.array([1.4,1.4,1.5,1.5,7.,7.])
                 nov=999. if not desc else min(float(np.linalg.norm((d-o)*weights)) for o in desc)
-                # Capture is driven only by observable pose/scale diversity. Image-cell coverage\n                # is intentionally excluded because the fixed stand ring occludes part of the frame.\n                need=(tilt[tc]<60) or (scale[sc]<60)
+                # Capture is driven only by observable pose/scale diversity.
+                # Image-cell coverage is excluded: the fixed stand ring occludes part of the frame.
+                need=(tilt[tc]<60) or (scale[sc]<60)
                 if fs<a.min_focus:reason=f"BLUR focus={fs:.0f}"
                 elif nov<a.novelty:reason=f"DUPLICATE novelty={nov:.3f}"
                 elif not need:reason="well-covered geometry"
