@@ -52,9 +52,10 @@ echo "После полной остановки нажми SPACE."
 echo
 echo "Далее: перенеси в B, после остановки нажми B."
 echo "В B НЕ ДВИГАЙ аппарат и измерь A→B рулеткой."
-echo "Фактическое расстояние запиши в PHYSICAL_TEST_NOTES.txt."
 echo "После измерения верни аппарат в A и нажми H."
 echo "Для завершения нажми Q."
+echo
+echo "Запуск. Подготовка камеры и FC может занять несколько секунд..."
 echo
 
 set +e
@@ -67,7 +68,7 @@ MONKEYS_RETURN_MANUAL_TARGET=1 \
 MONKEYS_LOCAL_GUI=0 \
 bash "$ROOT/scripts/run.sh" 2>&1 \
   | tee "$DATASET_DIR/runtime.log" \
-  | awk \'
+  | awk '
       BEGIN { fflush() }
       /CANONICAL A MARK:/ {
         print "\nТОЧКА A ЗАФИКСИРОВАНА."
