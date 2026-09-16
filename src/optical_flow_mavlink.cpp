@@ -1154,6 +1154,7 @@ int main(int argc,char** argv){
   bool nominal_target_only=false;
   bool return_gui=false;
   bool return_cli=false;
+  bool blind4_cli=false;
   bool rotation_gui=false;
   bool return_manual_target=false;
   std::string dataset_dir;
@@ -1179,6 +1180,7 @@ int main(int argc,char** argv){
     else if(a=="--nominal-target") nominal_target_only=true;
     else if(a=="--return-gui") return_gui=true;
     else if(a=="--return-cli") return_cli=true;
+    else if(a=="--blind4-cli") blind4_cli=true;
     else if(a=="--rotation-gui") rotation_gui=true;
     else if(a=="--return-manual-target") return_manual_target=true;
     else if(a=="--dataset-dir" && i+1<argc) dataset_dir=argv[++i];
@@ -1434,14 +1436,16 @@ int main(int argc,char** argv){
         const ssize_t n=::read(STDIN_FILENO,&c,1);
         return n==1 ? (int)c : -1;
       }
-    } cli_terminal(return_cli);
-    if(return_cli && !cli_terminal.active)
-      throw std::runtime_error("--return-cli требует интерактивный TTY stdin");
+    } cli_terminal(return_cli || blind4_cli);
+    if((return_cli || blind4_cli) && !cli_terminal.active)
+      throw std::runtime_error("--return-cli/--blind4-cli требует интерактивный TTY stdin");
 
     // Strict one-way state machine for the canonical hand test.
     // Canonical metric A/B protocol:
     // 0=WAIT_A, 1=GO_B, 2=ENTER_GT, 3=WAIT_RETURN_SPACE, 4=RETURN_A.
     int canonical_state=0;
+    // Blind4 events: 11=A1,12=B1,13=A2,14=B2,15=A3,16=B3,17=A4,18=B4.
+    int blind4_state=0;
     std::string canonical_gt_buf;
     double canonical_gt_mm=0.0;
     double return_fb_body_dx=0.0,return_fb_body_dy=0.0;
@@ -2075,10 +2079,15 @@ int main(int argc,char** argv){
             if(flight_ready_since_ns==0) flight_ready_since_ns=now;
             if((now-flight_ready_since_ns)*1e-9>=kReadyStableSec){
               flight_ready=true;
-              if(return_cli){
-                std::cerr<<"\nСИСТЕМА ГОТОВА.\n"
-                         <<"ПОЛОЖИ БПЛА В ТОЧКУ A.\n"
-                         <<"После полной остановки нажми SPACE.\n";
+              if(return_cli || blind4_cli){
+                std::cerr<<"\nСИСТЕМА ГОТОВА.\n";
+                if(blind4_cli){
+                  std::cerr<<"BLIND4: ПОЛОЖИ БПЛА В ТОЧКУ A1. После полной остановки нажми SPACE.\n"
+                           <<"GT В ЭТУ ПРОГРАММУ НЕ ВВОДИТЬ.\n";
+                } else {
+                  std::cerr<<"ПОЛОЖИ БПЛА В ТОЧКУ A.\n"
+                           <<"После полной остановки нажми SPACE.\n";
+                }
               } else {
                 std::cerr<<"\n======================================================================\n"
                          <<"СИСТЕМА ГОТОВА\n"
@@ -2092,7 +2101,7 @@ int main(int argc,char** argv){
           }else{
             flight_ready_since_ns=0;
             if(last_not_ready_print_ns==0 || now-last_not_ready_print_ns>1000000000LL){
-              if(!return_cli){
+              if(!(return_cli || blind4_cli)){
                 std::cerr<<"\nНЕ ГОТОВО:"
                          <<" luna="<<(luna_ok?"OK":"NO")
                          <<" flow="<<(flow_ok?"OK":"NO")
@@ -2111,7 +2120,7 @@ int main(int argc,char** argv){
           }
         }
 
-        if((return_gui || return_cli) && return_target_set && s.valid && flow_sent && dt>0.0 && dt<0.2){
+        if((return_gui || return_cli || blind4_cli) && return_target_set && s.valid && flow_sent && dt>0.0 && dt<0.2){
           double hcam=0.0;
           if(bench_true_camera_height>0.0){
             hcam=bench_true_camera_height;
@@ -2491,6 +2500,45 @@ int main(int argc,char** argv){
             std::cerr<<"3D GUI HOVER POINT: current FC estimate accepted as X/Y/Z = 0/0/0; path counters reset\n";
           } else if(rkey=='q'||rkey=='Q'||rkey==27){
             g_running=false;
+          }
+        }
+
+        if(blind4_cli){
+          const int key=cli_terminal.readKey();
+          if(key=='q' || key=='Q' || key==27){
+            std::cerr<<"\nBLIND4: отменено оператором.\n";
+            g_running=false;
+          } else if(key==' ' && efresh && blind4_state<8){
+            const bool is_a=(blind4_state%2)==0;
+            const int leg=blind4_state/2+1;
+            if(is_a){
+              return_target_n=ep.x; return_target_e=ep.y;
+              return_target_set=true; return_trail.clear();
+              return_raw_x=return_raw_y=0.0;
+              return_body_dx=return_body_dy=0.0;
+              return_ned_n=return_ned_e=0.0;
+              return_fb_body_dx=return_fb_body_dy=0.0;
+              return_fb_ned_n=return_fb_ned_e=0.0;
+              return_b_marked=false; return_home_marked=false;
+              if(fg_ok){ return_yaw0=fg.yaw; return_yaw0_set=true; }
+              pending_return_event=9+2*leg;
+              ++blind4_state;
+              std::cerr<<"\nBLIND4 A"<<leg<<" ЗАФИКСИРОВАНА.\n"
+                       <<"Выполни проход A"<<leg<<" -> B"<<leg
+                       <<", полностью остановись и нажми SPACE.\n";
+            } else {
+              pending_return_event=10+2*leg;
+              ++blind4_state;
+              std::cerr<<"\nBLIND4 B"<<leg<<" ЗАФИКСИРОВАНА.\n";
+              if(leg==4){
+                std::cerr<<"BLIND4 ЗАВЕРШЁН. GT программе не сообщался.\n";
+                g_running=false;
+              } else {
+                std::cerr<<"Измерь GT"<<leg<<" физически и запиши ОТДЕЛЬНО (не вводи сюда).\n"
+                         <<"Поставь аппарат в удобную точку A"<<(leg+1)
+                         <<", полностью остановись и нажми SPACE.\n";
+              }
+            }
           }
         }
 
