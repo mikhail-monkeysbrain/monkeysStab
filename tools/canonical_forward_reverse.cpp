@@ -31,6 +31,16 @@ static Step estimate(const cv::Mat& prev,const cv::Mat& curr,double dt,const cv:
  cv::Mat sol;if(!cv::solve(A,bb,sol,cv::DECOMP_SVD))return o;o.du=sol.at<double>(0);o.dv=sol.at<double>(1);o.valid=std::hypot(o.dv/dt,-o.du/dt)<4.0;return o;
 }
 struct Sum{double x=0,y=0;long long valid=0,invalid=0;};
+static void forensic(const std::vector<cv::Mat>&im,const std::vector<Meta>&m,int lo,int hi,const cv::Mat&K,const cv::Mat&D){
+ struct R{int i;double e,fx,fy,rx,ry;int fv,rv,ffi,rfi,ft,rt;};std::vector<R>v;double total=0;
+ for(int i=lo+1;i<=hi;i++){double dt=(m[i].cam-m[i-1].cam)*1e-9;Step f=estimate(im[i-1],im[i],dt,K,D),r=estimate(im[i],im[i-1],dt,K,D);double ex=(f.valid?f.du:0)+(r.valid?r.du:0),ey=(f.valid?f.dv:0)+(r.valid?r.dv:0),e=std::hypot(ex,ey);total+=e;v.push_back({i,e,f.du,f.dv,r.du,r.dv,f.valid,r.valid,f.features,r.features,f.tracked,r.tracked});}
+ std::sort(v.begin(),v.end(),[](const R&a,const R&b){return a.e>b.e;});
+ std::cout<<"\\n===== B->A TOP SAME-PAIR RECIPROCITY ERRORS =====\\n";
+ std::cout<<"rank frame0 frame1 err f_valid r_valid f_feat r_feat f_trk r_trk f_du f_dv r_du r_dv\\n";
+ double top10=0,top50=0;for(size_t k=0;k<v.size();k++){if(k<10)top10+=v[k].e;if(k<50)top50+=v[k].e;if(k<25){auto&q=v[k];std::cout<<k+1<<" "<<m[q.i-1].frame<<" "<<m[q.i].frame<<" "<<q.e<<" "<<q.fv<<" "<<q.rv<<" "<<q.ffi<<" "<<q.rfi<<" "<<q.ft<<" "<<q.rt<<" "<<q.fx<<" "<<q.fy<<" "<<q.rx<<" "<<q.ry<<"\\n";}}
+ std::cout<<"sum pair-error magnitudes: "<<total<<"\\n";
+ std::cout<<"top10 share: "<<(total?100*top10/total:NAN)<<" %; top50 share: "<<(total?100*top50/total:NAN)<<" %\\n";
+}
 static Sum run(const std::vector<cv::Mat>& im,const std::vector<Meta>& m,int lo,int hi,bool reverse,const cv::Mat&K,const cv::Mat&D){
  Sum s;
  if(!reverse){for(int i=lo+1;i<=hi;i++){double dt=(m[i].cam-m[i-1].cam)*1e-9;Step q=estimate(im[i-1],im[i],dt,K,D);if(q.valid){s.x+=q.du;s.y+=q.dv;s.valid++;}else s.invalid++;}}
@@ -58,6 +68,6 @@ int main(int argc,char**argv){
  double fs=.931;cv::Mat K=(cv::Mat_<double>(3,3)<<568.53170752165227*fs,0,315.98271077441063,0,569.68005562865858*fs,239.88148589100641,0,0,1);cv::Mat D=(cv::Mat_<double>(1,5)<<.073569192194028493,-.095253893789117,-.010810530757187299,-.0022843373576970235,.082177400802757483);
  std::cout<<"events frames: A1="<<fa<<" B="<<fbf<<" A2="<<fcf<<"\n";
  Sum abf=run(im,m,a,b,false,K,D),abr=run(im,m,a,b,true,K,D);report("PHYSICAL A->B",abf,abr);
- Sum baf=run(im,m,b,c,false,K,D),bar=run(im,m,b,c,true,K,D);report("PHYSICAL B->A",baf,bar);
+ Sum baf=run(im,m,b,c,false,K,D),bar=run(im,m,b,c,true,K,D);report("PHYSICAL B->A",baf,bar); forensic(im,m,b,c,K,D);
  return 0;
 }
