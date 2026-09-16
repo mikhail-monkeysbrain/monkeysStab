@@ -12,8 +12,8 @@ def load_frames(root, wanted):
     meta={}
     with open(root/"frames.csv",newline="") as f:
         for r in csv.DictReader(f):
-            fr=int(r["frame"])
-            if fr in wanted: meta[fr]=(int(r["camera_ts_ns"]),int(r["size"]))
+            fr=int(r["dataset_frame"])
+            if fr in wanted: meta[fr]=(int(r["camera_ts_ns"]),int(r["jpeg_size"]))
     out={}
     with open(root/"frames.mjpgbin","rb") as f:
         while True:
