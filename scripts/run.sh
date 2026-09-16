@@ -148,6 +148,9 @@ fi
 if [[ "${MONKEYS_RETURN_GUI:-0}" == "1" || "${MONKEYS_RETURN_GUI:-0}" == "true" || "${MONKEYS_RETURN_GUI:-0}" == "yes" ]]; then
   ARGS+=(--return-gui)
 fi
+if [[ "${MONKEYS_RETURN_CLI:-0}" == "1" || "${MONKEYS_RETURN_CLI:-0}" == "true" || "${MONKEYS_RETURN_CLI:-0}" == "yes" ]]; then
+  ARGS+=(--return-cli)
+fi
 if [[ "${MONKEYS_RETURN_MANUAL_TARGET:-0}" == "1" || "${MONKEYS_RETURN_MANUAL_TARGET:-0}" == "true" || "${MONKEYS_RETURN_MANUAL_TARGET:-0}" == "yes" ]]; then
   ARGS+=(--return-manual-target)
 fi
