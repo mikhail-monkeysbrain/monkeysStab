@@ -1,69 +1,45 @@
 #!/usr/bin/env python3
 import csv, math, sys
-
-fn=sys.argv[1]
-gt=float(sys.argv[2])
-with open(fn,newline="") as f:
-    rows=list(csv.DictReader(f))
-
-def event_index(code):
-    for i,r in enumerate(rows):
-        if r.get("return_event","0")==str(code):
-            return i
-    raise SystemExit(f"ОШИБКА: return_event={code} не найден")
-
-a=event_index(1); b=event_index(2)
-seg=rows[a:b]
-
-def F(r,*names):
-    for n in names:
-        if n in r and r[n] not in ("",None):
-            try:return float(r[n])
-            except:pass
+fn=sys.argv[1]; gt=float(sys.argv[2])
+with open(fn,newline="") as f: rows=list(csv.DictReader(f))
+def event(code):
+    return next(i for i,r in enumerate(rows) if r.get("return_event","0")==str(code))
+a,b=event(1),event(2); seg=rows[a:b]
+def F(r,*ns):
+    for n in ns:
+        try:
+            if r.get(n,"")!="": return float(r[n])
+        except ValueError: pass
     return None
-
-native=[0.,0.]; fb=[0.,0.]
-n_native=n_fb=0
-dt_native=dt_fb=0.
+acc={k:{"v":[0.,0.],"n":0,"dt":0.} for k in ("NATIVE production flow_body","FB SHADOW","ROBUST/HUBER SHADOW")}
+fb_checked=fb_pass=fb_inliers=0; invalid={}
 for r in seg:
-    if r.get("valid")!="1": continue
-    dt=F(r,"dt_s")
-    fx=F(r,"flow_body_x"); fy=F(r,"flow_body_y")
-    rng=F(r,"range_to_fc_m","range_m","luna_m")
-    if dt is None or fx is None or fy is None or rng is None or not (0<dt<.2):
-        continue
-    # Current mount: camera Z=.050, TF-Luna Z=.055 (body FRD).
-    # Existing C++ canonical metric uses hcam = range-(cam_z-range_z)=range+0.005.
+    if r.get("valid")!="1":
+        q=r.get("invalid_reason","?"); invalid[q]=invalid.get(q,0)+1; continue
+    dt=F(r,"dt_s"); rng=F(r,"range_to_fc_m","luna_m")
+    if dt is None or rng is None or not 0<dt<.2: continue
     h=rng+0.005
-    native[0]+=fx*h*dt; native[1]+=fy*h*dt
-    n_native+=1; dt_native+=dt
-
-    fbok=r.get("fb_shadow_valid","0")
-    fbx=F(r,"fb_flow_body_x"); fby=F(r,"fb_flow_body_y")
-    if fbok=="1" and fbx is not None and fby is not None:
-        fb[0]+=fbx*h*dt; fb[1]+=fby*h*dt
-        n_fb+=1; dt_fb+=dt
-
-def report(name,v,n,dt):
-    mag=1000*math.hypot(*v); err=mag-gt
-    print(name)
-    print(f"  X/Y=({v[0]*1000:+.3f}, {v[1]*1000:+.3f}) mm")
-    print(f"  magnitude={mag:.3f} mm")
-    print(f"  error={err:+.3f} mm ({100*err/gt:+.3f} %)")
-    print(f"  accepted={n}, dt_sum={dt:.6f} s")
-
-print("======================================================================")
-print("A->B ONLY OFFLINE RESULT")
-print(f"CSV: {fn}")
-print(f"GT: {gt:.3f} mm")
-print(f"A row/frame: {a} / {rows[a].get('frame','?')}")
-print(f"B row/frame: {b} / {rows[b].get('frame','?')}")
-print("======================================================================")
-report("NATIVE production flow_body",native,n_native,dt_native)
-print("----------------------------------------------------------------------")
-if n_fb:
-    report("FB SHADOW <= configured threshold",fb,n_fb,dt_fb)
-    print(f"  FB interval coverage={100*n_fb/max(1,n_native):.2f} % of native accepted rows")
-else:
-    print("FB SHADOW: в CSV нет валидных fb_shadow samples")
-print("======================================================================")
+    def add(k,xn,yn,ok=True):
+        if not ok:return
+        x,y=F(r,xn),F(r,yn)
+        if x is None or y is None:return
+        z=acc[k]; z["v"][0]+=x*h*dt; z["v"][1]+=y*h*dt; z["n"]+=1; z["dt"]+=dt
+    add("NATIVE production flow_body","flow_body_x","flow_body_y")
+    add("FB SHADOW","ab_fb_flow_body_x","ab_fb_flow_body_y",r.get("ab_fb_valid")=="1")
+    add("ROBUST/HUBER SHADOW","ab_robust_flow_body_x","ab_robust_flow_body_y",r.get("ab_robust_valid")=="1")
+    fb_checked+=int(F(r,"ab_fb_checked") or 0); fb_pass+=int(F(r,"ab_fb_pass") or 0); fb_inliers+=int(F(r,"ab_fb_inliers") or 0)
+def report(k,z):
+    if not z["n"]: print(k+": NO VALID SAMPLES"); return
+    m=1000*math.hypot(*z["v"]); e=m-gt
+    print(k); print(f"  X/Y=({z['v'][0]*1000:+.3f}, {z['v'][1]*1000:+.3f}) mm")
+    print(f"  magnitude={m:.3f} mm"); print(f"  error={e:+.3f} mm ({100*e/gt:+.3f} %)")
+    print(f"  accepted={z['n']}, dt_sum={z['dt']:.6f} s")
+print("="*70); print("A->B ONLY OFFLINE RESULT"); print("CSV:",fn); print(f"GT: {gt:.3f} mm")
+print(f"A row/frame: {a} / {rows[a].get('frame','?')}"); print(f"B row/frame: {b} / {rows[b].get('frame','?')}"); print("="*70)
+for k,z in acc.items(): report(k,z); print("-"*70)
+nn=acc["NATIVE production flow_body"]["n"]
+print("SHADOW COVERAGE / GATES")
+for k in ("FB SHADOW","ROBUST/HUBER SHADOW"):
+    print(f"  {k}: {acc[k]['n']}/{nn} ({100*acc[k]['n']/max(1,nn):.2f} %)")
+print(f"  FB tracks checked/pass/inliers totals: {fb_checked}/{fb_pass}/{fb_inliers}")
+print("  invalid production reasons:",invalid); print("="*70)
