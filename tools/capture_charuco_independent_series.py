@@ -5,7 +5,8 @@
 """
 import argparse,time,csv
 from pathlib import Path
-import cv2,numpy as np\nfrom collections import deque
+import cv2,numpy as np
+from collections import deque
 S=.027315;M=.020031
 dic=cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 try: board=cv2.aruco.CharucoBoard((7,5),S,M,dic)
