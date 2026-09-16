@@ -76,5 +76,12 @@ int main(int argc,char**argv){
  auto leg=[&](const char*n,const Sum&s){std::cout<<n<<" X="<<s.x<<" Y="<<s.y<<" mag="<<std::hypot(s.x,s.y)<<" valid/invalid="<<s.valid<<"/"<<s.invalid<<"\\n";};
  leg("A->B BASE",abf);leg("A->B +FB ",abfb);leg("B->A BASE",baf);leg("B->A +FB ",bafb);
  auto cl=[&](const char*n,const Sum&A,const Sum&B){double ma=std::hypot(A.x,A.y),cx=A.x+B.x,cy=A.y+B.y;std::cout<<n<<" closure="<<std::hypot(cx,cy)<<" = "<<100.0*std::hypot(cx,cy)/ma<<" % of |AB|; BA/AB="<<std::hypot(B.x,B.y)/ma<<"\\n";};cl("BASE",abf,baf);cl("+FB ",abfb,bafb);
+ std::cout<<"\n===== B->A BASE vs +FB LOCALIZATION (1-second bins) =====\n";
+ std::cout<<"sec base_dx base_dy fb_dx fb_dy diff_dx diff_dy diff_mag cumulative_diff_mag\n";
+ double cumx=0,cumy=0;long long t0=m[b].cam;int lastsec=-1;Sum sb,sf;
+ auto flush=[&](int sec){if(sec<0)return;double dx=sf.x-sb.x,dy=sf.y-sb.y;cumx+=dx;cumy+=dy;std::cout<<sec<<" "<<sb.x<<" "<<sb.y<<" "<<sf.x<<" "<<sf.y<<" "<<dx<<" "<<dy<<" "<<std::hypot(dx,dy)<<" "<<std::hypot(cumx,cumy)<<"\n";sb=Sum{};sf=Sum{};};
+ for(int i=b+1;i<=c;i++){int sec=(int)((m[i].cam-t0)/1000000000LL);if(lastsec<0)lastsec=sec;if(sec!=lastsec){flush(lastsec);lastsec=sec;}double dt=(m[i].cam-m[i-1].cam)*1e-9;Step qb=estimate(im[i-1],im[i],dt,K,D,false),qf=estimate(im[i-1],im[i],dt,K,D,true);if(qb.valid){sb.x+=qb.du;sb.y+=qb.dv;sb.valid++;}else sb.invalid++;if(qf.valid){sf.x+=qf.du;sf.y+=qf.dv;sf.valid++;}else sf.invalid++;}
+ flush(lastsec);
+ std::cout<<"TOTAL FB-BASE: X="<<cumx<<" Y="<<cumy<<" mag="<<std::hypot(cumx,cumy)<<"\n";
  return 0;
 }
