@@ -1153,6 +1153,7 @@ int main(int argc,char** argv){
   bool require_armed=false;
   bool nominal_target_only=false;
   bool return_gui=false;
+  bool return_cli=false;
   bool rotation_gui=false;
   bool return_manual_target=false;
   std::string dataset_dir;
@@ -1177,6 +1178,7 @@ int main(int argc,char** argv){
     else if(a=="--require-armed") require_armed=true;
     else if(a=="--nominal-target") nominal_target_only=true;
     else if(a=="--return-gui") return_gui=true;
+    else if(a=="--return-cli") return_cli=true;
     else if(a=="--rotation-gui") rotation_gui=true;
     else if(a=="--return-manual-target") return_manual_target=true;
     else if(a=="--dataset-dir" && i+1<argc) dataset_dir=argv[++i];
@@ -1403,6 +1405,39 @@ int main(int argc,char** argv){
     double traj3d_range_vertical0=0.0;           // tilt-compensated TF-Luna vertical distance at SPACE
     bool traj3d_preview_range_origin_set=false;
     double traj3d_preview_range_vertical0=0.0;
+    // Canonical bench mode: keyboard commands come from the terminal, with no OpenCV window.
+    // stdin is put into non-canonical/no-echo mode and restored automatically on exit.
+    struct CliTerminalGuard {
+      bool active=false;
+      termios saved{};
+      int saved_flags=-1;
+      explicit CliTerminalGuard(bool enable){
+        if(!enable || !::isatty(STDIN_FILENO)) return;
+        if(::tcgetattr(STDIN_FILENO,&saved)!=0) return;
+        termios raw=saved;
+        raw.c_lflag &= ~(ICANON|ECHO);
+        raw.c_cc[VMIN]=0;
+        raw.c_cc[VTIME]=0;
+        if(::tcsetattr(STDIN_FILENO,TCSANOW,&raw)!=0) return;
+        saved_flags=::fcntl(STDIN_FILENO,F_GETFL,0);
+        if(saved_flags>=0) ::fcntl(STDIN_FILENO,F_SETFL,saved_flags|O_NONBLOCK);
+        active=true;
+      }
+      ~CliTerminalGuard(){
+        if(!active) return;
+        ::tcsetattr(STDIN_FILENO,TCSANOW,&saved);
+        if(saved_flags>=0) ::fcntl(STDIN_FILENO,F_SETFL,saved_flags);
+      }
+      int readKey(){
+        if(!active) return -1;
+        unsigned char c=0;
+        const ssize_t n=::read(STDIN_FILENO,&c,1);
+        return n==1 ? (int)c : -1;
+      }
+    } cli_terminal(return_cli);
+    if(return_cli && !cli_terminal.active)
+      throw std::runtime_error("--return-cli требует интерактивный TTY stdin");
+
     if(return_gui || rotation_gui) initGuiFont();
     if(return_gui){
       cv::namedWindow(return_window_name,cv::WINDOW_NORMAL);
@@ -2057,7 +2092,7 @@ int main(int argc,char** argv){
           }
         }
 
-        if(return_gui && return_target_set && s.valid && flow_sent && dt>0.0 && dt<0.2){
+        if((return_gui || return_cli) && return_target_set && s.valid && flow_sent && dt>0.0 && dt<0.2){
           double hcam=0.0;
           if(bench_true_camera_height>0.0){
             hcam=bench_true_camera_height;
@@ -2427,6 +2462,56 @@ int main(int argc,char** argv){
           }
         }
 
+        if(return_cli){
+          const int key=cli_terminal.readKey();
+          if(key==' ' && efresh){
+            return_target_n=ep.x; return_target_e=ep.y;
+            return_target_set=true; return_trail.clear();
+            return_view_halfspan_m=0.50;
+            return_raw_x=return_raw_y=0.0;
+            return_body_dx=return_body_dy=0.0;
+            return_ned_n=return_ned_e=0.0;
+            return_b_marked=false;
+            return_home_marked=false;
+            if(fg_ok){ return_yaw0=fg.yaw; return_yaw0_set=true; }
+            pending_return_event=1;
+            std::cerr<<"CANONICAL A MARK: N="<<return_target_n<<" E="<<return_target_e
+                     <<" yaw_deg="<<(return_yaw0_set?return_yaw0*180.0/M_PI:0.0)<<"\n";
+          } else if((key=='b'||key=='B') && efresh && return_target_set){
+            return_b_marked=true;
+            return_b_n=ep.x; return_b_e=ep.y;
+            return_b_raw_x=return_raw_x; return_b_raw_y=return_raw_y;
+            return_b_body_dx=return_body_dx; return_b_body_dy=return_body_dy;
+            return_b_ned_n=return_ned_n; return_b_ned_e=return_ned_e;
+            return_b_yaw=fg_ok?fg.yaw:0.0;
+            pending_return_event=2;
+            std::cerr<<"CANONICAL B MARK: EKF_from_A="<<1000.0*std::hypot(ep.x-return_target_n,ep.y-return_target_e)
+                     <<" mm RAW_NED_from_A="<<1000.0*std::hypot(return_ned_n,return_ned_e)
+                     <<" mm RAW_BODY_from_A="<<1000.0*std::hypot(return_body_dx,return_body_dy)
+                     <<" mm RAW_LOS_legacy="<<1000.0*std::hypot(return_raw_x,return_raw_y)
+                     <<" mm dYaw="<<(fg_ok&&return_yaw0_set?std::remainder(fg.yaw-return_yaw0,2.0*M_PI)*180.0/M_PI:0.0)<<" deg\n";
+          } else if((key=='h'||key=='H') && efresh && return_target_set){
+            pending_return_event=3;
+            return_home_marked=true;
+            const double ekf_close=1000.0*std::hypot(ep.x-return_target_n,ep.y-return_target_e);
+            const double raw_close=1000.0*std::hypot(return_raw_x,return_raw_y);
+            const double raw_body_close=1000.0*std::hypot(return_body_dx,return_body_dy);
+            const double raw_ned_close=1000.0*std::hypot(return_ned_n,return_ned_e);
+            std::cerr<<"CANONICAL H MARK: EKF_closure="<<ekf_close
+                     <<" mm RAW_NED_closure="<<raw_ned_close
+                     <<" mm RAW_BODY_closure="<<raw_body_close
+                     <<" mm RAW_LOS_closure="<<raw_close<<" mm";
+            if(return_b_marked){
+              std::cerr<<" A_B_EKF="<<1000.0*std::hypot(return_b_n-return_target_n,return_b_e-return_target_e)
+                       <<" mm A_B_RAW_NED="<<1000.0*std::hypot(return_b_ned_n,return_b_ned_e)
+                       <<" mm B_H_RAW_NED="<<1000.0*std::hypot(return_ned_n-return_b_ned_n,return_ned_e-return_b_ned_e)<<" mm";
+            }
+            std::cerr<<"\n";
+          } else if(key=='q'||key=='Q'||key==27){
+            g_running=false;
+          }
+        }
+
         if(return_gui){
           if(flight_ready && efresh && !return_target_set && !return_manual_target){
             return_target_n=ep.x;
@@ -2666,7 +2751,7 @@ int main(int argc,char** argv){
         }
 
         // В guided-режиме подробная телеметрия остаётся в CSV, но не засоряет терминал.
-        if(!guided && frame%100==0){
+        if(!guided && !return_cli && frame%100==0){
           std::cerr<<"OF frame="<<frame
                    <<" valid="<<(s.valid?1:0)
                    <<" rateFRD=("<<s.flow_body_x<<","<<s.flow_body_y<<") rad/s"
