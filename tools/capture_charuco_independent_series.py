@@ -44,7 +44,8 @@ def main():
     cap.set(cv2.CAP_PROP_FOURCC,cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,640); cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480); cap.set(cv2.CAP_PROP_FPS,120)
     if not cap.isOpened(): raise SystemExit("camera open failed")
-    saved=[]; descs=[]; meta=[]; window=deque(maxlen=24)\n    flash_text=""; flash_until=0.0
+    saved=[]; descs=[]; meta=[]; window=deque(maxlen=24)
+    flash_text=""; flash_until=0.0
     print(f"SERIES_{a.series}: SPACE saves best stable frame from 24-frame window; median >=6 + diversity gate; Q finish.")
     while True:
         ok,im=cap.read()
