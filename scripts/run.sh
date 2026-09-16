@@ -147,6 +147,9 @@ fi
 if [[ "${MONKEYS_RETURN_CLI:-0}" == "1" || "${MONKEYS_RETURN_CLI:-0}" == "true" || "${MONKEYS_RETURN_CLI:-0}" == "yes" ]]; then
   ARGS+=(--return-cli)
 fi
+if [[ "${MONKEYS_BLIND4_CLI:-0}" == "1" || "${MONKEYS_BLIND4_CLI:-0}" == "true" || "${MONKEYS_BLIND4_CLI:-0}" == "yes" ]]; then
+  ARGS+=(--blind4-cli)
+fi
 if [[ "${MONKEYS_RETURN_MANUAL_TARGET:-0}" == "1" || "${MONKEYS_RETURN_MANUAL_TARGET:-0}" == "true" || "${MONKEYS_RETURN_MANUAL_TARGET:-0}" == "yes" ]]; then
   ARGS+=(--return-manual-target)
 fi
