@@ -80,7 +80,7 @@ def main():
     ap.add_argument("--min-corners",type=int,default=8)
     ap.add_argument("--min-focus",type=float,default=35.)
     ap.add_argument("--min-interval",type=float,default=.12)
-    ap.add_argument("--novelty",type=float,default=.055)
+    ap.add_argument("--novelty",type=float,default=.045)\n    ap.add_argument("--target-per-tilt",type=int,default=35)
     a=ap.parse_args()
     out=Path(f"/home/vio/charuco_series_D_{time.strftime('%Y%m%d_%H%M%S')}")
     out.mkdir(parents=True)
@@ -114,12 +114,12 @@ def main():
                 else:tc=3 if ty<0 else 4
                 weights=np.array([1.4,1.4,1.5,1.5,7.,7.])
                 nov=999. if not desc else min(float(np.linalg.norm((d-o)*weights)) for o in desc)
-                # Capture is driven only by observable pose/scale diversity.
-                # Image-cell coverage is excluded: the fixed stand ring occludes part of the frame.
-                need=(tilt[tc]<60) or (scale[sc]<60)
+                # Balanced capture: once a pose class reaches its quota, stop saving it.
+                # This prevents hundreds of frontal duplicates while the operator follows guidance.
+                need=tilt[tc] < a.target_per_tilt
                 if fs<a.min_focus:reason=f"BLUR focus={fs:.0f}"
                 elif nov<a.novelty:reason=f"DUPLICATE novelty={nov:.3f}"
-                elif not need:reason="well-covered geometry"
+                elif not need:reason=f"{tnames[tc]} COMPLETE"
                 elif now-last<a.min_interval:reason="rate gate"
                 else:ready=True;reason="AUTO SAVE"
         if ready:
@@ -135,12 +135,22 @@ def main():
         fps=0 if len(fpsq)<2 else (len(fpsq)-1)/(fpsq[-1]-fpsq[0])
         cv2.putText(vis,f"seen {frames_seen} saved {len(meta)} detect {nc} fps {fps:.0f}",(8,20),cv2.FONT_HERSHEY_SIMPLEX,.48,(255,255,255),1)
         cv2.putText(vis,reason,(8,H-12),cv2.FONT_HERSHEY_SIMPLEX,.48,(0,255,0) if ready else (0,0,255),2)
-        # Guidance = least represented observable requirement.
-        cy,cx=np.unravel_index(np.argmin(coverage),coverage.shape)
-        tnames=["FRONTAL","ROLL/LEFT-TILT","ROLL/RIGHT-TILT","PITCH/UP-TILT","PITCH/DOWN-TILT"]
-        snames=["FAR/SMALL","MID","NEAR/LARGE"]
-        guides=[(coverage[cy,cx],f"NEED IMAGE AREA row={cy+1} col={cx+1}"),(tilt.min(),f"NEED {tnames[int(np.argmin(tilt))]}"),(scale.min(),f"NEED {snames[int(np.argmin(scale))]}")]
-        guide=min(guides,key=lambda x:x[0])[1]
+        # Human guidance. Coverage grid is diagnostic only and never becomes a target.
+        missing=[i for i in range(5) if tilt[i] < a.target_per_tilt]
+        if not missing:
+            guide="DONE - DATASET BALANCED - PRESS Q"
+        else:
+            target=min(missing,key=lambda i:tilt[i])
+            actions=[
+                "HOLD LEVEL / PARALLEL TO BOARD",
+                "LOWER LEFT SIDE 15-30 DEG",
+                "LOWER RIGHT SIDE 15-30 DEG",
+                "LOWER NOSE 15-30 DEG",
+                "RAISE NOSE 15-30 DEG",
+            ]
+            guide=f"{actions[target]}  {tilt[target]}/{a.target_per_tilt}"
+        status=f"F {tilt[0]:02d}  L {tilt[1]:02d}  R {tilt[2]:02d}  ND {tilt[3]:02d}  NU {tilt[4]:02d}"
+        cv2.putText(vis,status,(8,64),cv2.FONT_HERSHEY_SIMPLEX,.48,(255,255,0),2)
         cv2.putText(vis,guide,(8,42),cv2.FONT_HERSHEY_SIMPLEX,.48,(0,255,255),2)
         cv2.imshow("ChArUco SERIES_D HIGH-FPS GUIDED",vis)
         k=cv2.waitKey(1)&255
