@@ -2058,7 +2058,14 @@ int main(int argc,char** argv){
             <<"}";
           web_live.send(now,js.str());
         }
+        const bool blind4_final_event_written =
+          blind4_cli && blind4_state>=8 && pending_return_event==18;
         pending_return_event=0;
+        if(blind4_final_event_written){
+          csv.flush();
+          std::cerr<<"BLIND4 ЗАВЕРШЁН. GT программе не сообщался.\n";
+          g_running=false;
+        }
 
         if(flight_ready_gate && !flight_ready){
           const double speed_h=efresh?std::hypot((double)ep.vx,(double)ep.vy):1e9;
@@ -2531,8 +2538,10 @@ int main(int argc,char** argv){
               ++blind4_state;
               std::cerr<<"\nBLIND4 B"<<leg<<" ЗАФИКСИРОВАНА.\n";
               if(leg==4){
-                std::cerr<<"BLIND4 ЗАВЕРШЁН. GT программе не сообщался.\n";
-                g_running=false;
+                // Do not stop in the key-handler: pending_return_event=18 must
+                // survive until the next CSV row is written. The CSV writer
+                // clears pending_return_event only after persisting it.
+                std::cerr<<"BLIND4 B4 ЗАФИКСИРОВАНА. Финализация записи...\n";
               } else {
                 std::cerr<<"Измерь GT"<<leg<<" физически и запиши ОТДЕЛЬНО (не вводи сюда).\n"
                          <<"Поставь аппарат в удобную точку A"<<(leg+1)
