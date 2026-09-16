@@ -45,18 +45,24 @@ def homography_metrics(cc,ci):
     return np.array([cx/W,cy/H,(x1-x0)/W,(y1-y0)/H,px*S,py*S],float),area
 
 def pose_tilt(cc,ci):
-    """Return board-normal tilt_x/tilt_y degrees using approximate K for guidance."""
+    """Board-normal tilt from calibrated homography decomposition (guidance only)."""
     ids=ci.reshape(-1).astype(int)
-    obj=OBJ[ids].astype(np.float32)
+    obj=OBJ[ids,:2].astype(np.float32)
     img=cc.reshape(-1,2).astype(np.float32)
     if len(obj)<6:return None
-    ok,rvec,tvec=cv2.solvePnP(obj,img,K_GUIDE,D_GUIDE,flags=cv2.SOLVEPNP_ITERATIVE)
-    if not ok:return None
-    R,_=cv2.Rodrigues(rvec)
-    n=R[:,2].astype(float)
+    Hm,_=cv2.findHomography(obj,img,cv2.RANSAC,2.0)
+    if Hm is None:return None
+    A=np.linalg.inv(K_GUIDE)@Hm
+    a1=A[:,0]; a2=A[:,1]
+    if np.linalg.norm(a1)<1e-9 or np.linalg.norm(a2)<1e-9:return None
+    r1=a1/np.linalg.norm(a1); r2=a2/np.linalg.norm(a2)
+    n=np.cross(r1,r2)
+    nn=np.linalg.norm(n)
+    if nn<1e-9:return None
+    n=n/nn
     if n[2]<0:n=-n
-    tx=math.degrees(math.atan2(n[0],max(1e-9,n[2])))
-    ty=math.degrees(math.atan2(n[1],max(1e-9,n[2])))
+    tx=math.degrees(math.atan2(float(n[0]),float(n[2])))
+    ty=math.degrees(math.atan2(float(n[1]),float(n[2])))
     return tx,ty
 
 def focus_score(g,cc):
