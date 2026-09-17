@@ -10,8 +10,17 @@ replay=sys.argv[3] if len(sys.argv)>3 else "/tmp/monkeys_replay_canonical_flow"
 flow=os.path.join(d,"optical_flow_mavlink.csv")
 
 with open(flow,newline="") as f: fr=list(csv.DictReader(f))
-A=next(int(r["frame"]) for r in fr if r.get("return_event")=="1")
-B=next(int(r["frame"]) for r in fr if r.get("return_event")=="2")
+# Legacy capture used 1/2; current BLIND4 capture uses 11/12 for A1/B1.
+def event_frame(*events):
+    for event in events:
+        for r in fr:
+            if r.get("return_event")==event:
+                return int(r["frame"])
+    raise SystemExit(f"missing return_event; expected one of {events}")
+A=event_frame("11","1")
+B=event_frame("12","2")
+if B <= A:
+    raise SystemExit(f"invalid A/B event order: A={A}, B={B}")
 range_by_frame={}
 for r in fr:
     try: range_by_frame[int(r["frame"])]=float(r["range_to_fc_m"])
