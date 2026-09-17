@@ -17,6 +17,7 @@ enum class RejectReason {
   BAD_CORRESPONDENCES,
   BAD_ATTITUDE,
   BAD_RANGE,
+  BAD_EXTRINSICS,
   DEGENERATE_PLANE,
   ROBUST_FIT
 };
@@ -28,6 +29,7 @@ inline const char* rejectReasonName(RejectReason r){
     case RejectReason::BAD_CORRESPONDENCES:return "BAD_CORRESPONDENCES";
     case RejectReason::BAD_ATTITUDE:return "BAD_ATTITUDE";
     case RejectReason::BAD_RANGE:return "BAD_RANGE";
+    case RejectReason::BAD_EXTRINSICS:return "BAD_EXTRINSICS";
     case RejectReason::DEGENERATE_PLANE:return "DEGENERATE_PLANE";
     case RejectReason::ROBUST_FIT:return "ROBUST_FIT";
   }
@@ -49,8 +51,11 @@ struct Input {
   double range1_m=0.0;
   bool range0_valid=false;
   bool range1_valid=false;
+  cv::Matx33d body_R_camera_frd=cv::Matx33d::eye();
+  bool body_R_camera_valid=false;
   cv::Vec3d camera_pos_body_frd{0.0625,0.0,0.050};
   cv::Vec3d range_pos_body_frd{0.0855,0.0,0.055};
+  cv::Vec3d range_ray_body_frd{0.0,0.0,1.0};
 };
 
 struct Step {
@@ -86,12 +91,6 @@ inline double median(std::vector<double> v){
   return m;
 }
 
-// OpenCV camera (x right, y down, z forward) -> body FRD for the audited
-// downward-facing camera mounting used by monkeysStab.
-inline cv::Matx33d body_R_camera(){
-  return cv::Matx33d(0,-1,0, 1,0,0, 0,0,1);
-}
-
 inline Step estimate(const Input& in){
   Step out;
   out.dt=(in.t1_ns-in.t0_ns)*1e-9;
@@ -107,6 +106,9 @@ inline Step estimate(const Input& in){
   if(!in.range0_valid || !in.range1_valid || !(in.range0_m>0.05) || !(in.range1_m>0.05)){
     out.reason=RejectReason::BAD_RANGE; return out;
   }
+  if(!in.body_R_camera_valid){
+    out.reason=RejectReason::BAD_EXTRINSICS; return out;
+  }
 
   std::vector<cv::Point2f> q0,q1;
   cv::undistortPoints(in.px0,q0,in.K,in.D);
@@ -114,9 +116,13 @@ inline Step estimate(const Input& in){
 
   const cv::Matx33d R0=bodyToLocal(in.a0.roll,in.a0.pitch,in.a0.yaw);
   const cv::Matx33d R1=bodyToLocal(in.a1.roll,in.a1.pitch,in.a1.yaw);
-  const cv::Matx33d BRC=body_R_camera();
   const cv::Vec3d down(0,0,1);
-  const cv::Vec3d lidar_ray_body(0,0,1); // audited runtime assumption; mount angle must be calibrated separately
+  cv::Vec3d lidar_ray_body=in.range_ray_body_frd;
+  const double lrnorm=cv::norm(lidar_ray_body);
+  if(!(lrnorm>0.5) || !std::isfinite(lrnorm)){
+    out.reason=RejectReason::BAD_EXTRINSICS; return out;
+  }
+  lidar_ray_body*=1.0/lrnorm;
 
   const double h0=down.dot(R0*(in.range_pos_body_frd-in.camera_pos_body_frd + in.range0_m*lidar_ray_body));
   const double h1=down.dot(R1*(in.range_pos_body_frd-in.camera_pos_body_frd + in.range1_m*lidar_ray_body));
@@ -128,8 +134,8 @@ inline Step estimate(const Input& in){
   deltas.reserve(q0.size());
   for(size_t i=0;i<q0.size();++i){
     const cv::Vec3d c0(q0[i].x,q0[i].y,1.0), c1(q1[i].x,q1[i].y,1.0);
-    const cv::Vec3d r0=R0*(BRC*c0);
-    const cv::Vec3d r1=R1*(BRC*c1);
+    const cv::Vec3d r0=R0*(in.body_R_camera_frd*c0);
+    const cv::Vec3d r1=R1*(in.body_R_camera_frd*c1);
     const double z0=down.dot(r0), z1=down.dot(r1);
     if(z0<=0.08 || z1<=0.08) continue;
     const cv::Vec3d X0=(h0/z0)*r0;
@@ -162,7 +168,7 @@ inline Step estimate(const Input& in){
     sum += w*deltas[i]; wsum += w;
   }
   if(!(wsum>0.0)){ out.reason=RejectReason::ROBUST_FIT; return out; }
-  cv::Vec3d delta_cam=sum*(1.0/wsum);
+  const cv::Vec3d delta_cam=sum*(1.0/wsum);
 
   // Convert camera-centre displacement to FC/IMU displacement. Camera position
   // in local coordinates changes under body rotation even if the IMU does not.
