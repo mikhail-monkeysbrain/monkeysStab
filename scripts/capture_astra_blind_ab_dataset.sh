@@ -13,6 +13,17 @@ export MONKEYS_RETURN_CLI=1
 export MONKEYS_DATASET_DIR="$DATASET_DIR"
 export MONKEYS_DATASET_SURFACE="${MONKEYS_DATASET_SURFACE:-table}"
 export MONKEYS_REMOTE_LOG="$DATASET_DIR/fc_dataflash.bin"
+export MONKEYS_FC="tcp://127.0.0.1:5760"
+
+ROUTER_PID=""
+ROUTER_LOG="$DATASET_DIR/mavlink_router.log"
+cleanup(){
+  if [[ -n "$ROUTER_PID" ]] && kill -0 "$ROUTER_PID" 2>/dev/null; then
+    kill -TERM "$ROUTER_PID" 2>/dev/null || true
+    wait "$ROUTER_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
 
 cat >"$DATASET_DIR/capture_manifest.txt" <<EOF
 capture_type=ASTRA_BLIND_AB_RAW
@@ -39,6 +50,43 @@ echo "  4. После сохранения B останови процесс Ctr
 echo "  5. Физический GT сообщается только после фиксации результата Astra replay."
 echo "======================================================================"
 
+# run.sh expects the same local MAVLink TCP endpoint as the web service.
+if ! python3 - <<'PY'
+import socket,sys
+try:
+    s=socket.create_connection(("127.0.0.1",5760),timeout=.35); s.close(); sys.exit(0)
+except OSError:
+    sys.exit(1)
+PY
+then
+  echo "Запускаю MAVLink router /dev/ttyAMA0 -> tcp://127.0.0.1:5760 ..."
+  bash "$ROOT/scripts/run_mavlink_wifi.sh" >"$ROUTER_LOG" 2>&1 &
+  ROUTER_PID=$!
+  ready=0
+  for _ in $(seq 1 60); do
+    if python3 - <<'PY'
+import socket,sys
+try:
+    s=socket.create_connection(("127.0.0.1",5760),timeout=.2); s.close(); sys.exit(0)
+except OSError:
+    sys.exit(1)
+PY
+    then ready=1; break; fi
+    if ! kill -0 "$ROUTER_PID" 2>/dev/null; then break; fi
+    sleep .1
+  done
+  if [[ "$ready" != 1 ]]; then
+    echo "ОШИБКА: MAVLink router не открыл tcp://127.0.0.1:5760" >&2
+    tail -80 "$ROUTER_LOG" >&2 || true
+    exit 3
+  fi
+fi
+
+# Snapshot existing run CSVs. Post-capture may only use a CSV created after this point.
+RUN_SNAPSHOT="$DATASET_DIR/.runs_before.txt"
+find "$HOME/monkeysStab_runs" -maxdepth 2 -type f -name optical_flow_mavlink.csv -print 2>/dev/null | sort >"$RUN_SNAPSHOT" || true
+CAPTURE_START_NS="$(date +%s%N)"
+
 set +e
 bash "$ROOT/scripts/run.sh"
 RC=$?
@@ -48,10 +96,10 @@ echo
 echo "======================================================================"
 echo "POST-CAPTURE INTEGRITY"
 echo "======================================================================"
-python3 - "$DATASET_DIR" <<'PY'
+python3 - "$DATASET_DIR" "$CAPTURE_START_NS" <<'PY'
 from pathlib import Path
 import csv,sys
-d=Path(sys.argv[1])
+d=Path(sys.argv[1]); start_ns=int(sys.argv[2])
 required=["frames.csv","frames.mjpgbin","capture_manifest.txt"]
 ok=True
 for n in required:
@@ -67,13 +115,20 @@ if fcsv.exists():
     print("saved camera frames:",max(n,0))
     if n<=0: ok=False
 
-runs=sorted(Path.home().joinpath("monkeysStab_runs").glob("*_OPTICAL_FLOW/optical_flow_mavlink.csv"),
-            key=lambda p:p.stat().st_mtime, reverse=True)
+runs=[]
+for p in Path.home().joinpath("monkeysStab_runs").glob("*_OPTICAL_FLOW/optical_flow_mavlink.csv"):
+    try:
+        if p.stat().st_mtime_ns >= start_ns:
+            runs.append(p)
+    except OSError:
+        pass
+runs.sort(key=lambda p:p.stat().st_mtime_ns,reverse=True)
 if runs:
     src=runs[0]
     dst=d/"optical_flow_mavlink.csv"
     dst.write_bytes(src.read_bytes())
-    print("optical_flow_mavlink.csv: COPIED",dst.stat().st_size,"bytes")
+    print("optical_flow_mavlink.csv: COPIED FROM",src)
+    print("optical_flow_mavlink.csv:",dst.stat().st_size,"bytes")
     with dst.open(newline="") as f:
         rows=list(csv.DictReader(f))
     ev=[(r.get("frame"),r.get("return_event")) for r in rows if r.get("return_event") not in (None,"","0")]
@@ -82,7 +137,7 @@ if runs:
         print("WARNING: fewer than 2 persisted return_event markers")
         ok=False
 else:
-    print("optical_flow_mavlink.csv: NOT FOUND")
+    print("optical_flow_mavlink.csv: NO NEW RUN CREATED BY THIS CAPTURE")
     ok=False
 
 p=d/"fc_dataflash.bin"
