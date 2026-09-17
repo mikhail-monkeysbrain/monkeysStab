@@ -858,6 +858,26 @@ def set_zero():
             # Current cumulative raw values = previous zero + current relative values.
             _raw_zero["n"]=(_raw_zero["n"] or 0.0)+float(rn)/1000.0
             _raw_zero["e"]=(_raw_zero["e"] or 0.0)+float(re)/1000.0
+
+        # Durable forensic marker for Web HOME.  The C++ accumulator is deliberately
+        # NOT reset here: Web HOME remains a presentation/reference zero only.
+        # The frame number lets offline analysis cut the production CSV at the exact
+        # sample used by the Web UI, while raw_abs_n/e preserve the WORKED5 baseline.
+        marker_path=RUN_ROOT/"web_home_events.csv"
+        marker_new=not marker_path.exists() or marker_path.stat().st_size==0
+        with open(marker_path,"a",encoding="utf-8",newline="",buffering=1) as mh:
+            mw=csv.writer(mh)
+            if marker_new:
+                mw.writerow(["wall_time","frame","raw_abs_n_m","raw_abs_e_m","runtime_csv"])
+            mw.writerow([
+                f"{time.time():.6f}",
+                int(cur.get("frame",0) or 0),
+                f"{(_raw_zero['n'] if _raw_zero['n'] is not None else float('nan')):.9f}",
+                f"{(_raw_zero['e'] if _raw_zero['e'] is not None else float('nan')):.9f}",
+                str(_active_csv or ""),
+            ])
+        log_event("INFO",f"HOME/0 Web forensic marker: frame={int(cur.get('frame',0) or 0)} rawN={_raw_zero['n']} rawE={_raw_zero['e']}")
+
         cur["x_mm"]=cur["y_mm"]=cur["z_mm"]=0.0
         cur["ekf_drift_mm"]=0.0
         if rn is not None and re is not None:
