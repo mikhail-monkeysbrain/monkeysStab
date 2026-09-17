@@ -20,6 +20,7 @@
 #include <array>
 #include <map>
 #include <fstream>
+#include <filesystem>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -1799,13 +1800,80 @@ int main(int argc,char** argv){
           if(a1.valid) mi.a1=a1.attitude;
           mi.range0_m=r0.distance_m; mi.range1_m=r1.distance_m;
           mi.range0_valid=r0.valid; mi.range1_valid=r1.valid;
-          mi.body_R_camera_frd=calib.B_R_C;
+          const cv::Matx33d metric_FLU_TO_FRD(1,0,0, 0,-1,0, 0,0,-1);
+          mi.body_R_camera_frd=metric_FLU_TO_FRD*calib.B_R_C;
           mi.body_R_camera_valid=true;
           mi.camera_pos_body_frd=cv::Vec3d(diag_camera_x_m,diag_camera_y_m,diag_camera_z_m);
           mi.range_pos_body_frd=cv::Vec3d(0.0855,0.0,diag_range_z_m);
 
           metric_step=metric_shadow::estimate(mi);
-          metric_shadow_integrator.consume(metric_step);
+
+          // Startup before the first synchronized metric interval is not a GAP.
+          // After start, every rejected interval remains visible.
+          static bool metric_shadow_started=false;
+          const bool metric_shadow_startup_wait =
+              !metric_shadow_started && !metric_step.valid &&
+              (metric_step.reason==metric_shadow::RejectReason::BAD_ATTITUDE ||
+               metric_step.reason==metric_shadow::RejectReason::BAD_RANGE);
+
+          if(metric_step.valid) metric_shadow_started=true;
+          if(!metric_shadow_startup_wait)
+            metric_shadow_integrator.consume(metric_step);
+
+          // Per-interval Metric Shadow log. Production OPTICAL_FLOW is untouched.
+          static std::ofstream metric_shadow_csv;
+          static bool metric_shadow_csv_header=false;
+
+          if(!metric_shadow_csv.is_open()){
+            const std::filesystem::path production_csv_path(csvpath);
+            const auto metric_shadow_path =
+                production_csv_path.parent_path() / "metric_shadow.csv";
+            metric_shadow_csv.open(
+                metric_shadow_path,
+                std::ios::out | std::ios::trunc);
+          }
+
+          if(metric_shadow_csv.is_open()){
+            if(!metric_shadow_csv_header){
+              metric_shadow_csv
+                <<"interval_id,t0_ns,t1_ns,started,startup_wait,"
+                <<"valid,reason,pairs,used,"
+                <<"dN_m,dE_m,dD_m,pN_m,pE_m,pD_m,"
+                <<"accepted,rejected,complete,"
+                <<"att0_valid,att1_valid,att0_gap_ms,att1_gap_ms,"
+                <<"range0_valid,range1_valid,range0_m,range1_m,"
+                <<"range0_gap_ms,range1_gap_ms,residual_median_m\n";
+              metric_shadow_csv_header=true;
+            }
+
+            const auto& mp=metric_shadow_integrator.position_m;
+
+            metric_shadow_csv
+              <<metric_shadow_interval_id<<','
+              <<prev_ts<<','<<ts<<','
+              <<(metric_shadow_started?1:0)<<','
+              <<(metric_shadow_startup_wait?1:0)<<','
+              <<(metric_step.valid?1:0)<<','
+              <<metric_shadow::rejectReasonName(metric_step.reason)<<','
+              <<s.metric_prev_points.size()<<','
+              <<metric_step.points<<','
+              <<metric_step.delta_local_m[0]<<','
+              <<metric_step.delta_local_m[1]<<','
+              <<metric_step.delta_local_m[2]<<','
+              <<mp[0]<<','<<mp[1]<<','<<mp[2]<<','
+              <<metric_shadow_integrator.accepted<<','
+              <<metric_shadow_integrator.rejected<<','
+              <<(metric_shadow_integrator.complete?1:0)<<','
+              <<(a0.valid?1:0)<<','<<(a1.valid?1:0)<<','
+              <<metric_att_gap0_ms<<','<<metric_att_gap1_ms<<','
+              <<(r0.valid?1:0)<<','<<(r1.valid?1:0)<<','
+              <<r0.distance_m<<','<<r1.distance_m<<','
+              <<metric_range_gap0_ms<<','<<metric_range_gap1_ms<<','
+              <<metric_step.residual_median_m
+              <<'\n';
+
+            metric_shadow_csv.flush();
+          }
 
           if(metric_shadow_last_print_ns==0 || now-metric_shadow_last_print_ns>=500000000LL){
             metric_shadow_last_print_ns=now;
