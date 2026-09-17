@@ -16,7 +16,6 @@
 namespace {
 struct Row { int64_t camera_ts_ns=0, flow_send_ns=0, mono_ns=0; double age_ms=0, roll=0,pitch=0,yaw=0,luna_age_ms=0,luna_m=0; int event=0; };
 struct TimedRPY { double t=0,r=0,p=0,y=0; };
-struct TimedRange { double t=0,v=0; };
 
 std::vector<std::string> split(const std::string& s){ std::vector<std::string> o; std::string x; std::stringstream ss(s); while(std::getline(ss,x,',')) o.push_back(x); return o; }
 double dval(const std::vector<std::string>& v,const std::map<std::string,size_t>& h,const char* k){ auto it=h.find(k); if(it==h.end()||it->second>=v.size()||v[it->second].empty()) throw std::runtime_error(std::string("missing CSV field: ")+k); return std::stod(v[it->second]); }
@@ -29,15 +28,23 @@ void unwrap(std::vector<double>& v){ for(size_t i=1;i<v.size();++i){ double d=v[
 template<class T> void sortUnique(std::vector<double>& t,std::vector<T>& v){ std::vector<size_t> ix(t.size()); for(size_t i=0;i<ix.size();++i) ix[i]=i; std::stable_sort(ix.begin(),ix.end(),[&](size_t a,size_t b){return t[a]<t[b];}); std::vector<double> nt; std::vector<T> nv; for(size_t k:ix) if(nt.empty()||t[k]-nt.back()>1e-8){nt.push_back(t[k]);nv.push_back(v[k]);} t.swap(nt);v.swap(nv); }
 
 bool readFrame(std::ifstream& f,uint64_t& ts,cv::Mat& gray){ uint32_t n=0; f.read((char*)&ts,8); if(!f){ if(f.eof()&&f.gcount()==0) return false; throw std::runtime_error("partial MJPG header ts"); } f.read((char*)&n,4); if(!f) throw std::runtime_error("partial MJPG header size"); std::vector<uchar> b(n); f.read((char*)b.data(),n); if((uint32_t)f.gcount()!=n) throw std::runtime_error("partial JPEG"); gray=cv::imdecode(b,cv::IMREAD_GRAYSCALE); if(gray.empty()) throw std::runtime_error("JPEG decode failed"); return true; }
+
+void reportLeg(int ea,int eb,const std::map<int,int>& events,const std::vector<cv::Vec3d>& pos,const std::vector<double>& camt,const std::vector<double>& at,const std::vector<double>& ry,const std::vector<char>& coverage){
+ auto ia=events.find(ea),ib=events.find(eb); if(ia==events.end()||ib==events.end()){ std::cout<<"LEG "<<ea<<"->"<<eb<<": MISSING EVENT\n"; return; }
+ int A=ia->second,B=ib->second; if(B<=A){std::cout<<"LEG "<<ea<<"->"<<eb<<": INVALID ORDER\n";return;}
+ cv::Vec3d d=pos[B]-pos[A]; double yawA=interp(camt[A],at,ry); cv::Vec3d local=astra_metric::rotation(0,0,yawA).t()*d; double mag=std::hypot(d[0],d[1])*1000.; int covn=0; for(int i=A+1;i<=B;++i) covn+=coverage[i]?1:0; double cov=100.*covn/std::max(1,B-A);
+ std::cout<<"LEG "<<ea<<"->"<<eb<<" indexes="<<A<<"->"<<B<<" N/E=("<<d[0]*1000<<", "<<d[1]*1000<<") mm local X/Y=("<<local[0]*1000<<", "<<local[1]*1000<<") mm magnitude="<<mag<<" mm coverage="<<cov<<"%\n";
+}
 }
 
 int main(int argc,char** argv){
  try{
   if(argc!=2){ std::cerr<<"usage: "<<argv[0]<<" DATASET_DIR\n"; return 2; }
   cv::setNumThreads(1); cv::setRNGSeed(716);
-  const std::string root=argv[1]; auto rows=readCsv(root+"/optical_flow_mavlink.csv");
-  if(rows.empty()) throw std::runtime_error("no CSV rows");
-  int A=-1,B=-1; for(size_t i=0;i<rows.size();++i){if(rows[i].event==1)A=(int)i;if(rows[i].event==2)B=(int)i;} if(A<0||B<0||B<=A) throw std::runtime_error("A/B events not found");
+  const std::string root=argv[1]; auto rows=readCsv(root+"/optical_flow_mavlink.csv"); if(rows.empty()) throw std::runtime_error("no CSV rows");
+  std::map<int,int> events; for(size_t i=0;i<rows.size();++i) if(rows[i].event) events[rows[i].event]=(int)i;
+  if(events.empty()) throw std::runtime_error("no events found");
+  int last_event_index=events.rbegin()->second;
 
   std::vector<double> at; std::vector<TimedRPY> av; std::vector<double> rt,rv;
   for(const auto& r:rows){ if(r.age_ms>=0&&r.flow_send_ns>0){ double t=r.flow_send_ns*1e-9-r.age_ms*1e-3; at.push_back(t); av.push_back({t,r.roll,r.pitch,r.yaw}); } rt.push_back(r.mono_ns*1e-9-r.luna_age_ms*1e-3); rv.push_back(r.luna_m); }
@@ -46,14 +53,18 @@ int main(int argc,char** argv){
   std::ifstream mf(root+"/frames.mjpgbin",std::ios::binary); if(!mf) throw std::runtime_error("cannot open frames.mjpgbin");
   astra_reference::Pipeline pipe; std::vector<cv::Vec3d> pos(rows.size(),cv::Vec3d(0,0,0)); std::vector<double> camt(rows.size()); std::vector<char> coverage(rows.size(),0); int recovered=0,bad=0; int last_anchor=0; cv::Vec3d last_anchor_pos(0,0,0); double last_anchor_t=rows[0].camera_ts_ns*1e-9;
 
-  for(int j=0;j<=B;++j){ uint64_t rawts=0; cv::Mat gray; if(!readFrame(mf,rawts,gray)) throw std::runtime_error("fewer RAW frames than CSV rows"); const double t=rows[j].camera_ts_ns*1e-9; camt[j]=t; astra_reference::FrameInput in; in.frame_id=j; in.camera_ts_ns=rows[j].camera_ts_ns; in.gray=gray; const double r=interp(t,at,rr),p=interp(t,at,rp),y=interp(t,at,ry); in.sensor.body_to_ned=astra_metric::rotation(r,p,y); in.sensor.range_m=interp(t,rt,rv); in.sensor.attitude_valid=true; in.sensor.range_valid=true; auto s=pipe.process(in);
-    if(s.status==astra_reference::Status::ACCEPTED){ pos[j]=s.position_ned_m; if(j>last_anchor){ const cv::Vec3d delta=s.position_ned_m-last_anchor_pos; const double den=t-last_anchor_t; for(int k=last_anchor+1;k<=j;++k){ double f=den!=0?(camt[k]-last_anchor_t)/den:1.0; pos[k]=last_anchor_pos+f*delta; coverage[k]=1; } } if(s.registration.method=="SIFT_RECOVERY"||j-last_anchor>1) ++recovered; last_anchor=j;last_anchor_pos=s.position_ned_m;last_anchor_t=t; }
+  for(int j=0;j<=last_event_index;++j){ uint64_t rawts=0; cv::Mat gray; if(!readFrame(mf,rawts,gray)) throw std::runtime_error("fewer RAW frames than CSV rows"); const double t=rows[j].camera_ts_ns*1e-9; camt[j]=t; astra_reference::FrameInput in; in.frame_id=j; in.camera_ts_ns=rows[j].camera_ts_ns; in.gray=gray; const double r=interp(t,at,rr),p=interp(t,at,rp),y=interp(t,at,ry); in.sensor.body_to_ned=astra_metric::rotation(r,p,y); in.sensor.range_m=interp(t,rt,rv); in.sensor.attitude_valid=true; in.sensor.range_valid=true; auto s=pipe.process(in);
+    if(s.status==astra_reference::Status::ACCEPTED){ pos[j]=s.position_ned_m; if(j>last_anchor){ const cv::Vec3d delta=s.position_ned_m-last_anchor_pos; const double den=t-last_anchor_t; for(int k=last_anchor+1;k<=j;++k){ double f=den!=0?(camt[k]-last_anchor_t)/den:1.; pos[k]=last_anchor_pos+f*delta; coverage[k]=1; } } if(s.registration.method=="SIFT_RECOVERY"||j-last_anchor>1) ++recovered; last_anchor=j;last_anchor_pos=s.position_ned_m;last_anchor_t=t; }
     else if(s.status==astra_reference::Status::RESET){ ++bad; pos[j]=(j?pos[j-1]:cv::Vec3d(0,0,0)); last_anchor=j;last_anchor_pos=pos[j];last_anchor_t=t; }
     else if(s.status!=astra_reference::Status::STARTED){ ++bad; }
-    if(j&&j%250==0) std::cout<<"frame "<<j<<"/"<<B<<" bad="<<bad<<" recovered="<<recovered<<"\n";
+    if(j&&j%500==0) std::cout<<"frame "<<j<<"/"<<last_event_index<<" bad="<<bad<<" recovered="<<recovered<<"\n";
   }
-  const cv::Vec3d d=pos[B]-pos[A]; const double yawA=interp(camt[A],at,ry); const auto local=astra_metric::rotation(0,0,yawA).t()*d; const double mag=std::hypot(d[0],d[1])*1000.0; int covn=0; for(int i=A+1;i<=B;++i) covn+=coverage[i]?1:0; double cov=100.0*covn/std::max(1,B-A);
-  std::cout<<std::fixed<<std::setprecision(6)<<"========================================================================\nASTRA C++ FULL RAW REPLAY\n"<<"dataset: "<<root<<"\nA/B zero-based indexes: "<<A<<"/"<<B<<"; report frames: "<<A+1<<"/"<<B+1<<"\nN/E = ("<<(d[0]*1000)<<", "<<(d[1]*1000)<<") mm\nlocal X/Y = ("<<(local[0]*1000)<<", "<<(local[1]*1000)<<") mm\nmagnitude = "<<mag<<" mm\ncoverage = "<<cov<<"%  bad_attempts="<<bad<<" recovered="<<recovered<<"\nPython C++-port reference: magnitude=325.260115 mm\nOriginal Astra locked reference: magnitude=325.2898884 mm\n========================================================================\n";
+
+  std::cout<<std::fixed<<std::setprecision(6)<<"========================================================================\nASTRA C++ FULL RAW REPLAY — EVENT LEGS\ndataset: "<<root<<"\nevents:"; for(auto& e:events) std::cout<<" "<<e.first<<"@"<<e.second; std::cout<<"\n";
+  if(events.count(1)&&events.count(2)) reportLeg(1,2,events,pos,camt,at,ry,coverage);
+  for(int e=11;e<=16;e+=2) reportLeg(e,e+1,events,pos,camt,at,ry,coverage);
+  if(events.count(17)) std::cout<<"EVENT 17 present at index "<<events.at(17)<<"; no matching event 18, so fourth leg endpoint is unavailable from event markers.\n";
+  std::cout<<"global bad_attempts="<<bad<<" recovered="<<recovered<<"\n========================================================================\n";
   return 0;
  }catch(const std::exception& e){std::cerr<<"ERROR: "<<e.what()<<"\n";return 1;}
 }
