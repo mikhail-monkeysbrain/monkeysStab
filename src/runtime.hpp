@@ -19,6 +19,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -114,12 +115,19 @@ struct Camera {
   }
 };
 
+struct LunaSample {
+  double distance_m=0;
+  int strength=0;
+  int64_t recv_ns=0;
+};
+
 struct LunaState {
   std::mutex mu;
   double distance_m=0;
   int strength=0;
   int64_t recv_ns=0;
   bool valid=false;
+  std::deque<LunaSample> history;
 };
 
 struct LunaReader {
@@ -162,11 +170,15 @@ struct LunaReader {
           const uint16_t d=q[2]|(uint16_t(q[3])<<8);
           const uint16_t st=q[4]|(uint16_t(q[5])<<8);
           if(ok && d>0){
+            const int64_t recv_ns=monoNs();
             std::lock_guard<std::mutex> l(state.mu);
             state.distance_m=d/100.0;
             state.strength=st;
-            state.recv_ns=monoNs();
+            state.recv_ns=recv_ns;
             state.valid=true;
+            state.history.push_back(LunaSample{state.distance_m,state.strength,recv_ns});
+            while(state.history.size()>2 && recv_ns-state.history.front().recv_ns>3000000000LL)
+              state.history.pop_front();
           }
           q.erase(q.begin(),q.begin()+9);
         }
@@ -179,6 +191,11 @@ struct LunaReader {
     if(!state.valid) return false;
     *d=state.distance_m; *s=state.strength; *t=state.recv_ns;
     return true;
+  }
+
+  std::deque<LunaSample> historySnapshot(){
+    std::lock_guard<std::mutex> l(state.mu);
+    return state.history;
   }
 
   void stop(){
