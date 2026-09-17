@@ -9,7 +9,8 @@ DATASET_DIR="${1:-$DATA_ROOT/${STAMP}_ASTRA_BLIND_AB_RAW}"
 mkdir -p "$DATASET_DIR"
 
 export MONKEYS_LOCAL_GUI=0
-export MONKEYS_RETURN_CLI=1
+export MONKEYS_RETURN_CLI=0
+export MONKEYS_BLIND4_CLI=1
 export MONKEYS_DATASET_DIR="$DATASET_DIR"
 export MONKEYS_DATASET_SURFACE="${MONKEYS_DATASET_SURFACE:-table}"
 export MONKEYS_REMOTE_LOG="$DATASET_DIR/fc_dataflash.bin"
@@ -30,7 +31,7 @@ capture_type=ASTRA_BLIND_AB_RAW
 created_local=$(date --iso-8601=seconds)
 git_head=$(git rev-parse HEAD)
 dataset_dir=$DATASET_DIR
-protocol=A(SPACE) -> B(SPACE) -> stop; GT deliberately not entered
+protocol=A(SPACE) -> B(SPACE) -> automatic stop -> literal Astra RAW replay; GT deliberately not entered
 camera=OV9281 MJPEG; original JPEG payloads stored in frames.mjpgbin
 fc_remote_dataflash=$MONKEYS_REMOTE_LOG
 surface=$MONKEYS_DATASET_SURFACE
@@ -38,19 +39,14 @@ NOTE=Blind evidence collection. Do not enter or encode physical ground truth bef
 EOF
 
 echo "======================================================================"
-echo "ASTRA BLIND RAW A->B DATASET"
+echo "ASTRA — ЧИСТЫЙ СЛЕПОЙ A -> B"
 echo "======================================================================"
+echo "GT НЕ ВВОДИТЬ. После B система сама остановит запись и посчитает Astra."
 echo "Dataset: $DATASET_DIR"
-echo
-echo "Протокол:"
-echo "  1. После СИСТЕМА ГОТОВА — аппарат неподвижен в A -> SPACE."
-echo "  2. Проведи аппарат руками по столу в B -> остановись -> SPACE."
-echo "  3. НЕ вводи физическое расстояние в программу."
-echo "  4. После сохранения B останови процесс Ctrl+C."
-echo "  5. Физический GT сообщается только после фиксации результата Astra replay."
 echo "======================================================================"
 
-# run.sh expects the same local MAVLink TCP endpoint as the web service.
+# run.sh uses the same local MAVLink endpoint as the web service. Start it here
+# so this dedicated capture does not depend on the web UI.
 if ! python3 - <<'PY'
 import socket,sys
 try:
@@ -59,7 +55,6 @@ except OSError:
     sys.exit(1)
 PY
 then
-  echo "Запускаю MAVLink router /dev/ttyAMA0 -> tcp://127.0.0.1:5760 ..."
   bash "$ROOT/scripts/run_mavlink_wifi.sh" >"$ROUTER_LOG" 2>&1 &
   ROUTER_PID=$!
   ready=0
@@ -77,25 +72,18 @@ PY
   done
   if [[ "$ready" != 1 ]]; then
     echo "ОШИБКА: MAVLink router не открыл tcp://127.0.0.1:5760" >&2
-    tail -80 "$ROUTER_LOG" >&2 || true
+    tail -40 "$ROUTER_LOG" >&2 || true
     exit 3
   fi
 fi
 
-# Snapshot existing run CSVs. Post-capture may only use a CSV created after this point.
-RUN_SNAPSHOT="$DATASET_DIR/.runs_before.txt"
-find "$HOME/monkeysStab_runs" -maxdepth 2 -type f -name optical_flow_mavlink.csv -print 2>/dev/null | sort >"$RUN_SNAPSHOT" || true
 CAPTURE_START_NS="$(date +%s%N)"
-
 set +e
-bash "$ROOT/scripts/run.sh"
-RC=$?
+python3 "$ROOT/tools/astra_blind_ab_console.py"
+CAPTURE_RC=$?
 set -e
 
-echo
-echo "======================================================================"
-echo "POST-CAPTURE INTEGRITY"
-echo "======================================================================"
+# Only a run created by this capture may be attached to this dataset.
 python3 - "$DATASET_DIR" "$CAPTURE_START_NS" <<'PY'
 from pathlib import Path
 import csv,sys
@@ -104,52 +92,77 @@ required=["frames.csv","frames.mjpgbin","capture_manifest.txt"]
 ok=True
 for n in required:
     p=d/n
-    sz=p.stat().st_size if p.exists() else 0
-    print(f"{n}: {'OK' if sz>0 else 'MISSING/EMPTY'} ({sz} bytes)")
-    if sz<=0: ok=False
-
-fcsv=d/"frames.csv"
-if fcsv.exists():
-    with fcsv.open(newline="") as f:
-        n=sum(1 for _ in f)-1
-    print("saved camera frames:",max(n,0))
-    if n<=0: ok=False
+    if not (p.exists() and p.stat().st_size>0): ok=False
 
 runs=[]
 for p in Path.home().joinpath("monkeysStab_runs").glob("*_OPTICAL_FLOW/optical_flow_mavlink.csv"):
     try:
-        if p.stat().st_mtime_ns >= start_ns:
-            runs.append(p)
+        if p.stat().st_mtime_ns >= start_ns: runs.append(p)
     except OSError:
         pass
 runs.sort(key=lambda p:p.stat().st_mtime_ns,reverse=True)
-if runs:
-    src=runs[0]
-    dst=d/"optical_flow_mavlink.csv"
-    dst.write_bytes(src.read_bytes())
-    print("optical_flow_mavlink.csv: COPIED FROM",src)
-    print("optical_flow_mavlink.csv:",dst.stat().st_size,"bytes")
-    with dst.open(newline="") as f:
-        rows=list(csv.DictReader(f))
-    ev=[(r.get("frame"),r.get("return_event")) for r in rows if r.get("return_event") not in (None,"","0")]
-    print("return events:",ev)
-    if len(ev)<2:
-        print("WARNING: fewer than 2 persisted return_event markers")
-        ok=False
-else:
-    print("optical_flow_mavlink.csv: NO NEW RUN CREATED BY THIS CAPTURE")
-    ok=False
+if not runs:
+    print("ОШИБКА: текущий optical_flow_mavlink.csv не найден")
+    sys.exit(4)
 
-p=d/"fc_dataflash.bin"
-print("fc_dataflash.bin:", "OK" if p.exists() and p.stat().st_size>0 else "MISSING/EMPTY (non-fatal for Astra replay)")
-print("RESULT:", "CAPTURE FILES PRESENT" if ok else "CAPTURE INCOMPLETE")
-sys.exit(0 if ok else 4)
+dst=d/"optical_flow_mavlink.csv"
+dst.write_bytes(runs[0].read_bytes())
+with dst.open(newline="") as f:
+    rows=list(csv.DictReader(f))
+ev=[(r.get("frame"),r.get("return_event")) for r in rows if r.get("return_event") not in (None,"","0")]
+if len(ev)<2 or ev[0][1]!="11" or ev[1][1]!="12":
+    print("ОШИБКА: не зафиксированы обе границы A/B; events=",ev)
+    sys.exit(4)
+if not ok:
+    print("ОШИБКА: RAW dataset неполный")
+    sys.exit(4)
+print(f"Границы RAW подтверждены: A frame={ev[0][0]}, B frame={ev[1][0]}")
 PY
-CHECK_RC=$?
 
-echo "Dataset: $DATASET_DIR"
-# Ctrl+C after B is expected for this blind two-marker protocol. Integrity decides success.
-if (( CHECK_RC != 0 )); then
-  exit "$CHECK_RC"
+echo
+echo "ASTRA СЧИТАЕТ A -> B ПО RAW..."
+
+BUILD_LOG="$DATASET_DIR/astra_replay_build.log"
+REPLAY_LOG="$DATASET_DIR/astra_replay.log"
+if ! g++ -std=c++17 -O2 \
+  $(pkg-config --cflags opencv4) -I"$ROOT/src" \
+  "$ROOT/tools/astra_reference_raw_replay.cpp" \
+  -o /tmp/astra_reference_raw_replay \
+  $(pkg-config --libs opencv4) >"$BUILD_LOG" 2>&1; then
+  echo "ОШИБКА: Astra replay не собрался. Лог: $BUILD_LOG" >&2
+  exit 5
 fi
-exit 0
+
+if ! /tmp/astra_reference_raw_replay "$DATASET_DIR" >"$REPLAY_LOG" 2>&1; then
+  echo "ОШИБКА: Astra replay завершился с ошибкой. Лог: $REPLAY_LOG" >&2
+  tail -20 "$REPLAY_LOG" >&2
+  exit 6
+fi
+
+RESULT_LINE="$(grep -E '^LEG 11->12 ' "$REPLAY_LOG" | tail -1 || true)"
+if [[ -z "$RESULT_LINE" ]]; then
+  echo "ОШИБКА: Astra не выдала LEG 11->12. Лог: $REPLAY_LOG" >&2
+  exit 7
+fi
+
+python3 - "$RESULT_LINE" <<'PY'
+import re,sys
+s=sys.argv[1]
+m=re.search(r'local X/Y=\(([-+0-9.eE]+),\s*([-+0-9.eE]+)\) mm magnitude=([-+0-9.eE]+) mm coverage=([-+0-9.eE]+)%',s)
+if not m:
+    print("ASTRA RAW RESULT:",s)
+    raise SystemExit(0)
+x,y,mag,cov=map(float,m.groups())
+print("\n======================================================================")
+print("ASTRA BLIND RESULT — ЗАФИКСИРОВАН ДО GT")
+print("======================================================================")
+print(f"A -> B = {mag:.3f} mm")
+print(f"local X/Y = ({x:+.3f}, {y:+.3f}) mm")
+print(f"coverage = {cov:.3f}%")
+print("======================================================================")
+print("Теперь можно раскрыть физически измеренный GT A -> B.")
+PY
+
+echo "Полный диагностический лог сохранён без вывода на экран:"
+echo "  $DATASET_DIR/capture_process.log"
+echo "  $REPLAY_LOG"
