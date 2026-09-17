@@ -10,6 +10,9 @@
 
 #include "runtime.hpp"
 #include "mavlink_io.hpp"
+#include "metric_odometry_shadow.hpp"
+#include "metric_shadow_sync.hpp"
+#include "metric_shadow_range_sync.hpp"
 
 #include <deque>
 #include <sstream>
@@ -676,6 +679,10 @@ struct FlowStep {
   int obs_downweighted=0;
 
   std::vector<cv::Point2f> inlier_points; // current-frame RANSAC inliers for web diagnostics
+  // Metric-shadow input: preserve BOTH sides of the exact production
+  // homography-RANSAC inlier correspondences. Diagnostic only.
+  std::vector<cv::Point2f> metric_prev_points;
+  std::vector<cv::Point2f> metric_curr_points;
 
   // 3x3 spatial diagnostics inside the configured feature ROI.
   // Each cell stores median inlier flow transformed to body FRD.
@@ -991,6 +998,8 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
   o.inliers=(int)ai.size();
   o.inlier_ratio=a.empty()?0.0:(double)ai.size()/a.size();
   o.inlier_points=bi;
+  o.metric_prev_points=ai;
+  o.metric_curr_points=bi;
   if(ai.size()<20){ o.invalid_reason=5; return o; }
 
   const int64_t t_post0=monoNs();
@@ -1746,6 +1755,78 @@ int main(int argc,char** argv){
           prev_camera_height_valid?prev_camera_height_m:0.0,
           current_camera_height_valid?current_camera_height_m:0.0);
         web_live.sendPreview(now,gray,s.inlier_points,g_feature_roi);
+
+        // Metric odometry shadow. This path is diagnostic only: it consumes
+        // the exact production RANSAC correspondences but never changes
+        // flow_send_x/y and never calls sendOpticalFlow().
+        static metric_shadow::Integrator metric_shadow_integrator;
+        static uint64_t metric_shadow_interval_id=0;
+        static int64_t metric_shadow_last_print_ns=0;
+        metric_shadow::Step metric_step;
+        bool metric_attempted=false;
+        double metric_att_gap0_ms=-1.0,metric_att_gap1_ms=-1.0;
+        double metric_range_gap0_ms=-1.0,metric_range_gap1_ms=-1.0;
+        if(!prev.empty() && prev_ts>0 && ts>prev_ts){
+          metric_attempted=true;
+          ++metric_shadow_interval_id;
+
+          std::deque<metric_shadow::TimedAttitude> ah;
+          {
+            std::lock_guard<std::mutex> lock(fc.mu);
+            ah.clear();
+            ah.resize(fc.attitude_history.size());
+            for(size_t i=0;i<fc.attitude_history.size();++i){
+              const auto& g=fc.attitude_history[i];
+              ah[i]={g.roll,g.pitch,g.yaw,g.sample_ns,g.valid};
+            }
+          }
+          const auto a0=metric_shadow::interpolateAttitude(ah,prev_ts,30.0);
+          const auto a1=metric_shadow::interpolateAttitude(ah,ts,30.0);
+          metric_att_gap0_ms=a0.bracket_gap_ms;
+          metric_att_gap1_ms=a1.bracket_gap_ms;
+
+          const auto rh=luna.historySnapshot();
+          const auto r0=metric_shadow_sync::interpolateRange(rh,prev_ts,40.0,25.0);
+          const auto r1=metric_shadow_sync::interpolateRange(rh,ts,40.0,25.0);
+          metric_range_gap0_ms=r0.bracket_gap_ms;
+          metric_range_gap1_ms=r1.bracket_gap_ms;
+
+          metric_shadow::Input mi;
+          mi.t0_ns=prev_ts; mi.t1_ns=ts;
+          mi.px0=s.metric_prev_points; mi.px1=s.metric_curr_points;
+          mi.K=calib.K; mi.D=calib.D;
+          if(a0.valid) mi.a0=a0.attitude;
+          if(a1.valid) mi.a1=a1.attitude;
+          mi.range0_m=r0.distance_m; mi.range1_m=r1.distance_m;
+          mi.range0_valid=r0.valid; mi.range1_valid=r1.valid;
+          mi.body_R_camera_frd=calib.B_R_C;
+          mi.body_R_camera_valid=true;
+          mi.camera_pos_body_frd=cv::Vec3d(diag_camera_x_m,diag_camera_y_m,diag_camera_z_m);
+          mi.range_pos_body_frd=cv::Vec3d(0.0855,0.0,diag_range_z_m);
+
+          metric_step=metric_shadow::estimate(mi);
+          metric_shadow_integrator.consume(metric_step);
+
+          if(metric_shadow_last_print_ns==0 || now-metric_shadow_last_print_ns>=500000000LL){
+            metric_shadow_last_print_ns=now;
+            const auto& mp=metric_shadow_integrator.position_m;
+            std::cerr<<"METRIC_SHADOW interval="<<metric_shadow_interval_id
+                     <<" valid="<<(metric_step.valid?1:0)
+                     <<" reason="<<metric_shadow::rejectReasonName(metric_step.reason)
+                     <<" pairs="<<s.metric_prev_points.size()
+                     <<" used="<<metric_step.points
+                     <<" dNE_mm=["<<metric_step.delta_local_m[0]*1000.0
+                     <<","<<metric_step.delta_local_m[1]*1000.0<<"]"
+                     <<" posNE_mm=["<<mp[0]*1000.0<<","<<mp[1]*1000.0<<"]"
+                     <<" complete="<<(metric_shadow_integrator.complete?1:0)
+                     <<" accepted="<<metric_shadow_integrator.accepted
+                     <<" rejected="<<metric_shadow_integrator.rejected
+                     <<" att_gap_ms=["<<metric_att_gap0_ms<<","<<metric_att_gap1_ms<<"]"
+                     <<" range_gap_ms=["<<metric_range_gap0_ms<<","<<metric_range_gap1_ms<<"]"
+                     <<" residual_med_mm="<<metric_step.residual_median_m*1000.0
+                     <<"\n";
+          }
+        }
 
         // Consume the FC gyro for THIS processed camera interval before any
         // bench-only range remapping.  Pure rotational optical flow must remain
