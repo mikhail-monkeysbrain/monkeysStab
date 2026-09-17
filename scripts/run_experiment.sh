@@ -13,22 +13,17 @@ RUN_DIR="$RUN_ROOT/${STAMP}_EXPERIMENT"
 mkdir -p "$RUN_DIR"
 
 ROUTER_PID=""
-RUNTIME_PID=""
 cleanup() {
-  [[ -n "$RUNTIME_PID" ]] && kill -INT "$RUNTIME_PID" 2>/dev/null || true
-  [[ -n "$RUNTIME_PID" ]] && wait "$RUNTIME_PID" 2>/dev/null || true
   [[ -n "$ROUTER_PID" ]] && kill -TERM "$ROUTER_PID" 2>/dev/null || true
   [[ -n "$ROUTER_PID" ]] && wait "$ROUTER_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
-# Fail immediately on a real camera conflict. No lengthy diagnostics.
 if fuser "$CAMERA" >/dev/null 2>&1; then
   echo "ОШИБКА: камера занята. Закрой start.sh и повтори запуск."
   exit 2
 fi
 
-# Reuse an existing router if present; otherwise start the lightweight router.
 if ! python3 - <<'PY'
 import socket,sys
 try:
@@ -54,7 +49,6 @@ PY
   done
 fi
 
-# Fast runtime: skip FC audits and use a cached binary when source is unchanged.
 CACHE_DIR="$HOME/.cache/monkeysStab"
 BIN="$CACHE_DIR/monkeysstab_optical_flow"
 mkdir -p "$CACHE_DIR"
@@ -83,29 +77,20 @@ print(g['camera']['x'],g['camera']['y'],g['camera']['z'],g['rangefinder']['z'])
 PY
 )
 
-"$BIN" "$CAMERA" "$LUNA" "$FC" "$CSV" "$CAMERA_YAML" "$FOCAL" \
-  --feature-roi "$RX0" "$RY0" "$RX1" "$RY1" --max-features "$MAXF" \
-  --diag-camera-x-m "$CX" --diag-camera-y-m "$CY" --diag-camera-z-m "$CZ" \
-  --diag-range-z-m "$RZ" --blind4-cli >"$RUN_DIR/runtime.log" 2>&1 &
-RUNTIME_PID=$!
-
-sleep .6
-if ! kill -0 "$RUNTIME_PID" 2>/dev/null; then
-  echo "ОШИБКА: runtime не запустился:"
-  tail -10 "$RUN_DIR/runtime.log"
-  exit 3
-fi
-
 clear 2>/dev/null || true
 echo "========================================"
-echo " ЭКСПЕРИМЕНТ ГОТОВ"
+echo " ЭКСПЕРИМЕНТ"
 echo "========================================"
+echo "После строки 'СИСТЕМА ГОТОВА':"
 echo "SPACE  — точка A"
-echo "затем перемести стенд"
+echo "перемести стенд"
 echo "SPACE  — точка B"
 echo "Ctrl+C — закончить"
 echo "========================================"
-echo "Лог: $RUN_DIR"
 
-# Give the runtime the operator terminal while keeping its normal output quiet.
-wait "$RUNTIME_PID"
+# Runtime MUST stay in foreground so it owns the operator TTY and receives SPACE.
+# Keep stderr in a file, but do not redirect stdin/stdout away from the terminal.
+exec "$BIN" "$CAMERA" "$LUNA" "$FC" "$CSV" "$CAMERA_YAML" "$FOCAL" \
+  --feature-roi "$RX0" "$RY0" "$RX1" "$RY1" --max-features "$MAXF" \
+  --diag-camera-x-m "$CX" --diag-camera-y-m "$CY" --diag-camera-z-m "$CZ" \
+  --diag-range-z-m "$RZ" --blind4-cli 2>"$RUN_DIR/runtime.err.log"
