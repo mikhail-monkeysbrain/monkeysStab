@@ -6,14 +6,14 @@
 
 // Frozen WORKED 5% estimator core.
 //
-// This file deliberately contains no empirical post-scale and no axis-specific
-// correction.  It is the online form of the estimator frozen in
+// No empirical post-scale and no axis-specific correction are allowed here.
+// This is the online form of the estimator frozen in
 // docs/WORKED_5_PERCENT_ESTIMATOR.md.
 //
 // Input correspondences MUST be the already accepted production RANSAC inliers
-// from the same adjacent camera interval.  The function performs only the
-// frozen undistort + 4-parameter similarity fit and converts its translation
-// into a metric camera-plane displacement.
+// from the same adjacent camera interval. The function performs only the frozen
+// undistort + 4-parameter similarity fit and converts its translation into a
+// metric camera-plane displacement.
 namespace worked5 {
 
 constexpr double kFocalScale = 1.10;
@@ -31,21 +31,28 @@ struct Step {
 
 inline Step estimate(const std::vector<cv::Point2f>& prev_inliers,
                      const std::vector<cv::Point2f>& curr_inliers,
-                     const cv::Mat& base_K,
+                     const cv::Mat& production_K,
+                     double production_focal_scale,
                      const cv::Mat& D,
                      double camera_height_m,
                      double dt_s) {
   Step o;
   if (prev_inliers.size() != curr_inliers.size() ||
       prev_inliers.size() < 20 ||
+      !(production_focal_scale > 0.0) || !std::isfinite(production_focal_scale) ||
       !(camera_height_m > 0.02) || !std::isfinite(camera_height_m) ||
       !(dt_s > 0.0 && dt_s < 0.2)) {
     return o;
   }
 
-  cv::Mat K = base_K.clone();
-  K.at<double>(0,0) *= kFocalScale;
-  K.at<double>(1,1) *= kFocalScale;
+  // Runtime CameraCalib.K has already been multiplied by the production
+  // focal_scale. Undo only that scale and apply the frozen WORKED scale. This
+  // keeps WORKED at exactly 1.10 even while the AP publisher remains at its
+  // independent production focal_scale (historically 0.931).
+  cv::Mat K = production_K.clone();
+  const double k = kFocalScale / production_focal_scale;
+  K.at<double>(0,0) *= k;
+  K.at<double>(1,1) *= k;
 
   std::vector<cv::Point2f> a, b;
   cv::undistortPoints(prev_inliers, a, K, D);
