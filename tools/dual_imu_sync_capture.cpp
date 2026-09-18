@@ -125,7 +125,11 @@ int main(int argc,char** argv){
            <<"Нажми ENTER для начала записи..."<<std::flush;
   std::string line; std::getline(std::cin,line);
 
-  // Connect only after ENTER. Otherwise the router can fill the TCP receive\n  // buffer while the operator waits, and capture starts by draining old MAVLink.\n  int tcp=openTcp(ep);\n\n  const int64_t start_ns=monoNs();
+  // Connect only after ENTER. Otherwise the router can fill the TCP receive
+  // buffer while the operator waits, and capture starts by draining old MAVLink.
+  int tcp=openTcp(ep);
+
+  const int64_t start_ns=monoNs();
   const int64_t end_ns=start_ns+int64_t(seconds*1e9);
 
   std::thread ft([&]{
