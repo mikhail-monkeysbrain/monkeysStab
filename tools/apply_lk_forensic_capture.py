@@ -41,31 +41,36 @@ insert='''      static int64_t w5w_t0_ns=monoNs();
 if anchor not in s: raise SystemExit("state anchor not found")
 s=s.replace(anchor,insert,1)
 
-anchor2='''      cv::Mat gray=cv::imdecode(latest_jpeg,cv::IMREAD_GRAYSCALE);
-      if(gray.empty())continue;
-      ++fps_decoded; ++w5w_decoded;'''
-insert2='''      // Preserve the selected compressed frame before decode.  The ring is
-      // bounded by camera timestamp, so normal operation uses only a few tens
-      // of MiB and performs no disk I/O.
+anchor2='''      cv::Mat raw(1,(int)latest_jpeg.size(),CV_8UC1,latest_jpeg.data());
+      cv::Mat gray=cv::imdecode(raw,cv::IMREAD_GRAYSCALE);
+      if(gray.empty()) continue;
+      ++fps_decoded; ++w5w_decoded;
+      ++frame;'''
+insert2='''      cv::Mat raw(1,(int)latest_jpeg.size(),CV_8UC1,latest_jpeg.data());
+      cv::Mat gray=cv::imdecode(raw,cv::IMREAD_GRAYSCALE);
+      if(gray.empty()) continue;
+      ++fps_decoded; ++w5w_decoded;
+      ++frame;
+
+      // Preserve only successfully decoded selected MJPEG frames. frame now
+      // exactly matches the production CSV frame counter.
       lkfc_ring.push_back(LkForensicFrame{frame,ts,selected_v4l2_ts_ns,
                                           selected_dq_mono_ns,selected_v4l2_flags,
                                           latest_jpeg});
       while(lkfc_ring.size()>1 && ts-lkfc_ring.front().mono_ns>kLkfcPreNs+kLkfcPostNs)
-        lkfc_ring.pop_front();
-
-      cv::Mat gray=cv::imdecode(latest_jpeg,cv::IMREAD_GRAYSCALE);
-      if(gray.empty())continue;
-      ++fps_decoded; ++w5w_decoded;'''
+        lkfc_ring.pop_front();'''
 if anchor2 not in s: raise SystemExit("decode anchor not found")
 s=s.replace(anchor2,insert2,1)
 
-anchor3='''        if(!prev.empty())s=estimateRawFlow(prev,gray,dt,calib,
-                                            prev_camera_height_m,current_camera_height_m,
-                                            C1_R_C0_ptr,dr_interp_gap_ms);
-        web_live.sendPreview(gray,s.inlier_points,ts);'''
-insert3='''        if(!prev.empty())s=estimateRawFlow(prev,gray,dt,calib,
-                                            prev_camera_height_m,current_camera_height_m,
-                                            C1_R_C0_ptr,dr_interp_gap_ms);
+anchor3='''        if(!prev.empty())s=estimateRawFlow(
+          prev,gray,dt,calib,
+          prev_camera_height_valid?prev_camera_height_m:0.0,
+          current_camera_height_valid?current_camera_height_m:0.0);
+        web_live.sendPreview(now,gray,s.inlier_points,g_feature_roi);'''
+insert3='''        if(!prev.empty())s=estimateRawFlow(
+          prev,gray,dt,calib,
+          prev_camera_height_valid?prev_camera_height_m:0.0,
+          current_camera_height_valid?current_camera_height_m:0.0);
 
         // Trigger on production forward-LK wall time.  Do not use valid=0:
         // the observed collapse begins before the final validity gate fails.
@@ -105,7 +110,7 @@ insert3='''        if(!prev.empty())s=estimateRawFlow(prev,gray,dt,calib,
           lkfc_ring.clear();
         }
 
-        web_live.sendPreview(gray,s.inlier_points,ts);'''
+        web_live.sendPreview(now,gray,s.inlier_points,g_feature_roi);'''
 if anchor3 not in s: raise SystemExit("flow anchor not found")
 s=s.replace(anchor3,insert3,1)
 p.write_text(s)
