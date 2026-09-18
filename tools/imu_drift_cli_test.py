@@ -9,7 +9,9 @@ def snap(t, elapsed=0.0):
     an=float(t.get("imu_dr_acc_n") or 0); ae=float(t.get("imu_dr_acc_e") or 0); ad=float(t.get("imu_dr_acc_d") or 0)
     return dict(
         t=elapsed, a=math.sqrt(an*an+ae*ae+ad*ad),
-        g=float(t.get("imu_dr_gmag") or 0),\n        an=an, ae=ae, ad=ad,\n        roll=float(t.get("roll_deg") or 0), pitch=float(t.get("pitch_deg") or 0),
+        g=float(t.get("imu_dr_gmag") or 0),
+        an=an, ae=ae, ad=ad,
+        roll=float(t.get("roll_deg") or 0), pitch=float(t.get("pitch_deg") or 0),
         vn=float(t.get("imu_dr_vn") or 0), ve=float(t.get("imu_dr_ve") or 0), vd=float(t.get("imu_dr_vd") or 0),
         x=float(t.get("imu_dr_n_mm") or 0), y=float(t.get("imu_dr_e_mm") or 0), z=float(t.get("imu_dr_d_mm") or 0),
         st=int(t.get("imu_dr_stationary_samples") or 0),
