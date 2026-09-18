@@ -12,11 +12,18 @@ if marker in s:
     print("already patched",p); raise SystemExit(0)
 
 # Need standard headers for Linux TID set.
-inc_anchor="#include <opencv2/opencv.hpp>"
-if inc_anchor not in s:
-    print("opencv include anchor not found; source not modified",file=sys.stderr); raise SystemExit(2)
-extra='''\n// OPENCV_PARALLEL_PROBE_V1 headers\n#include <mutex>\n#include <set>\n#include <sys/syscall.h>\n#include <unistd.h>\n'''
-s=s.replace(inc_anchor,inc_anchor+extra,1)
+# Local source is intentionally ahead/diverged; do not assume one exact OpenCV include.
+# Insert diagnostic headers before the first existing #include.
+first_include=s.find("#include ")
+if first_include < 0:
+    print("include anchor not found; source not modified",file=sys.stderr); raise SystemExit(2)
+extra='''// OPENCV_PARALLEL_PROBE_V1 headers
+#include <mutex>
+#include <set>
+#include <sys/syscall.h>
+#include <unistd.h>
+'''
+s=s[:first_include]+extra+s[first_include:]
 
 # Insert at entry to the actual flow estimator so the probe runs from the same caller context.
 candidates=[
