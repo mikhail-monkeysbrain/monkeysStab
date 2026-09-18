@@ -132,5 +132,21 @@ new="""                fc.imu_cam_vn=web_raw_vn;
 """
 once(old,new,"WORKED5 producer")
 
+# Add FUSED-V1 fields to the existing runtime telemetry JSON.
+telemetry_anchor='            <<",\\\"imu_zupt_shadow_blocks\\\":"<<fc.imu_zupt_shadow_blocks\n'
+telemetry_new='''            <<",\\\"imu_zupt_shadow_blocks\\\":"<<fc.imu_zupt_shadow_blocks
+            <<",\\\"imu_cam_seq\\\":"<<fc.imu_cam_seq
+            <<",\\\"fused_v1_visual_updates\\\":"<<fc.fused_v1_visual_updates
+            <<",\\\"fused_v1_imu_predictions\\\":"<<fc.fused_v1_imu_predictions
+            <<",\\\"fused_v1_stop_constraints\\\":"<<fc.fused_v1_stop_constraints
+            <<",\\\"fused_v1_stationary\\\":"<<(fc.fused_v1_stationary?"true":"false")
+            <<",\\\"fused_v1_stop_confirm\\\":"<<fc.fused_v1_stop_confirm
+            <<",\\\"fused_v1_n_mm\\\":"<<jsonNumber(fc.fused_v1_n*1000.0)
+            <<",\\\"fused_v1_e_mm\\\":"<<jsonNumber(fc.fused_v1_e*1000.0)
+            <<",\\\"fused_v1_vn\\\":"<<jsonNumber(fc.fused_v1_vn)
+            <<",\\\"fused_v1_ve\\\":"<<jsonNumber(fc.fused_v1_ve)
+'''
+once(telemetry_anchor,telemetry_new,"FUSED-V1 telemetry")
+
 p.write_text(s)
-print("OK: FUSED-V1 event-driven shadow applied")
+print("OK: FUSED-V1 event-driven shadow + telemetry applied")
