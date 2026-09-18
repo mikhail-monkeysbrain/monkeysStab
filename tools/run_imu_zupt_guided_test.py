@@ -40,6 +40,8 @@ def phase(name,sec,rows):
               "imu_n_mm":pick(d,"imu_dr_n_mm"),"imu_e_mm":pick(d,"imu_dr_e_mm"),
               "imu_d_mm":pick(d,"imu_dr_d_mm"),"imu_vn":pick(d,"imu_dr_vn"),
               "imu_ve":pick(d,"imu_dr_ve"),"imu_vd":pick(d,"imu_dr_vd"),
+              "imu_acc_n":pick(d,"imu_dr_acc_n"),"imu_acc_e":pick(d,"imu_dr_acc_e"),
+              "imu_acc_d":pick(d,"imu_dr_acc_d"),"imu_dt":pick(d,"imu_dr_dt"),
               "cam_vn":pick(d,"imu_cam_vn"),"cam_ve":pick(d,"imu_cam_ve"),
               "cam_seq":pick(d,"imu_cam_seq"),
               "fused_v1_visual_updates":pick(d,"fused_v1_visual_updates"),
