@@ -79,8 +79,12 @@ static std::string col(const std::map<int,std::vector<std::string>>&m,int fr,con
  auto &h=m.at(-1);auto it=m.find(fr);if(it==m.end())return "-";for(size_t i=0;i<h.size();i++)if(h[i]==n)return it->second[i];return "-";
 }
 int main(int argc,char**argv){
- if(argc<4){std::cerr<<"usage: exact_replay RUN START END\n";return 2;}
- fs::path run=argv[1],cap=run/"lk_forensic";int a=std::stoi(argv[2]),b=std::stoi(argv[3]);auto p=prod(run/"optical_flow_mavlink.csv");
+ if(argc<4){std::cerr<<"usage: exact_replay RUN START END [opencv_threads]\n";return 2;}
+ fs::path run=argv[1],cap=run/"lk_forensic";int a=std::stoi(argv[2]),b=std::stoi(argv[3]);
+ if(argc>=5) cv::setNumThreads(std::max(1,std::stoi(argv[4])));
+ std::cout<<"OpenCV requested_threads="<<(argc>=5?std::stoi(argv[4]):-1)
+          <<" effective_threads="<<cv::getNumThreads()<<" CPUs="<<cv::getNumberOfCPUs()<<"\n";
+ auto p=prod(run/"optical_flow_mavlink.csv");
  std::cout<<"frame | production F/T/I LKms | exact-replay F/T/I LKms | delta F/T/I\n";
  for(int fr=a;fr<=b;fr++){
   cv::Mat prev=cv::imread((cap/("frame_"+std::to_string(fr-1)+".jpg")).string(),0);
