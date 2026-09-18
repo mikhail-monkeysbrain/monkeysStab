@@ -56,6 +56,7 @@ ap.add_argument("--url",default="http://127.0.0.1:8080/api/telemetry")
 ap.add_argument("--rest-before",type=float,default=5)
 ap.add_argument("--move",type=float,default=3)
 ap.add_argument("--rest-after",type=float,default=12)
+ap.add_argument("--max-test",type=float,default=30)
 a=ap.parse_args()
 
 try:
@@ -78,43 +79,53 @@ start=p0[-1] if p0 else snap(ready)
 if start["st"]<10:
     raise SystemExit(f"ZUPT не захвачен перед движением (stat={start['st']}). Стенд не двигать; повторить после устойчивого покоя.")
 
-print("\nПлавно перемести стенд на 250–300 мм БЕЗ ОТРЫВА.")
-print(f"Двигай первые {a.move:.0f} с. После сигнала СТОП сразу отпусти стенд.")
-input("Нажми ENTER и сразу начинай движение... ")
+print("\nТеперь двигай стенд руками как удобно, затем полностью останови и убери руки.")
+input("Нажми ENTER и начинай движение... ")
 
-seq=collect(a.url,a.move+a.rest_after,"ДВИЖЕНИЕ → АВТОМАТИЧЕСКИЙ ПОКОЙ",stop_at=a.move)
-move=[v for v in seq if v["t"]<a.move]
-after=[v for v in seq if v["t"]>=a.move]
-stop=min(seq,key=lambda v:abs(v["t"]-a.move)) if seq else start
-end=seq[-1] if seq else start
-m=max(move,key=lambda v:math.sqrt(v["vn"]**2+v["ve"]**2+v["vd"]**2)) if move else start
+print("\nЗАПИСЬ — ожидаю движение и последующий устойчивый покой")
+seq=[]; t0=time.monotonic(); moved=False; quiet_since=None; done_reason="таймаут"
+while time.monotonic()-t0 < a.max_test:
+    elapsed=time.monotonic()-t0
+    try:
+        v=snap(get(a.url),elapsed); seq.append(v)
+    except Exception:
+        time.sleep(.05); continue
 
-zupt=None
-for v in after:
-    if v["st"]>=10 and abs(v["vn"])<1e-9 and abs(v["ve"])<1e-9 and abs(v["vd"])<1e-9:
-        zupt=v["t"]-a.move
-        break
+    speed=math.sqrt(v["vn"]**2+v["ve"]**2+v["vd"]**2)
+    dynamic=(not v["stationary"]) or speed>0.01
+    if dynamic:
+        moved=True
+        quiet_since=None
+    elif moved:
+        if quiet_since is None: quiet_since=elapsed
+        if elapsed-quiet_since >= 2.0 and v["st"]>=10:
+            done_reason="устойчивый конечный покой"
+            break
+    time.sleep(.05)
+print(f"  запись завершена: {done_reason}")
 
-post_dx=dv(stop,end,"x"); post_dy=dv(stop,end,"y"); post_dz=dv(stop,end,"z")
-move_dx=dv(start,stop,"x"); move_dy=dv(start,stop,"y"); move_dz=dv(start,stop,"z")
+if not moved:
+    raise SystemExit("Движение не обнаружено.")
+end=seq[-1]
+# Конечный покой определяется данными, а не таймером/реакцией оператора.
+q0=next((i for i in range(len(seq)) if all(x["stationary"] for x in seq[i:i+10]) and len(seq[i:i+10])==10 and seq[i]["t"]>0.2),None)
+# Первый такой участок может быть паузой до начала движения; ищем последний переход в устойчивый покой после динамики.
+candidates=[]
+for i in range(1,len(seq)-9):
+    if (not seq[i-1]["stationary"]) and all(x["stationary"] for x in seq[i:i+10]):
+        candidates.append(i)
+settle_i=candidates[-1] if candidates else max(0,len(seq)-1)
+settle=seq[settle_i]
+move_end=settle
+m=max(seq[:settle_i+1],key=lambda v: math.sqrt(v["vn"]**2+v["ve"]**2+v["vd"]**2))
 total_dx=dv(start,end,"x"); total_dy=dv(start,end,"y"); total_dz=dv(start,end,"z")
+settle_dx=dv(start,settle,"x"); settle_dy=dv(start,settle,"y"); settle_dz=dv(start,settle,"z")
 
 print("\nРЕЗУЛЬТАТ")
 print("=========")
 print(f"Покой до: |a|={avg(p0,'a'):.4f} m/s²  stat={start['st']}  V=({start['vn']:+.3f},{start['ve']:+.3f},{start['vd']:+.3f})")
-print(f"Движение: max|V|={math.sqrt(m['vn']**2+m['ve']**2+m['vd']**2):.3f} m/s")
-def integ(vs,k):
-    s=0.0
-    for u,v in zip(vs,vs[1:]):
-        dt=v["t"]-u["t"]
-        if 0<dt<0.2: s += .5*(u[k]+v[k])*dt
-    return s
-pre_a=integ(move,"an"); post_a=integ(after[:max(1,next((i for i,v in enumerate(after) if v["st"]>=10),len(after)))],"an")
-print(f"Импульс aN: движение={pre_a:+.4f} m/s   после STOP до ZUPT={post_a:+.4f} m/s")
-print(f"aN диапазон: движение [{min((v['an'] for v in move),default=0):+.3f},{max((v['an'] for v in move),default=0):+.3f}] m/s²")
-print(f"ATTITUDE: roll [{min((v['roll'] for v in seq),default=0):+.2f},{max((v['roll'] for v in seq),default=0):+.2f}]°  pitch [{min((v['pitch'] for v in seq),default=0):+.2f},{max((v['pitch'] for v in seq),default=0):+.2f}]°")
-print(f"Δ движение: X={move_dx:+.1f}  Y={move_dy:+.1f}  Z={move_dz:+.1f} mm")
-print(f"Δ после STOP: X={post_dx:+.1f}  Y={post_dy:+.1f}  Z={post_dz:+.1f} mm")
-print(f"Δ всего:     X={total_dx:+.1f}  Y={total_dy:+.1f}  Z={total_dz:+.1f} mm")
-print("ZUPT после STOP:", f"{zupt:.2f} с" if zupt is not None else "НЕ ЗАХВАЧЕН")
-print(f"Конец: |a|={avg(after[-40:] if len(after)>40 else after,'a'):.4f} m/s²  stat={end['st']}  V=({end['vn']:+.3f},{end['ve']:+.3f},{end['vd']:+.3f})")
+print(f"Запись: {len(seq)} samples, {end['t']:.2f} с; max|V|={math.sqrt(m['vn']**2+m['ve']**2+m['vd']**2):.3f} m/s")
+print(f"Устойчивый конечный покой с t={settle['t']:.2f} с, stat={settle['st']}")
+print(f"Δ к покою: X={settle_dx:+.1f}  Y={settle_dy:+.1f}  Z={settle_dz:+.1f} mm")
+print(f"Δ всего:   X={total_dx:+.1f}  Y={total_dy:+.1f}  Z={total_dz:+.1f} mm")
+print(f"Конец: |a|={avg(seq[-40:] if len(seq)>40 else seq,'a'):.4f} m/s²  stat={end['st']}  V=({end['vn']:+.3f},{end['ve']:+.3f},{end['vd']:+.3f})")
