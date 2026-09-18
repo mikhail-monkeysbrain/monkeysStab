@@ -17,34 +17,32 @@ if "#include <time.h>" not in s:
     # remote main. A preprocessing directive is valid at the start of the TU.
     s = "#include <time.h>\n" + s
 
-old = """  const auto lk0=std::chrono::steady_clock::now();
+old = """  const int64_t t_lk0=monoNs();
   cv::calcOpticalFlowPyrLK(prev,curr,p0,p1,st,err,{21,21},3,
                            cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,30,0.01),
                            0,1e-4);
-  const auto lk1=std::chrono::steady_clock::now();
-  s.t_lk_ms=std::chrono::duration<double,std::milli>(lk1-lk0).count();"""
+  o.t_lk_ms=(monoNs()-t_lk0)*1e-6;"""
 
 new = """  // LK_RUNTIME_TIMING_V1
-  // Diagnostic only. LK inputs/parameters/results are unchanged.
+  // Diagnostic only. Production LK inputs, parameters and output are unchanged.
   timespec lk_thr0{}, lk_thr1{}, lk_proc0{}, lk_proc1{};
   clock_gettime(CLOCK_THREAD_CPUTIME_ID,&lk_thr0);
   clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&lk_proc0);
-  const auto lk0=std::chrono::steady_clock::now();
+  const int64_t t_lk0=monoNs();
   cv::calcOpticalFlowPyrLK(prev,curr,p0,p1,st,err,{21,21},3,
                            cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,30,0.01),
                            0,1e-4);
-  const auto lk1=std::chrono::steady_clock::now();
+  o.t_lk_ms=(monoNs()-t_lk0)*1e-6;
   clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&lk_proc1);
   clock_gettime(CLOCK_THREAD_CPUTIME_ID,&lk_thr1);
-  s.t_lk_ms=std::chrono::duration<double,std::milli>(lk1-lk0).count();
   const auto lk_ts_ms=[](const timespec& a,const timespec& b){
     return double(b.tv_sec-a.tv_sec)*1000.0+
            double(b.tv_nsec-a.tv_nsec)/1000000.0;
   };
   const double lk_thread_cpu_ms=lk_ts_ms(lk_thr0,lk_thr1);
   const double lk_process_cpu_ms=lk_ts_ms(lk_proc0,lk_proc1);
-  if(s.t_lk_ms>20.0){
-    std::cerr<<"LK_RUNTIME wall_ms="<<s.t_lk_ms
+  if(o.t_lk_ms>20.0){
+    std::cerr<<"LK_RUNTIME wall_ms="<<o.t_lk_ms
              <<" thread_cpu_ms="<<lk_thread_cpu_ms
              <<" process_cpu_ms="<<lk_process_cpu_ms
              <<" features="<<p0.size()<<"\\n";
