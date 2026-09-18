@@ -13,13 +13,9 @@ if marker in s:
 
 # CLOCK_THREAD_CPUTIME_ID / CLOCK_PROCESS_CPUTIME_ID.
 if "#include <time.h>" not in s:
-    candidates = ["#include <chrono>", "#include <iostream>", "#include <vector>"]
-    for a in candidates:
-        if a in s:
-            s = s.replace(a, a + "\n#include <time.h>", 1)
-            break
-    else:
-        raise SystemExit("include anchor not found")
+    # Do not depend on the local include layout: this source has diverged from
+    # remote main. A preprocessing directive is valid at the start of the TU.
+    s = "#include <time.h>\n" + s
 
 old = """  const auto lk0=std::chrono::steady_clock::now();
   cv::calcOpticalFlowPyrLK(prev,curr,p0,p1,st,err,{21,21},3,
