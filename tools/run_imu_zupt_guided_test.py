@@ -39,7 +39,18 @@ def phase(name,sec,rows):
               "zupt_blocks":pick(d,"imu_zupt_shadow_blocks"),
               "imu_n_mm":pick(d,"imu_dr_n_mm"),"imu_e_mm":pick(d,"imu_dr_e_mm"),
               "imu_d_mm":pick(d,"imu_dr_d_mm"),"imu_vn":pick(d,"imu_dr_vn"),
-              "imu_ve":pick(d,"imu_dr_ve"),"imu_vd":pick(d,"imu_dr_vd")})
+              "imu_ve":pick(d,"imu_dr_ve"),"imu_vd":pick(d,"imu_dr_vd"),
+              "cam_vn":pick(d,"imu_cam_vn"),"cam_ve":pick(d,"imu_cam_ve"),
+              "cam_seq":pick(d,"imu_cam_seq"),
+              "fused_v1_visual_updates":pick(d,"fused_v1_visual_updates"),
+              "fused_v1_imu_predictions":pick(d,"fused_v1_imu_predictions"),
+              "fused_v1_stop_constraints":pick(d,"fused_v1_stop_constraints"),
+              "fused_v1_stationary":pick(d,"fused_v1_stationary"),
+              "fused_v1_stop_confirm":pick(d,"fused_v1_stop_confirm"),
+              "fused_v1_n_mm":pick(d,"fused_v1_n_mm"),
+              "fused_v1_e_mm":pick(d,"fused_v1_e_mm"),
+              "fused_v1_vn":pick(d,"fused_v1_vn"),
+              "fused_v1_ve":pick(d,"fused_v1_ve")})
         except Exception:pass
         bar(name,e,sec);time.sleep(.1)
     bar(name,sec,sec);print()
