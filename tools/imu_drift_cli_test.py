@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-import argparse, csv, json, math, time, urllib.request\nfrom pathlib import Path\nfrom datetime import datetime
+import argparse, csv, json, math, time, urllib.request
+from pathlib import Path
+from datetime import datetime
 
 def get(url):
     with urllib.request.urlopen(url, timeout=1.0) as r:
@@ -28,7 +30,8 @@ def dv(a,b,k):
     return b[k]-a[k]
 
 def collect(url, seconds, label, stop_at=None):
-    print(f"\n{label}  ({seconds:.0f} с)")
+    print(f"
+{label}  ({seconds:.0f} с)")
     vs=[]; t0=time.monotonic(); next_print=t0; stop_printed=False
     while True:
         now=time.monotonic(); elapsed=now-t0
@@ -58,7 +61,8 @@ ap.add_argument("--url",default="http://127.0.0.1:8080/api/telemetry")
 ap.add_argument("--rest-before",type=float,default=5)
 ap.add_argument("--move",type=float,default=3)
 ap.add_argument("--rest-after",type=float,default=12)
-ap.add_argument("--max-test",type=float,default=30)\nap.add_argument("--csv",default=None,help="CSV временного профиля; по умолчанию imu_drift_profile_YYYYMMDD_HHMMSS.csv")
+ap.add_argument("--max-test",type=float,default=30)
+ap.add_argument("--csv",default=None,help="CSV временного профиля; по умолчанию imu_drift_profile_YYYYMMDD_HHMMSS.csv")
 a=ap.parse_args()
 
 try:
@@ -81,10 +85,12 @@ start=p0[-1] if p0 else snap(ready)
 if start["st"]<10:
     raise SystemExit(f"ZUPT не захвачен перед движением (stat={start['st']}). Стенд не двигать; повторить после устойчивого покоя.")
 
-print("\nТеперь двигай стенд руками как удобно, затем полностью останови и убери руки.")
+print("
+Теперь двигай стенд руками как удобно, затем полностью останови и убери руки.")
 input("Нажми ENTER и начинай движение... ")
 
-print("\nЗАПИСЬ — камера определяет окончание движения")
+print("
+ЗАПИСЬ — камера определяет окончание движения")
 seq=[]; t0=time.monotonic(); camera_moved=False; quiet_since=None; done_reason="таймаут"
 OF_MOVE=0.01
 while time.monotonic()-t0 < a.max_test:
@@ -130,7 +136,8 @@ with csv_path.open("w",newline="",encoding="utf-8") as f:
         row["phase"]=phase
         w.writerow(row)
 
-print("\nРЕЗУЛЬТАТ")
+print("
+РЕЗУЛЬТАТ")
 print("=========")
 print(f"Покой до: |a|={avg(p0,'a'):.4f} m/s²  stat={start['st']}  V=({start['vn']:+.3f},{start['ve']:+.3f},{start['vd']:+.3f})")
 print(f"Запись: {len(seq)} samples, {end['t']:.2f} с; max|V|={math.sqrt(m['vn']**2+m['ve']**2+m['vd']**2):.3f} m/s")
@@ -138,4 +145,5 @@ print(f"Camera-stop: t={cam_stop['t']:.2f} с")
 print("ZUPT после camera-stop:", f"{zupt_delay:.2f} с" if zupt_delay is not None else "НЕ ЗАХВАЧЕН")
 print(f"Δ IMU после camera-stop: X={post_dx:+.1f}  Y={post_dy:+.1f}  Z={post_dz:+.1f} mm")
 print(f"Δ всего: X={total_dx:+.1f}  Y={total_dy:+.1f}  Z={total_dz:+.1f} mm")
-print(f"Конец: |a|={avg(seq[-40:] if len(seq)>40 else seq,'a'):.4f} m/s²  stat={end['st']}  V=({end['vn']:+.3f},{end['ve']:+.3f},{end['vd']:+.3f})")\nprint(f"CSV профиль: {csv_path}")
+print(f"Конец: |a|={avg(seq[-40:] if len(seq)>40 else seq,'a'):.4f} m/s²  stat={end['st']}  V=({end['vn']:+.3f},{end['ve']:+.3f},{end['vd']:+.3f})")
+print(f"CSV профиль: {csv_path}")
