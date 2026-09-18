@@ -64,7 +64,7 @@ insert = """        FlowFcGyro fg{}; double fg_age=1e9; uint64_t fg_samples=0;
 
           bool shadow_valid=false;
           double shadow_dN=0.0,shadow_dE=0.0;
-          worked5::Result shadow_w5{};
+          worked5::Step shadow_w5{};
           if(shadow_attempt){
             ++mag_shadow_attempts;
             shadow_w5=worked5::estimate(
