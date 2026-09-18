@@ -6,6 +6,7 @@ ROOT=Path(__file__).resolve().parents[1]
 URL="http://127.0.0.1:8080/api/telemetry"
 OUT=ROOT/"imu_zupt_test_latest.csv"
 LOG=ROOT/"imu_zupt_test_service.log"
+FORENSIC=ROOT/"fast_motion_forensic_latest.log"
 
 def bar(label,e,total):
     width=30; p=max(0,min(1,e/total)); n=int(width*p)
