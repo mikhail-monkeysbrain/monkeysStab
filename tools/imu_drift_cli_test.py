@@ -9,7 +9,7 @@ def snap(t, elapsed=0.0):
     an=float(t.get("imu_dr_acc_n") or 0); ae=float(t.get("imu_dr_acc_e") or 0); ad=float(t.get("imu_dr_acc_d") or 0)
     return dict(
         t=elapsed, a=math.sqrt(an*an+ae*ae+ad*ad),
-        g=float(t.get("imu_dr_gmag") or 0),
+        g=float(t.get("imu_dr_gmag") or 0),\n        an=an, ae=ae, ad=ad,\n        roll=float(t.get("roll_deg") or 0), pitch=float(t.get("pitch_deg") or 0),
         vn=float(t.get("imu_dr_vn") or 0), ve=float(t.get("imu_dr_ve") or 0), vd=float(t.get("imu_dr_vd") or 0),
         x=float(t.get("imu_dr_n_mm") or 0), y=float(t.get("imu_dr_e_mm") or 0), z=float(t.get("imu_dr_d_mm") or 0),
         st=int(t.get("imu_dr_stationary_samples") or 0),
@@ -101,6 +101,16 @@ print("\nРЕЗУЛЬТАТ")
 print("=========")
 print(f"Покой до: |a|={avg(p0,'a'):.4f} m/s²  stat={start['st']}  V=({start['vn']:+.3f},{start['ve']:+.3f},{start['vd']:+.3f})")
 print(f"Движение: max|V|={math.sqrt(m['vn']**2+m['ve']**2+m['vd']**2):.3f} m/s")
+def integ(vs,k):
+    s=0.0
+    for u,v in zip(vs,vs[1:]):
+        dt=v["t"]-u["t"]
+        if 0<dt<0.2: s += .5*(u[k]+v[k])*dt
+    return s
+pre_a=integ(move,"an"); post_a=integ(after[:max(1,next((i for i,v in enumerate(after) if v["st"]>=10),len(after)))],"an")
+print(f"Импульс aN: движение={pre_a:+.4f} m/s   после STOP до ZUPT={post_a:+.4f} m/s")
+print(f"aN диапазон: движение [{min((v['an'] for v in move),default=0):+.3f},{max((v['an'] for v in move),default=0):+.3f}] m/s²")
+print(f"ATTITUDE: roll [{min((v['roll'] for v in seq),default=0):+.2f},{max((v['roll'] for v in seq),default=0):+.2f}]°  pitch [{min((v['pitch'] for v in seq),default=0):+.2f},{max((v['pitch'] for v in seq),default=0):+.2f}]°")
 print(f"Δ движение: X={move_dx:+.1f}  Y={move_dy:+.1f}  Z={move_dz:+.1f} mm")
 print(f"Δ после STOP: X={post_dx:+.1f}  Y={post_dy:+.1f}  Z={post_dz:+.1f} mm")
 print(f"Δ всего:     X={total_dx:+.1f}  Y={total_dy:+.1f}  Z={total_dz:+.1f} mm")
