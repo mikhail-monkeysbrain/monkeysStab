@@ -17,7 +17,7 @@ static double ms(Clock::time_point a,Clock::time_point b){return std::chrono::du
 struct R{int features=0,tracked=0,inliers=0; double feat_ms=0,lk_ms=0,ransac_ms=0;};
 static R replay(const cv::Mat& prev,const cv::Mat& curr){
   R o;
-  const double rx0=.20,ry0=.20,rx1=.80,ry1=.80;
+  const double rx0=.20,ry0=.32,rx1=.80,ry1=.90;
   const int maxf=500;
   int x0=std::clamp((int)std::lround(rx0*prev.cols),0,prev.cols-1);
   int y0=std::clamp((int)std::lround(ry0*prev.rows),0,prev.rows-1);
