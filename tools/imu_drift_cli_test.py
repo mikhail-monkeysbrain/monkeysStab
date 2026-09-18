@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, csv, json, math, time, urllib.request\nfrom pathlib import Path\nfrom datetime import datetime
+import argparse, json, math, time, urllib.request
 
 def get(url):
     with urllib.request.urlopen(url, timeout=1.0) as r:
@@ -58,7 +58,7 @@ ap.add_argument("--url",default="http://127.0.0.1:8080/api/telemetry")
 ap.add_argument("--rest-before",type=float,default=5)
 ap.add_argument("--move",type=float,default=3)
 ap.add_argument("--rest-after",type=float,default=12)
-ap.add_argument("--max-test",type=float,default=30)\nap.add_argument("--csv",default=None,help="CSV временного профиля; по умолчанию imu_drift_profile_YYYYMMDD_HHMMSS.csv")
+ap.add_argument("--max-test",type=float,default=30)
 a=ap.parse_args()
 
 try:
@@ -113,23 +113,6 @@ zupt_delay=(seq[zupt_i]["t"]-cam_stop["t"]) if zupt_i is not None else None
 total_dx=dv(start,end,"x"); total_dy=dv(start,end,"y"); total_dz=dv(start,end,"z")
 post_dx=dv(cam_stop,end,"x"); post_dy=dv(cam_stop,end,"y"); post_dz=dv(cam_stop,end,"z")
 
-csv_path=Path(a.csv) if a.csv else Path(f"imu_drift_profile_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-fields=["t","phase","a","g","an","ae","ad","roll","pitch","of_vn","of_ve","of_valid",
-        "vn","ve","vd","x","y","z","st","stationary","acc_ok","gyro_ok"]
-with csv_path.open("w",newline="",encoding="utf-8") as f:
-    w=csv.DictWriter(f,fieldnames=fields)
-    w.writeheader()
-    for idx,v in enumerate(seq):
-        row={k:v.get(k) for k in fields if k not in ("phase",)}
-        if idx < cam_stop_i:
-            phase="camera_move"
-        elif zupt_i is not None and idx < zupt_i:
-            phase="post_camera_stop_pre_zupt"
-        else:
-            phase="final_rest"
-        row["phase"]=phase
-        w.writerow(row)
-
 print("\nРЕЗУЛЬТАТ")
 print("=========")
 print(f"Покой до: |a|={avg(p0,'a'):.4f} m/s²  stat={start['st']}  V=({start['vn']:+.3f},{start['ve']:+.3f},{start['vd']:+.3f})")
@@ -138,4 +121,4 @@ print(f"Camera-stop: t={cam_stop['t']:.2f} с")
 print("ZUPT после camera-stop:", f"{zupt_delay:.2f} с" if zupt_delay is not None else "НЕ ЗАХВАЧЕН")
 print(f"Δ IMU после camera-stop: X={post_dx:+.1f}  Y={post_dy:+.1f}  Z={post_dz:+.1f} mm")
 print(f"Δ всего: X={total_dx:+.1f}  Y={total_dy:+.1f}  Z={total_dz:+.1f} mm")
-print(f"Конец: |a|={avg(seq[-40:] if len(seq)>40 else seq,'a'):.4f} m/s²  stat={end['st']}  V=({end['vn']:+.3f},{end['ve']:+.3f},{end['vd']:+.3f})")\nprint(f"CSV профиль: {csv_path}")
+print(f"Конец: |a|={avg(seq[-40:] if len(seq)>40 else seq,'a'):.4f} m/s²  stat={end['st']}  V=({end['vn']:+.3f},{end['ve']:+.3f},{end['vd']:+.3f})")
