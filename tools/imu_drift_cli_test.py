@@ -2,31 +2,54 @@
 import argparse, json, math, time, urllib.request
 
 def get(url):
-    with urllib.request.urlopen(url,timeout=1.0) as r: return json.load(r)
+    with urllib.request.urlopen(url, timeout=1.0) as r:
+        return json.load(r)
 
-def snap(t):
+def snap(t, elapsed=0.0):
     an=float(t.get("imu_dr_acc_n") or 0); ae=float(t.get("imu_dr_acc_e") or 0); ad=float(t.get("imu_dr_acc_d") or 0)
-    return dict(a=math.sqrt(an*an+ae*ae+ad*ad), an=an,ae=ae,ad=ad,
-      vn=float(t.get("imu_dr_vn") or 0),ve=float(t.get("imu_dr_ve") or 0),vd=float(t.get("imu_dr_vd") or 0),
-      x=float(t.get("imu_dr_n_mm") or 0),y=float(t.get("imu_dr_e_mm") or 0),z=float(t.get("imu_dr_d_mm") or 0),
-      st=int(t.get("imu_dr_stationary_samples") or 0))
+    return dict(
+        t=elapsed, a=math.sqrt(an*an+ae*ae+ad*ad),
+        g=float(t.get("imu_dr_gmag") or 0),
+        vn=float(t.get("imu_dr_vn") or 0), ve=float(t.get("imu_dr_ve") or 0), vd=float(t.get("imu_dr_vd") or 0),
+        x=float(t.get("imu_dr_n_mm") or 0), y=float(t.get("imu_dr_e_mm") or 0), z=float(t.get("imu_dr_d_mm") or 0),
+        st=int(t.get("imu_dr_stationary_samples") or 0),
+        stationary=bool(t.get("imu_dr_stationary",False)),
+        acc_ok=bool(t.get("imu_dr_acc_ok",False)), gyro_ok=bool(t.get("imu_dr_gyro_ok",False)),
+    )
 
-def avg(vs,k): return sum(v[k] for v in vs)/len(vs) if vs else 0.0
-def phase(url,seconds,label):
+def avg(vs,k):
+    return sum(v[k] for v in vs)/len(vs) if vs else 0.0
+
+def dv(a,b,k):
+    return b[k]-a[k]
+
+def collect(url, seconds, label, stop_at=None):
     print(f"\n{label}  ({seconds:.0f} с)")
-    vs=[]; t0=time.monotonic(); nxt=t0
-    while time.monotonic()-t0<seconds:
-        try: vs.append(snap(get(url)))
-        except Exception as e: print(f"\r  ошибка телеметрии: {e}",end="",flush=True)
-        now=time.monotonic()
-        if now>=nxt:
-            left=max(0,math.ceil(seconds-(now-t0)))
-            print(f"\r  осталось {left:2d} с",end="",flush=True); nxt=now+1
+    vs=[]; t0=time.monotonic(); next_print=t0; stop_printed=False
+    while True:
+        now=time.monotonic(); elapsed=now-t0
+        if elapsed>=seconds: break
+        if stop_at is not None and elapsed>=stop_at and not stop_printed:
+            print("\r\aСТОП — НЕ ДВИГАТЬ!                 ")
+            stop_printed=True
+        try:
+            vs.append(snap(get(url),elapsed))
+        except Exception:
+            pass
+        if now>=next_print:
+            if stop_at is not None and elapsed<stop_at:
+                msg=f"  ДВИЖЕНИЕ: осталось {max(0,math.ceil(stop_at-elapsed)):2d} с"
+            elif stop_at is not None:
+                msg=f"  ПОКОЙ: осталось {max(0,math.ceil(seconds-elapsed)):2d} с"
+            else:
+                msg=f"  осталось {max(0,math.ceil(seconds-elapsed)):2d} с"
+            print("\r"+msg+" "*12,end="",flush=True)
+            next_print=now+1
         time.sleep(.05)
-    print("\r  готово        ")
+    print("\r  готово                              ")
     return vs
 
-ap=argparse.ArgumentParser(description="Guided IMU drift test via monkeysStab Web telemetry")
+ap=argparse.ArgumentParser(description="Canonical IMU DR move-stop drift test")
 ap.add_argument("--url",default="http://127.0.0.1:8080/api/telemetry")
 ap.add_argument("--rest-before",type=float,default=5)
 ap.add_argument("--move",type=float,default=3)
@@ -34,33 +57,52 @@ ap.add_argument("--rest-after",type=float,default=12)
 a=ap.parse_args()
 
 try:
-    t=get(a.url)
+    first=get(a.url)
 except Exception as e:
     raise SystemExit(f"Нет телеметрии: {e}")
-if not t.get("imu_dr_calibrated"):
-    raise SystemExit("IMU DR ещё не откалиброван. Дождись imu_dr_calibrated=true.")
+if not first.get("imu_dr_calibrated"):
+    raise SystemExit("IMU DR не откалиброван. Выполни физический RC HOME и дождись калибровки.")
 
-print("IMU DR — тест дрейфа")
-print("====================")
-print("1. Стенд неподвижен.")
-input("Нажми ENTER для начала... ")
+print("IMU DR — MOVE/STOP")
+print("==================")
+print("Стенд неподвижен. Перед тестом нужен физический RC HOME.")
+input("После HOME и полной остановки нажми ENTER... ")
 
-p0=phase(a.url,a.rest_before,"ПОКОЙ ДО ДВИЖЕНИЯ")
-print("\n2. Плавно перемести стенд на 250–300 мм БЕЗ ОТРЫВА.")
-input("Положи руку на стенд и нажми ENTER — сразу начинай движение... ")
-pm=phase(a.url,a.move,"ДВИЖЕНИЕ")
-print("\n3. ОСТАНОВИ стенд и больше не трогай.")
-input("Когда стенд полностью остановлен, нажми ENTER... ")
-p1=phase(a.url,a.rest_after,"ПОКОЙ ПОСЛЕ ДВИЖЕНИЯ")
+ready=get(a.url)
+if not ready.get("imu_dr_calibrated"):
+    raise SystemExit("После HOME калибровка ещё не завершена.")
+p0=collect(a.url,a.rest_before,"ИСХОДНЫЙ ПОКОЙ")
+start=p0[-1] if p0 else snap(ready)
+if start["st"]<10:
+    raise SystemExit(f"ZUPT не захвачен перед движением (stat={start['st']}). Стенд не двигать; повторить после устойчивого покоя.")
 
-allv=p0+pm+p1
-m=max(pm,key=lambda v: math.sqrt(v["vn"]**2+v["ve"]**2+v["vd"]**2)) if pm else snap(t)
-end=p1[-1] if p1 else m
-start=p0[-1] if p0 else snap(t)
+print("\nПлавно перемести стенд на 250–300 мм БЕЗ ОТРЫВА.")
+print(f"Двигай первые {a.move:.0f} с. После сигнала СТОП сразу отпусти стенд.")
+input("Нажми ENTER и сразу начинай движение... ")
+
+seq=collect(a.url,a.move+a.rest_after,"ДВИЖЕНИЕ → АВТОМАТИЧЕСКИЙ ПОКОЙ",stop_at=a.move)
+move=[v for v in seq if v["t"]<a.move]
+after=[v for v in seq if v["t"]>=a.move]
+stop=min(seq,key=lambda v:abs(v["t"]-a.move)) if seq else start
+end=seq[-1] if seq else start
+m=max(move,key=lambda v:math.sqrt(v["vn"]**2+v["ve"]**2+v["vd"]**2)) if move else start
+
+zupt=None
+for v in after:
+    if v["st"]>=10 and abs(v["vn"])<1e-9 and abs(v["ve"])<1e-9 and abs(v["vd"])<1e-9:
+        zupt=v["t"]-a.move
+        break
+
+post_dx=dv(stop,end,"x"); post_dy=dv(stop,end,"y"); post_dz=dv(stop,end,"z")
+move_dx=dv(start,stop,"x"); move_dy=dv(start,stop,"y"); move_dz=dv(start,stop,"z")
+total_dx=dv(start,end,"x"); total_dy=dv(start,end,"y"); total_dz=dv(start,end,"z")
 
 print("\nРЕЗУЛЬТАТ")
 print("=========")
-print(f"Покой до:   |a|={avg(p0,'a'):.4f} m/s²   V=({start['vn']:+.3f},{start['ve']:+.3f},{start['vd']:+.3f}) m/s   stat={start['st']}")
-print(f"Движение:   max|V|={math.sqrt(m['vn']**2+m['ve']**2+m['vd']**2):.3f} m/s   V=({m['vn']:+.3f},{m['ve']:+.3f},{m['vd']:+.3f})")
-print(f"Покой после:|a|={avg(p1[-40:] if len(p1)>40 else p1,'a'):.4f} m/s²   V=({end['vn']:+.3f},{end['ve']:+.3f},{end['vd']:+.3f}) m/s   stat={end['st']}")
-print(f"IMU position: X={end['x']:+.1f} mm  Y={end['y']:+.1f} mm  Z={end['z']:+.1f} mm")
+print(f"Покой до: |a|={avg(p0,'a'):.4f} m/s²  stat={start['st']}  V=({start['vn']:+.3f},{start['ve']:+.3f},{start['vd']:+.3f})")
+print(f"Движение: max|V|={math.sqrt(m['vn']**2+m['ve']**2+m['vd']**2):.3f} m/s")
+print(f"Δ движение: X={move_dx:+.1f}  Y={move_dy:+.1f}  Z={move_dz:+.1f} mm")
+print(f"Δ после STOP: X={post_dx:+.1f}  Y={post_dy:+.1f}  Z={post_dz:+.1f} mm")
+print(f"Δ всего:     X={total_dx:+.1f}  Y={total_dy:+.1f}  Z={total_dz:+.1f} mm")
+print("ZUPT после STOP:", f"{zupt:.2f} с" if zupt is not None else "НЕ ЗАХВАЧЕН")
+print(f"Конец: |a|={avg(after[-40:] if len(after)>40 else after,'a'):.4f} m/s²  stat={end['st']}  V=({end['vn']:+.3f},{end['ve']:+.3f},{end['vd']:+.3f})")
