@@ -8,6 +8,7 @@
 #include <netdb.h>
 #include <linux/i2c-dev.h>
 #include <atomic>
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -47,6 +48,52 @@ static int openTcp(const std::string& ep){
   if(fd<0) die("не удалось подключиться к "+ep);
   int fl=fcntl(fd,F_GETFL,0); if(fl>=0) fcntl(fd,F_SETFL,fl|O_NONBLOCK);
   return fd;
+}
+static void writeAll(int fd,const uint8_t* p,size_t n){
+  while(n){
+    ssize_t k=::write(fd,p,n);
+    if(k>0){ p+=k; n-=size_t(k); continue; }
+    if(k<0 && (errno==EAGAIN || errno==EWOULDBLOCK)){
+      pollfd q{fd,POLLOUT,0}; if(poll(&q,1,100)<0 && errno!=EINTR) die("TCP write poll");
+      continue;
+    }
+    if(k<0 && errno==EINTR) continue;
+    die("TCP write");
+  }
+}
+static void requestInterval(int fd,uint8_t sys,uint8_t comp,uint32_t msgid,int hz){
+  mavlink_message_t m{};
+  mavlink_msg_command_long_pack(245,190,&m,sys,comp,
+    MAV_CMD_SET_MESSAGE_INTERVAL,0,msgid,1000000.0f/hz,0,0,0,0,0);
+  uint8_t b[MAVLINK_MAX_PACKET_LEN];
+  const auto n=mavlink_msg_to_send_buffer(b,&m);
+  writeAll(fd,b,n);
+}
+static bool waitHeartbeat(int fd,uint8_t& sys,uint8_t& comp,int timeout_ms){
+  mavlink_status_t st{}; mavlink_message_t m{}; uint8_t buf[2048];
+  const int64_t deadline=monoNs()+int64_t(timeout_ms)*1000000LL;
+  while(monoNs()<deadline){
+    pollfd p{fd,POLLIN,0};
+    int left=int(std::max<int64_t>(1,(deadline-monoNs())/1000000LL));
+    int pr=poll(&p,1,std::min(left,100));
+    if(pr<0&&errno==EINTR) continue;
+    if(pr<=0) continue;
+    for(;;){
+      ssize_t n=::read(fd,buf,sizeof(buf));
+      if(n<0&&(errno==EAGAIN||errno==EWOULDBLOCK)) break;
+      if(n<0&&errno==EINTR) continue;
+      if(n<=0) return false;
+      for(ssize_t i=0;i<n;i++){
+        if(!mavlink_parse_char(MAVLINK_COMM_0,buf[i],&m,&st)) continue;
+        if(m.msgid!=MAVLINK_MSG_ID_HEARTBEAT) continue;
+        mavlink_heartbeat_t hb{}; mavlink_msg_heartbeat_decode(&m,&hb);
+        if(hb.autopilot==MAV_AUTOPILOT_ARDUPILOTMEGA){
+          sys=m.sysid; comp=m.compid; return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 static int openI2c(const std::string& dev,int addr){
   int fd=::open(dev.c_str(),O_RDWR);
@@ -101,6 +148,8 @@ int main(int argc,char** argv){
   std::string ep="tcp://127.0.0.1:5760";
   std::string i2c="/dev/i2c-1";
   int addr=0x68;
+  int att_hz=0;
+  int restore_att_hz=0;
   for(int i=1;i<argc;i++){
     std::string a=argv[i];
     auto need=[&](){if(i+1>=argc)die("нет значения для "+a);return std::string(argv[++i]);};
@@ -109,6 +158,8 @@ int main(int argc,char** argv){
     else if(a=="--tcp") ep=need();
     else if(a=="--i2c") i2c=need();
     else if(a=="--addr") addr=std::stoi(need(),nullptr,0);
+    else if(a=="--att-hz") att_hz=std::stoi(need());
+    else if(a=="--restore-att-hz") restore_att_hz=std::stoi(need());
     else die("неизвестный аргумент: "+a);
   }
   if(seconds<=0) die("--seconds должен быть > 0");
@@ -128,6 +179,15 @@ int main(int argc,char** argv){
   // Connect only after ENTER. Otherwise the router can fill the TCP receive
   // buffer while the operator waits, and capture starts by draining old MAVLink.
   int tcp=openTcp(ep);
+  uint8_t target_sys=0,target_comp=0;
+  if(att_hz>0){
+    if(!waitHeartbeat(tcp,target_sys,target_comp,2000))
+      die("не получен ArduPilot HEARTBEAT для запроса ATTITUDE");
+    requestInterval(tcp,target_sys,target_comp,MAVLINK_MSG_ID_ATTITUDE,att_hz);
+    usleep(100000);
+    std::cout<<"ATTITUDE requested: "<<att_hz<<" Hz (sys="<<(int)target_sys
+             <<" comp="<<(int)target_comp<<")\n";
+  }
 
   const int64_t start_ns=monoNs();
   const int64_t end_ns=start_ns+int64_t(seconds*1e9);
@@ -183,6 +243,11 @@ int main(int argc,char** argv){
   while(run.load() && monoNs()<end_ns) usleep(10000);
   run=false;
   ft.join(); mt.join();
+  if(restore_att_hz>0 && target_sys){
+    requestInterval(tcp,target_sys,target_comp,MAVLINK_MSG_ID_ATTITUDE,restore_att_hz);
+    usleep(50000);
+    std::cout<<"ATTITUDE restored: "<<restore_att_hz<<" Hz\n";
+  }
   ::close(tcp); ::close(mpu);
 
   const double actual=(monoNs()-start_ns)/1e9;
