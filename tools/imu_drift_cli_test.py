@@ -12,6 +12,8 @@ def snap(t, elapsed=0.0):
         g=float(t.get("imu_dr_gmag") or 0),
         an=an, ae=ae, ad=ad,
         roll=float(t.get("roll_deg") or 0), pitch=float(t.get("pitch_deg") or 0),
+        of_vn=float(t.get("raw_of_vn") or 0), of_ve=float(t.get("raw_of_ve") or 0),
+        of_valid=bool(t.get("raw_of_valid",False)),
         vn=float(t.get("imu_dr_vn") or 0), ve=float(t.get("imu_dr_ve") or 0), vd=float(t.get("imu_dr_vd") or 0),
         x=float(t.get("imu_dr_n_mm") or 0), y=float(t.get("imu_dr_e_mm") or 0), z=float(t.get("imu_dr_d_mm") or 0),
         st=int(t.get("imu_dr_stationary_samples") or 0),
@@ -82,50 +84,41 @@ if start["st"]<10:
 print("\nТеперь двигай стенд руками как удобно, затем полностью останови и убери руки.")
 input("Нажми ENTER и начинай движение... ")
 
-print("\nЗАПИСЬ — ожидаю движение и последующий устойчивый покой")
-seq=[]; t0=time.monotonic(); moved=False; quiet_since=None; done_reason="таймаут"
+print("\nЗАПИСЬ — камера определяет окончание движения")
+seq=[]; t0=time.monotonic(); camera_moved=False; quiet_since=None; done_reason="таймаут"
+OF_MOVE=0.01
 while time.monotonic()-t0 < a.max_test:
     elapsed=time.monotonic()-t0
     try:
         v=snap(get(a.url),elapsed); seq.append(v)
     except Exception:
         time.sleep(.05); continue
-
-    speed=math.sqrt(v["vn"]**2+v["ve"]**2+v["vd"]**2)
-    dynamic=(not v["stationary"]) or speed>0.01
-    if dynamic:
-        moved=True
-        quiet_since=None
-    elif moved:
+    ofs=math.hypot(v["of_vn"],v["of_ve"]) if v["of_valid"] else 0.0
+    if v["of_valid"] and ofs>OF_MOVE:
+        camera_moved=True; quiet_since=None
+    elif camera_moved and v["of_valid"]:
         if quiet_since is None: quiet_since=elapsed
-        if elapsed-quiet_since >= 2.0 and v["st"]>=10:
-            done_reason="устойчивый конечный покой"
-            break
+        if elapsed-quiet_since>=2.0:
+            done_reason="camera-stop подтверждён"; break
     time.sleep(.05)
 print(f"  запись завершена: {done_reason}")
-
-if not moved:
-    raise SystemExit("Движение не обнаружено.")
+if not camera_moved:
+    raise SystemExit("Камера не обнаружила движение.")
 end=seq[-1]
-# Конечный покой определяется данными, а не таймером/реакцией оператора.
-q0=next((i for i in range(len(seq)) if all(x["stationary"] for x in seq[i:i+10]) and len(seq[i:i+10])==10 and seq[i]["t"]>0.2),None)
-# Первый такой участок может быть паузой до начала движения; ищем последний переход в устойчивый покой после динамики.
-candidates=[]
-for i in range(1,len(seq)-9):
-    if (not seq[i-1]["stationary"]) and all(x["stationary"] for x in seq[i:i+10]):
-        candidates.append(i)
-settle_i=candidates[-1] if candidates else max(0,len(seq)-1)
-settle=seq[settle_i]
-move_end=settle
-m=max(seq[:settle_i+1],key=lambda v: math.sqrt(v["vn"]**2+v["ve"]**2+v["vd"]**2))
+cam_stop_i=max(i for i,v in enumerate(seq) if v["of_valid"] and math.hypot(v["of_vn"],v["of_ve"])>OF_MOVE)
+cam_stop=seq[cam_stop_i]
+m=max(seq,key=lambda v: math.sqrt(v["vn"]**2+v["ve"]**2+v["vd"]**2))
+zupt_i=next((i for i in range(cam_stop_i,len(seq)) if seq[i]["st"]>=10 and abs(seq[i]["vn"])<1e-9 and abs(seq[i]["ve"])<1e-9 and abs(seq[i]["vd"])<1e-9),None)
+zupt_delay=(seq[zupt_i]["t"]-cam_stop["t"]) if zupt_i is not None else None
 total_dx=dv(start,end,"x"); total_dy=dv(start,end,"y"); total_dz=dv(start,end,"z")
-settle_dx=dv(start,settle,"x"); settle_dy=dv(start,settle,"y"); settle_dz=dv(start,settle,"z")
+post_dx=dv(cam_stop,end,"x"); post_dy=dv(cam_stop,end,"y"); post_dz=dv(cam_stop,end,"z")
 
 print("\nРЕЗУЛЬТАТ")
 print("=========")
 print(f"Покой до: |a|={avg(p0,'a'):.4f} m/s²  stat={start['st']}  V=({start['vn']:+.3f},{start['ve']:+.3f},{start['vd']:+.3f})")
 print(f"Запись: {len(seq)} samples, {end['t']:.2f} с; max|V|={math.sqrt(m['vn']**2+m['ve']**2+m['vd']**2):.3f} m/s")
-print(f"Устойчивый конечный покой с t={settle['t']:.2f} с, stat={settle['st']}")
-print(f"Δ к покою: X={settle_dx:+.1f}  Y={settle_dy:+.1f}  Z={settle_dz:+.1f} mm")
-print(f"Δ всего:   X={total_dx:+.1f}  Y={total_dy:+.1f}  Z={total_dz:+.1f} mm")
+print(f"Camera-stop: t={cam_stop['t']:.2f} с")
+print("ZUPT после camera-stop:", f"{zupt_delay:.2f} с" if zupt_delay is not None else "НЕ ЗАХВАЧЕН")
+print(f"Δ IMU после camera-stop: X={post_dx:+.1f}  Y={post_dy:+.1f}  Z={post_dz:+.1f} mm")
+print(f"Δ всего: X={total_dx:+.1f}  Y={total_dy:+.1f}  Z={total_dz:+.1f} mm")
 print(f"Конец: |a|={avg(seq[-40:] if len(seq)>40 else seq,'a'):.4f} m/s²  stat={end['st']}  V=({end['vn']:+.3f},{end['ve']:+.3f},{end['vd']:+.3f})")
