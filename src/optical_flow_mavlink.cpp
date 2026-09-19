@@ -3368,6 +3368,7 @@ int main(int argc,char** argv){
                         "centered_xy_valid,centered_du_norm,centered_dv_norm,"
                         "range_xy_valid,range_du_norm,range_dv_norm,range_scale_rate,"
                         "range_filtered_height_m,"
+                        "holdout_valid,holdout_g,holdout_e0,holdout_e1,holdout_scale,holdout_folds,"
                         "centered_left_valid,centered_left_n,centered_left_scale_rate,"
                         "centered_right_valid,centered_right_n,centered_right_scale_rate,"
                         "centered_top_valid,centered_top_n,centered_top_scale_rate,"
@@ -3396,6 +3397,8 @@ int main(int argc,char** argv){
                    <<(s.centered_xy_valid?1:0)<<','<<s.centered_du_norm<<','<<s.centered_dv_norm<<','
                    <<(s.range_xy_valid?1:0)<<','<<s.range_du_norm<<','<<s.range_dv_norm<<','<<s.range_scale_rate<<','
                    <<(range_shadow_height_valid?range_shadow_height_m:0.0)<<','
+                   <<(s.holdout_scale_valid?1:0)<<','<<s.holdout_scale_g<<','
+                   <<s.holdout_e0<<','<<s.holdout_e1<<','<<s.holdout_scale<<','<<s.holdout_folds<<','
                    <<(s.centered_region_valid[0]?1:0)<<','<<s.centered_region_n[0]<<','<<s.centered_region_scale_rate[0]<<','
                    <<(s.centered_region_valid[1]?1:0)<<','<<s.centered_region_n[1]<<','<<s.centered_region_scale_rate[1]<<','
                    <<(s.centered_region_valid[2]?1:0)<<','<<s.centered_region_n[2]<<','<<s.centered_region_scale_rate[2]<<','
