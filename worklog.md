@@ -165,3 +165,14 @@ Isolation:
 - diagnostic only;
 - frozen branch untouched;
 - production WORKED5 / OPTICAL_FLOW / ArduPilot feed unchanged.
+
+
+## 2026-09-19 — interactive ΔR / lever-arm visualizer
+
+Added tools/visualize_rotation_shadow.py. It reads the newest
+deltar_rotation_shadow.csv (or an explicit file), accumulates WORKED5,
+ATTITUDE, ATT-rate and HIGHRES IMU-centre trajectories, and generates a
+self-contained interactive HTML canvas. The scene includes a schematic
+3D vehicle centered on the IMU, the camera lever, trajectory endpoints,
+and explicit HIGHRES CAMERA / LEVER / IMU = CAMERA - LEVER vectors.
+No production estimator or frozen branch changes.
