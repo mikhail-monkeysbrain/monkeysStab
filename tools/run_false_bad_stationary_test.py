@@ -94,20 +94,40 @@ try:
     print("Запуск router + Web + runtime...")
     ready = False
     t0 = time.monotonic()
+    last_state = "API=WAIT"
     while time.monotonic() - t0 < 90:
+        elapsed = time.monotonic() - t0
+        done_pct = min(100.0, 100.0 * elapsed / 90.0)
         if proc.poll() is not None:
             raise RuntimeError(f"service exited: {proc.returncode}; log={SERVICE_LOG}")
         try:
             d = get()
-            if d.get("imu_cam_fresh") is True and d.get("imu_cam_speed") is not None:
+            fresh = d.get("imu_cam_fresh")
+            speed = d.get("imu_cam_speed")
+            seq = d.get("imu_cam_seq")
+            frame = d.get("frame")
+            last_state = (
+                f"API=OK fresh={fresh!r} speed={speed!r} "
+                f"seq={seq!r} frame={frame!r}"
+            )
+            if fresh is True and speed is not None:
                 ready = True
+                print(
+                    f"\rПОДГОТОВКА {elapsed:5.1f}/90s | {done_pct:5.1f}% | {last_state}",
+                    flush=True
+                )
                 break
-        except Exception:
-            pass
+        except Exception as e:
+            last_state = f"API=WAIT {type(e).__name__}: {e}"
+        print(
+            f"\rПОДГОТОВКА {elapsed:5.1f}/90s | {done_pct:5.1f}% | {last_state}",
+            end="", flush=True
+        )
         time.sleep(0.25)
 
     if not ready:
-        raise RuntimeError(f"telemetry not ready in 90 s; log={SERVICE_LOG}")
+        print()
+        raise RuntimeError(f"telemetry not ready in 90 s; {last_state}; log={SERVICE_LOG}")
 
     print("СИСТЕМА ГОТОВА")
     input("\nПоставь аппарат на стол. Не трогай его весь тест. Нажми Enter... ")
