@@ -2980,7 +2980,7 @@ int main(int argc,char** argv){
               <<(worked5_diag_valid?1:0)<<','
               <<worked5_diag_du_norm<<','<<worked5_diag_dv_norm<<','
               <<worked5_diag_dN<<','<<worked5_diag_dE<<','
-              <<s.scale_rate<<','<<s.yaw_rate_cam_z<<'\\n';
+              <<s.scale_rate<<','<<s.yaw_rate_cam_z<<'\n';
             tshadow_csv.flush();
           }
         }
