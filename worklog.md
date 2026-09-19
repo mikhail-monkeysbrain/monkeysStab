@@ -84,3 +84,18 @@ Important limitation:
   sensitivity; it does not claim final timestamp correctness.
 
 Frozen branch remains unchanged. Promotion requires explicit user approval.
+
+
+## 2026-09-19 — build fix after DELTAR_GYRO_SHADOW_V1
+
+Observed on Raspberry Pi smoke build at commit `40000001215e331047b2a43c9f39ab3ee72ac06e`:
+- compiler reported stray backslashes in `metric_odometry_shadow.hpp:102`;
+- cause: the generated function signature contained literal `\\n` text instead of real source newlines;
+- this was a source-generation/commit formatting error, not a delta-R algorithm result.
+
+Fix:
+- replace only the malformed `estimateWithRotations(...)` declaration formatting with real newlines;
+- no estimator math, gyro integration, thresholds, production output, or frozen branch is changed.
+
+Validation required:
+- rerun `scripts/smoke_build.sh` on Raspberry Pi before any rotation test.

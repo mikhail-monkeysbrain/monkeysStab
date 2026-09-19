@@ -99,7 +99,9 @@ inline double median(std::vector<double> v){
   return m;
 }
 
-inline Step estimateWithRotations(const Input& in,\n                                      const cv::Matx33d& R0,\n                                      const cv::Matx33d& R1){
+inline Step estimateWithRotations(const Input& in,
+                                      const cv::Matx33d& R0,
+                                      const cv::Matx33d& R1){
   Step out;
   out.dt=(in.t1_ns-in.t0_ns)*1e-9;
   if(!(out.dt>0.0 && out.dt<0.2)){
