@@ -1000,6 +1000,13 @@ struct FlowStep {
   bool balanced_shadow_valid=false;
   double balanced_du_norm=0.0,balanced_dv_norm=0.0;
   double balanced_scale_rate=0.0,balanced_yaw_rate_cam_z=0.0;
+
+  // Diagnostic translation-only shadow: same production homography-RANSAC
+  // inliers, but no scale/yaw decomposition.  Median normalized displacement
+  // is intentionally used only to localize where stationary bias appears.
+  // It is never published to the FC.
+  bool translation_only_shadow_valid=false;
+  double translation_only_du_norm=0.0,translation_only_dv_norm=0.0;
   double lk_height_scale=1; // initial KLT scale guess from TF-Luna, curr image / prev image
   double flow_cam_x=0,flow_cam_y=0;
   double flow_body_x=0,flow_body_y=0;
@@ -1485,6 +1492,17 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
     o.scale_rate=0.0;
     o.yaw_rate_cam_z=0.0;
   }
+
+  // STATIONARY_TRANSLATION_ONLY_SHADOW_V1
+  // Same production RANSAC inliers, before any scale/yaw decomposition.
+  if(!dun.empty() && !dvn.empty()){
+    o.translation_only_du_norm=median(dun);
+    o.translation_only_dv_norm=median(dvn);
+    o.translation_only_shadow_valid=
+      std::isfinite(o.translation_only_du_norm) &&
+      std::isfinite(o.translation_only_dv_norm);
+  }
+
   // STATIONARY_BALANCED_SHADOW_V1
   // Equalize total influence of each occupied 3x3 ROI cell while preserving
   // every production RANSAC inlier.  Each point weight is 1/N_cell, then all
@@ -2982,16 +3000,19 @@ int main(int argc,char** argv){
           }
           if(bal_csv.is_open()){
             if(!bal_header){
-              bal_csv<<"frame,mono_ns,production_valid,balanced_valid,dt_s,"
+              bal_csv<<"frame,mono_ns,production_valid,balanced_valid,translation_only_valid,dt_s,"
                         "prod_du_norm,prod_dv_norm,prod_scale_rate,prod_yaw_rate,"
-                        "bal_du_norm,bal_dv_norm,bal_scale_rate,bal_yaw_rate\n";
+                        "bal_du_norm,bal_dv_norm,bal_scale_rate,bal_yaw_rate,"
+                        "trans_du_norm,trans_dv_norm\n";
               bal_header=true;
             }
             bal_csv<<frame<<','<<now<<','<<(s.valid?1:0)<<','
-                   <<(s.balanced_shadow_valid?1:0)<<','<<dt<<','
+                   <<(s.balanced_shadow_valid?1:0)<<','
+                   <<(s.translation_only_shadow_valid?1:0)<<','<<dt<<','
                    <<s.du_norm<<','<<s.dv_norm<<','<<s.scale_rate<<','<<s.yaw_rate_cam_z<<','
                    <<s.balanced_du_norm<<','<<s.balanced_dv_norm<<','
-                   <<s.balanced_scale_rate<<','<<s.balanced_yaw_rate_cam_z<<'\n';
+                   <<s.balanced_scale_rate<<','<<s.balanced_yaw_rate_cam_z<<','
+                   <<s.translation_only_du_norm<<','<<s.translation_only_dv_norm<<'\n';
           }
         }
 
