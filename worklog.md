@@ -91,3 +91,44 @@ Interpretation:
 Next:
 - repeat at least one more blind A->B on the unchanged 100 FPS branch, preferably similarly jerky, before proposing promotion;
 - do not retune WORKED5 or enable FUSED-V2 in the same step.
+
+
+## 2026-09-19 — blind validation #2, WORKED5_INPUT_GUARD_V1
+
+Unchanged test branch:
+- branch: `test/worked5-input-cascade-fix`
+- HEAD before run: `1cac99c515db296830fb1cdedda751b726e6fe6f`
+- code behavior unchanged from `c90fae492d39879badd1a12126af955aa9e8c208`
+- startup readback: `requested_fps=100 actual_fps=100`
+
+Input health:
+- rows: 2935
+- mean dt = 10.0373 ms
+- median dt = 8.05 ms
+- p95 dt = 11.996 ms
+- max dt = 88.03 ms
+- queue drops = 30 across 30 frames
+- invalid reasons = {0:2935}; no reason5 and no reason6
+
+Blind estimate fixed before GT:
+- interval: frame 1122 -> 1497
+- duration: 3.964 s
+- dN = +443.526 mm
+- dE = -101.838 mm
+- WORKED5 endpoint distance = 455.067 mm
+- accumulated path = 542.925 mm
+
+GT disclosed afterward:
+- physical A->B = 465 mm
+- motion description: jerky
+- signed endpoint error = -9.933 mm
+- relative endpoint error = -2.136%
+
+Interpretation:
+- second consecutive blind jerky run is inside the <=5% target;
+- the 100 FPS input-headroom guard again prevented the reason5 cascade despite some queue drops;
+- endpoint accuracy remains good without changing WORKED5 estimator math;
+- large path-vs-endpoint difference reflects non-straight motion during the jerky transfer and is not used as the A->B metric;
+- evidence now consists of two consecutive blind validations at 100 FPS: 393 mm -> 381.192 mm (-3.005%) and 465 mm -> 455.067 mm (-2.136%).
+
+Frozen branch remains untouched. Promotion still requires explicit user approval.
