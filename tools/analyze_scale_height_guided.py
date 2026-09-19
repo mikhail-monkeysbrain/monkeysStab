@@ -21,10 +21,16 @@ with cp.open(newline="",encoding="utf-8") as f:
             if int(r["production_valid"])!=1 or int(r["camera_height_valid"])!=1: continue
             vals=[float(r["scale_"+n+"_rate"]) for n in ("left","right","top","bottom")]
             if not all(int(r["scale_"+n+"_valid"])==1 for n in ("left","right","top","bottom")): continue
+            cv=float(r["centered_scale_rate"])
+            cvals=[float(r["centered_"+n+"_scale_rate"]) for n in ("left","right","top","bottom")]
+            cok=int(r["centered_valid"])==1 and all(int(r["centered_"+n+"_valid"])==1 for n in ("left","right","top","bottom"))
             rows.append({"wall":wall0+(int(r["mono_ns"])*1e-9-float(marks[0]["elapsed_s"])),
                          "dt":float(r["dt_s"]),"h":float(r["camera_height_m"]),
                          "scale":float(r["ts_scale_rate"]),"spread":max(vals)-min(vals),
-                         "agree":sum(1 for v in vals if v*float(r["ts_scale_rate"])>0)/4.0})
+                         "agree":sum(1 for v in vals if v*float(r["ts_scale_rate"])>0)/4.0,
+                         "centered":cv if cok else float("nan"),
+                         "cspread":max(cvals)-min(cvals) if cok else float("nan"),
+                         "cagree":sum(1 for v in cvals if v*cv>0)/4.0 if cok else float("nan")})
         except (KeyError,ValueError): pass
 
 # monotonic and wall clocks cannot be aligned from CSV directly; use stage marker
@@ -51,69 +57,16 @@ def sel(stage,trim=.8):
 
 def med(v): return statistics.median(v) if v else float("nan")
 
-def transition_motion(stage, h_from, h_to):
-    rr=sel(stage, trim=0.0)
-    if len(rr)<20 or not math.isfinite(h_from) or not math.isfinite(h_to):
-        return None
-    dh=h_to-h_from
-    if abs(dh)<0.005:
-        return None
-
-    # Robust height trace: rolling median over ~0.5 s, using timestamps
-    # reconstructed from camera dt. Detection requires sustained departure
-    # from the source plateau and sustained arrival at the target plateau.
-    tt=[]; acc=0.0
-    for x in rr:
-        acc+=max(0.0,x["dt"]); tt.append(acc)
-
-    half=0.25
-    hs=[]
-    j0=0; j1=0
-    for i,t0 in enumerate(tt):
-        while j0<len(rr) and tt[j0]<t0-half: j0+=1
-        if j1<j0: j1=j0
-        while j1+1<len(rr) and tt[j1+1]<=t0+half: j1+=1
-        hs.append(med([rr[j]["h"] for j in range(j0,j1+1)]))
-
-    direction=1.0 if dh>0 else -1.0
-    depart=h_from+0.15*dh
-    arrive=h_from+0.85*dh
-    hold=0.35
-
-    def sustained(i, predicate):
-        t0=tt[i]; k=i
-        while k<len(rr) and tt[k]-t0<hold:
-            if not predicate(hs[k]): return False
-            k+=1
-        return k<len(rr) or (tt[-1]-t0)>=hold
-
-    if direction>0:
-        p_depart=lambda h: h>=depart
-        p_arrive=lambda h: h>=arrive
-    else:
-        p_depart=lambda h: h<=depart
-        p_arrive=lambda h: h<=arrive
-
-    i0=next((i for i in range(len(rr)) if sustained(i,p_depart)),None)
-    if i0 is None: return None
-    i1=next((i for i in range(i0,len(rr)) if sustained(i,p_arrive)),None)
-    if i1 is None or i1<=i0: return None
-
-    active=rr[i0:i1+1]
-    visual=sum(x["scale"]*x["dt"] for x in active)
-    h0=hs[i0]; h1=hs[i1]
-    expected=math.log(h0/h1) if h0>0 and h1>0 else float("nan")
-    return {"n":len(active),"t":tt[i1]-tt[i0],"h0":h0,"h1":h1,
-            "visual":visual,"expected":expected,
-            "ratio":visual/expected if abs(expected)>1e-9 else float("nan"),
-            "t0":tt[i0],"t1":tt[i1]}
-
 def summary(stage):
     rr=sel(stage)
     if not rr: return None
+    cr=[x for x in rr if math.isfinite(x["centered"])]
     return {"n":len(rr),"h":med([x["h"] for x in rr]),"scale_int":sum(x["scale"]*x["dt"] for x in rr),
             "scale_mean":sum(x["scale"] for x in rr)/len(rr),"spread":med([x["spread"] for x in rr]),
-            "agree":sum(x["agree"] for x in rr)/len(rr)}
+            "agree":sum(x["agree"] for x in rr)/len(rr),
+            "centered_int":sum(x["centered"]*x["dt"] for x in cr) if cr else float("nan"),
+            "centered_mean":sum(x["centered"] for x in cr)/len(cr) if cr else float("nan"),
+            "cspread":med([x["cspread"] for x in cr]),"cagree":sum(x["cagree"] for x in cr)/len(cr) if cr else float("nan")}
 print("GUIDED HEIGHT SCALE ANALYSIS")
 print("============================")
 S={}
@@ -121,7 +74,9 @@ for name in ("LOW-1 ПОКОЙ","LOW->HIGH","HIGH ПОКОЙ","HIGH->LOW","LOW-2
     S[name]=summary(name)
     x=S[name]
     if not x: print(name,": NO DATA"); continue
-    print(f"{name:18s} n={x['n']:5d} h_med={x['h']:.4f}m scale_int={x['scale_int']:+.6f} mean={x['scale_mean']:+.3e}/s spread_med={x['spread']:.3e}/s agree={x['agree']:.3f}")
+    print(f"{name:18s} n={x['n']:5d} h_med={x['h']:.4f}m")
+    print(f"  legacy   int={x['scale_int']:+.6f} mean={x['scale_mean']:+.3e}/s spread={x['spread']:.3e}/s agree={x['agree']:.3f}")
+    print(f"  centered int={x['centered_int']:+.6f} mean={x['centered_mean']:+.3e}/s spread={x['cspread']:.3e}/s agree={x['cagree']:.3f}")
 lo=S["LOW-1 ПОКОЙ"]; hi=S["HIGH ПОКОЙ"]; lo2=S["LOW-2 ПОКОЙ"]
 if lo and hi:
     expected=math.log(lo["h"]/hi["h"])
@@ -129,15 +84,18 @@ if lo and hi:
     print(f"Expected LOW->HIGH log image scale: {expected:+.6f}")
 if lo and lo2:
     print(f"LOW return height delta: {(lo2['h']-lo['h'])*1000:+.2f} mm")
-print("\nPHYSICAL MOTION WINDOWS (0.5s median, sustained 15%->85%)")
+print("\nWHOLE PREDEFINED STAGE COMPARISON")
 if lo and hi and lo2:
-    for name,h0,h1 in (("LOW->HIGH",lo["h"],hi["h"]),("HIGH->LOW",hi["h"],lo2["h"])):
-        x=transition_motion(name,h0,h1)
-        if not x:
-            print(f"{name:18s} NO DATA")
-            continue
-        print(f"{name:18s} n={x['n']:5d} dt={x['t']:.3f}s local_t={x['t0']:.3f}->{x['t1']:.3f}s h={x['h0']:.4f}->{x['h1']:.4f}m")
-        print(f"  visual_int={x['visual']:+.6f} expected={x['expected']:+.6f} visual/expected={x['ratio']:.3f}")
+    expected_up=math.log(lo["h"]/hi["h"])
+    expected_down=math.log(hi["h"]/lo2["h"])
+    up=S["LOW->HIGH"]; down=S["HIGH->LOW"]
+    print(f"Expected plateau scale UP   : {expected_up:+.6f}")
+    print(f"Expected plateau scale DOWN : {expected_down:+.6f}")
+    if up and down:
+        print(f"Legacy transition closure   : {up['scale_int']+down['scale_int']:+.6f}")
+        print(f"Centered transition closure : {up['centered_int']+down['centered_int']:+.6f}")
+        print(f"Legacy UP/DOWN              : {up['scale_int']:+.6f} / {down['scale_int']:+.6f}")
+        print(f"Centered UP/DOWN            : {up['centered_int']:+.6f} / {down['centered_int']:+.6f}")
 
-print("\nMotion windows use a 0.5 s rolling median and require 0.35 s sustained departure/arrival. Full transition windows remain useful for sign and context.")
+print("\nStages are fixed by the guided test markers; TF-Luna is used for plateau medians only, not to detect motion boundaries.")
 print("No production gate or WORKED5 parameter is changed.")
