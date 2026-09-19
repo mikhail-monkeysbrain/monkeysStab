@@ -142,8 +142,12 @@ try:
             pass
 
         left = max(0, DURATION_S - elapsed)
+        done_pct = min(100.0, 100.0 * elapsed / max(1, DURATION_S))
+        left_pct = max(0.0, 100.0 - done_pct)
         print(
-            f"\rПОКОЙ {elapsed:6.1f}/{DURATION_S}s | осталось {left:6.1f}s | samples={len(samples)}",
+            f"\rПОКОЙ {elapsed:6.1f}/{DURATION_S}s | "
+            f"выполнено {done_pct:5.1f}% | осталось {left:6.1f}s ({left_pct:5.1f}%) | "
+            f"samples={len(samples)}",
             end="", flush=True
         )
         time.sleep(0.1)
