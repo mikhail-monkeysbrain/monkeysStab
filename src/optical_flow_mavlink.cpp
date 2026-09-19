@@ -1033,6 +1033,11 @@ struct FlowStep {
   bool centered_scale_valid=false;
   double centered_scale_rate=0.0;
   double centered_rotation_rate=0.0;
+  // Diagnostic XY recovered from the same centered similarity transform.
+  // Translation is the centroid displacement cb-ca after scale/rotation have
+  // been estimated from centered coordinates. Never published to the FC.
+  bool centered_xy_valid=false;
+  double centered_du_norm=0.0,centered_dv_norm=0.0;
   std::array<int,4> centered_region_n{};       // left,right,top,bottom
   std::array<double,4> centered_region_scale_rate{};
   std::array<bool,4> centered_region_valid{};
@@ -1667,6 +1672,28 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
     std::vector<size_t> all(ai.size());
     for(size_t k=0;k<ai.size();++k) all[k]=k;
     o.centered_scale_valid=fit_centered(all,&o.centered_scale_rate,&o.centered_rotation_rate);
+
+    // Translation component of a similarity transform b = q*R*a + t.
+    // Estimate q/R from centered clouds above, then recover t from centroids.
+    // This is intentionally a shadow: production WORKED5 remains untouched.
+    if(o.centered_scale_valid && !all.empty()){
+      cv::Point2d ca(0,0),cb(0,0);
+      for(size_t k:all){
+        ca.x+=au[k].x; ca.y+=au[k].y;
+        cb.x+=bu[k].x; cb.y+=bu[k].y;
+      }
+      const double inv=1.0/(double)all.size();
+      ca.x*=inv; ca.y*=inv; cb.x*=inv; cb.y*=inv;
+      const double q=std::exp(o.centered_scale_rate*dt);
+      const double th=o.centered_rotation_rate*dt;
+      const double cs=std::cos(th), sn=std::sin(th);
+      const double rax=q*(cs*ca.x-sn*ca.y);
+      const double ray=q*(sn*ca.x+cs*ca.y);
+      o.centered_du_norm=cb.x-rax;
+      o.centered_dv_norm=cb.y-ray;
+      o.centered_xy_valid=std::isfinite(o.centered_du_norm) &&
+                          std::isfinite(o.centered_dv_norm);
+    }
 
     std::array<std::vector<size_t>,4> ridx;
     for(size_t k=0;k<ai.size();++k){
@@ -3193,6 +3220,7 @@ int main(int argc,char** argv){
                         "prev_camera_height_valid,prev_camera_height_m,"
                         "camera_height_valid,camera_height_m,range_raw_m,range_age_ms,"
                         "centered_valid,centered_scale_rate,centered_rotation_rate,"
+                        "centered_xy_valid,centered_du_norm,centered_dv_norm,"
                         "centered_left_valid,centered_left_n,centered_left_scale_rate,"
                         "centered_right_valid,centered_right_n,centered_right_scale_rate,"
                         "centered_top_valid,centered_top_n,centered_top_scale_rate,"
@@ -3218,6 +3246,7 @@ int main(int argc,char** argv){
                    <<(current_camera_height_valid?1:0)<<','<<current_camera_height_m<<','
                    <<lm<<','<<lage<<','
                    <<(s.centered_scale_valid?1:0)<<','<<s.centered_scale_rate<<','<<s.centered_rotation_rate<<','
+                   <<(s.centered_xy_valid?1:0)<<','<<s.centered_du_norm<<','<<s.centered_dv_norm<<','
                    <<(s.centered_region_valid[0]?1:0)<<','<<s.centered_region_n[0]<<','<<s.centered_region_scale_rate[0]<<','
                    <<(s.centered_region_valid[1]?1:0)<<','<<s.centered_region_n[1]<<','<<s.centered_region_scale_rate[1]<<','
                    <<(s.centered_region_valid[2]?1:0)<<','<<s.centered_region_n[2]<<','<<s.centered_region_scale_rate[2]<<','
