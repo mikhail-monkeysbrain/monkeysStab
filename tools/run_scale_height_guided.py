@@ -43,7 +43,7 @@ def countdown(label,seconds,rows,t0):
 print("\033[2J\033[H",end="")
 print("JT-Zero — GUIDED SCALE HEIGHT diagnostic")
 print("========================================")
-print("Профиль: LOW 10s -> ПОДЪЁМ 5s -> HIGH 10s -> ОПУСКАНИЕ 5s -> LOW 10s")
+print("Профиль: LOW 10s -> ПОДЪЁМ 15s -> HIGH 10s -> ОПУСКАНИЕ 15s -> LOW 10s")
 print("На LOW/HIGH аппарат должен стоять сам. WORKED5/FUSED-V2 не изменяются.\n")
 if busy(8080) or busy(5760):
     raise SystemExit("ОШИБКА: старый Web/router ещё работает. Останови его и повтори.")
@@ -74,11 +74,11 @@ try:
     t0=time.monotonic()
     countdown("LOW-1 ПОКОЙ",10,markers,t0)
     print("\aСЕЙЧАС: плавно подними ВЕСЬ аппарат и поставь на проставки.")
-    countdown("LOW->HIGH",5,markers,t0)
+    countdown("LOW->HIGH",15,markers,t0)
     print("\aHIGH: руки убрать, аппарат должен стоять сам.")
     countdown("HIGH ПОКОЙ",10,markers,t0)
     print("\aСЕЙЧАС: плавно сними ВЕСЬ аппарат с проставок и поставь на стол.")
-    countdown("HIGH->LOW",5,markers,t0)
+    countdown("HIGH->LOW",15,markers,t0)
     print("\aLOW: руки убрать, аппарат снова стоит сам.")
     countdown("LOW-2 ПОКОЙ",10,markers,t0)
 finally:
