@@ -91,3 +91,33 @@ print("\nWHOLE RUN")
 print(f"W5 summed: dN={1000*w5n:.3f} dE={1000*w5e:.3f} |dXY|={mm(w5n,w5e):.3f} mm")
 print(f"V2 shadow: dN={1000*v2n:.3f} dE={1000*v2e:.3f} |dXY|={mm(v2n,v2e):.3f} mm")
 print(f"V2-W5 vector: dN={1000*(v2n-w5n):.3f} dE={1000*(v2e-w5e):.3f} |vector|={mm(v2n-w5n,v2e-w5e):.3f} mm")
+
+# Time-window decomposition. Uses camera monotonic timestamps, so each row is
+# assigned to a real elapsed-time window rather than an equal row-count bucket.
+WINDOW_S = 300.0
+t0_ns = num(rows[0], "cam_ns")
+t1_ns = num(rows[-1], "cam_ns")
+duration_s = max(0.0, (t1_ns - t0_ns) / 1e9)
+print("\n5-MINUTE WINDOWS")
+print("window        frames   BAD  events    W5_dN    W5_dE   W5_|d|    V2_dN    V2_dE   V2_|d|   V2-W5")
+start_s = 0.0
+while start_s < duration_s + 1e-9:
+    end_s = min(duration_s, start_s + WINDOW_S)
+    idx = [i for i,r in enumerate(rows)
+           if start_s <= (num(r,"cam_ns")-t0_ns)/1e9 < end_s + (1e-9 if end_s == duration_s else 0.0)]
+    if not idx:
+        start_s += WINDOW_S
+        continue
+    i0, i1 = idx[0], idx[-1]
+    wr = rows[i0:i1+1]
+    wn = sum(num(r,"w5_dN_m") for r in wr if integer(r,"new_w5"))
+    we = sum(num(r,"w5_dE_m") for r in wr if integer(r,"new_w5"))
+    sn = num(rows[i1],"shadow_n_m") - num(rows[i0],"shadow_n_m")
+    se = num(rows[i1],"shadow_e_m") - num(rows[i0],"shadow_e_m")
+    bad = sum(1 for r in wr if num(r,"inlier_ratio",1.0)<0.50 and integer(r,"inliers",999999)<100)
+    evs = len({integer(r,"event_count") for r in wr if integer(r,"event_count")>0})
+    print(f"{start_s/60:4.0f}-{end_s/60:4.0f} min {len(wr):7d} {bad:5d} {evs:7d} "
+          f"{1000*wn:8.3f} {1000*we:8.3f} {mm(wn,we):8.3f} "
+          f"{1000*sn:8.3f} {1000*se:8.3f} {mm(sn,se):8.3f} "
+          f"{mm(sn-wn,se-we):7.3f}")
+    start_s += WINDOW_S
