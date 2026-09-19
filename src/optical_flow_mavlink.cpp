@@ -1019,6 +1019,14 @@ struct FlowStep {
   bool trans_yaw_shadow_valid=false;
   double trans_yaw_du_norm=0.0,trans_yaw_dv_norm=0.0;
   double trans_yaw_rate_cam_z=0.0;
+
+  // Diagnostic scale-coherence shadow.  Fit translation+scale independently
+  // on four overlapping spatial halves of the SAME production RANSAC inliers.
+  // No threshold/gating is applied; this only measures whether fitted scale is
+  // spatially coherent as a true isotropic image scale should be.
+  std::array<int,4> scale_region_n{};       // left,right,top,bottom
+  std::array<double,4> scale_region_rate{};
+  std::array<bool,4> scale_region_valid{};
   double lk_height_scale=1; // initial KLT scale guess from TF-Luna, curr image / prev image
   double flow_cam_x=0,flow_cam_y=0;
   double flow_body_x=0,flow_body_y=0;
@@ -1571,6 +1579,48 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
         std::isfinite(o.trans_yaw_du_norm) &&
         std::isfinite(o.trans_yaw_dv_norm) &&
         std::isfinite(o.trans_yaw_rate_cam_z);
+    }
+  }
+
+  // STATIONARY_SCALE_COHERENCE_SHADOW_V1
+  // Regions: 0=left, 1=right, 2=top, 3=bottom.  Coordinates are split around
+  // the calibrated principal point (normalized x=0/y=0), not the image edge.
+  // Each regional solve is translation+scale only; yaw was independently
+  // shown not to explain the stationary bias.
+  {
+    std::array<std::vector<size_t>,4> ridx;
+    for(size_t k=0;k<ai.size();++k){
+      const double x=(double)au[k].x;
+      const double y=(double)au[k].y;
+      if(x<=0.0) ridx[0].push_back(k); else ridx[1].push_back(k);
+      if(y<=0.0) ridx[2].push_back(k); else ridx[3].push_back(k);
+    }
+    for(int ri=0;ri<4;ri++){
+      o.scale_region_n[ri]=(int)ridx[ri].size();
+      // Need enough spatial support for a meaningful 3-parameter LS solve.
+      // This is a validity condition only; it is not a coherence threshold.
+      if(ridx[ri].size()<10) continue;
+      cv::Mat Ar((int)ridx[ri].size()*2,3,CV_64F);
+      cv::Mat br((int)ridx[ri].size()*2,1,CV_64F);
+      for(size_t j=0;j<ridx[ri].size();++j){
+        const size_t k=ridx[ri][j];
+        const double x=(double)au[k].x, y=(double)au[k].y;
+        const double du=(double)bu[k].x-au[k].x;
+        const double dv=(double)bu[k].y-au[k].y;
+        const int r0=(int)(2*j), r1=r0+1;
+        Ar.at<double>(r0,0)=1.0; Ar.at<double>(r0,1)=0.0; Ar.at<double>(r0,2)=x;
+        br.at<double>(r0,0)=du;
+        Ar.at<double>(r1,0)=0.0; Ar.at<double>(r1,1)=1.0; Ar.at<double>(r1,2)=y;
+        br.at<double>(r1,0)=dv;
+      }
+      cv::Mat sr;
+      if(cv::solve(Ar,br,sr,cv::DECOMP_SVD) && sr.rows==3){
+        const double rate=sr.at<double>(2,0)/dt;
+        if(std::isfinite(rate)){
+          o.scale_region_rate[ri]=rate;
+          o.scale_region_valid[ri]=true;
+        }
+      }
     }
   }
 
@@ -3077,7 +3127,11 @@ int main(int argc,char** argv){
                         "bal_du_norm,bal_dv_norm,bal_scale_rate,bal_yaw_rate,"
                         "trans_du_norm,trans_dv_norm,"
                         "ts_du_norm,ts_dv_norm,ts_scale_rate,"
-                        "ty_du_norm,ty_dv_norm,ty_yaw_rate\n";
+                        "ty_du_norm,ty_dv_norm,ty_yaw_rate,"
+                        "scale_left_valid,scale_left_n,scale_left_rate,"
+                        "scale_right_valid,scale_right_n,scale_right_rate,"
+                        "scale_top_valid,scale_top_n,scale_top_rate,"
+                        "scale_bottom_valid,scale_bottom_n,scale_bottom_rate\n";
               bal_header=true;
             }
             bal_csv<<frame<<','<<now<<','<<(s.valid?1:0)<<','
@@ -3090,7 +3144,11 @@ int main(int argc,char** argv){
                    <<s.balanced_scale_rate<<','<<s.balanced_yaw_rate_cam_z<<','
                    <<s.translation_only_du_norm<<','<<s.translation_only_dv_norm<<','
                    <<s.trans_scale_du_norm<<','<<s.trans_scale_dv_norm<<','<<s.trans_scale_rate<<','
-                   <<s.trans_yaw_du_norm<<','<<s.trans_yaw_dv_norm<<','<<s.trans_yaw_rate_cam_z<<'\n';
+                   <<s.trans_yaw_du_norm<<','<<s.trans_yaw_dv_norm<<','<<s.trans_yaw_rate_cam_z<<','
+                   <<(s.scale_region_valid[0]?1:0)<<','<<s.scale_region_n[0]<<','<<s.scale_region_rate[0]<<','
+                   <<(s.scale_region_valid[1]?1:0)<<','<<s.scale_region_n[1]<<','<<s.scale_region_rate[1]<<','
+                   <<(s.scale_region_valid[2]?1:0)<<','<<s.scale_region_n[2]<<','<<s.scale_region_rate[2]<<','
+                   <<(s.scale_region_valid[3]?1:0)<<','<<s.scale_region_n[3]<<','<<s.scale_region_rate[3]<<'\n';
           }
         }
 
