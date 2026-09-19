@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Self-contained interactive visualizer for deltar_rotation_shadow.csv."""
-import argparse,csv,json,math,webbrowser
+import argparse,csv,json,math,webbrowser,time,threading
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+from urllib.parse import urlparse
 
 def f(row,key,default=0.0):
     try:
@@ -13,6 +15,9 @@ def main():
     ap.add_argument("csv",nargs="?",help="deltar_rotation_shadow.csv; default = newest run")
     ap.add_argument("--out",default="/tmp/jtzero_rotation_shadow.html")
     ap.add_argument("--open",action="store_true")
+    ap.add_argument("--live",action="store_true",help="follow newest live shadow CSV")
+    ap.add_argument("--host",default="0.0.0.0")
+    ap.add_argument("--port",type=int,default=8091)
     a=ap.parse_args()
     if a.csv:
         p=Path(a.csv)
@@ -88,9 +93,68 @@ document.getElementById('legend').innerHTML=L;
 const mag=v=>Math.hypot(v[0],v[1]).toFixed(1);
 document.getElementById('nums').innerHTML=`<div class=row>HIGHRES CAMERA: <b>${mag(D.camera)} mm</b></div><div class=row>HIGHRES LEVER: <b>${mag(D.lever)} mm</b></div><div class=row>остаток IMU: <b>${mag(D.imu)} mm</b></div><div class=muted>${D.source}</div>`;
 resize();
+if(location.protocol.startsWith('http')){
+ setInterval(async()=>{try{
+   const r=await fetch('/api/live?t='+Date.now(),{cache:'no-store'});if(!r.ok)return;
+   const n=await r.json();D.paths=n.paths;D.camera=n.camera;D.lever=n.lever;D.imu=n.imu;
+   let L='';for(const name of Object.keys(D.paths))L+=\`<div class=row><span class=sw style="background:\${colors[name]}"></span>\${name}: <b>\${Math.hypot(...D.paths[name].at(-1).slice(0,2)).toFixed(1)} mm</b></div>\`;
+   document.getElementById('legend').innerHTML=L;
+   document.getElementById('nums').innerHTML=\`<div class=row>HIGHRES CAMERA: <b>\${mag(D.camera)} mm</b></div><div class=row>HIGHRES LEVER: <b>\${mag(D.lever)} mm</b></div><div class=row>остаток IMU: <b>\${mag(D.imu)} mm</b></div><div class=muted>LIVE · \${n.source}</div>\`;
+   draw();
+ }catch(e){}},200);
+}
 </script>'''.replace("__DATA__",json.dumps(data,ensure_ascii=False))
     out=Path(a.out); out.write_text(html,encoding="utf-8")
     print(out)
-    print("Открой в браузере: file://"+str(out))
-    if a.open:webbrowser.open(out.as_uri())
+    if not a.live:
+        print("Открой в браузере: file://"+str(out))
+        if a.open:webbrowser.open(out.as_uri())
+        return
+
+    def newest():
+        root=Path.home()/"monkeysStab_runs"
+        q=sorted(root.glob("*/deltar_rotation_shadow.csv"),key=lambda x:x.stat().st_mtime,reverse=True)
+        return q[0] if q else p
+
+    def snapshot():
+        src=newest()
+        try: rr=list(csv.DictReader(src.open(newline="")))
+        except Exception: rr=[]
+        paths={}
+        for name,valid,n,e in arms:
+            N=E=0.0; pts=[[0,0,0]]
+            for row in rr:
+                if int(f(row,valid,0))!=1: continue
+                N+=f(row,n)*1000;E+=f(row,e)*1000;pts.append([E,N,0])
+            paths[name]=pts
+        cN=cE=lN=lE=0.0
+        for row in rr:
+            if int(f(row,"highres_valid",0))!=1:continue
+            cN+=f(row,"highres_camera_dN_m")*1000;cE+=f(row,"highres_camera_dE_m")*1000
+            lN+=f(row,"highres_lever_dN_m")*1000;lE+=f(row,"highres_lever_dE_m")*1000
+        return {"source":str(src),"paths":paths,"camera":[cE,cN,0],
+                "lever":[lE,lN,0],"imu":[cE-lE,cN-lN,0]}
+
+    page=html.encode("utf-8")
+    class H(BaseHTTPRequestHandler):
+        def log_message(self,*args):pass
+        def do_GET(self):
+            path=urlparse(self.path).path
+            if path=="/":
+                body=page;ctype="text/html; charset=utf-8"
+            elif path=="/api/live":
+                body=json.dumps(snapshot(),ensure_ascii=False,separators=(",",":")).encode()
+                ctype="application/json; charset=utf-8"
+            else:
+                self.send_error(404);return
+            self.send_response(200);self.send_header("Content-Type",ctype)
+            self.send_header("Cache-Control","no-store")
+            self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body)
+
+    print("LIVE визуализатор: http://127.0.0.1:%d"%a.port)
+    print("С другого ПК: http://<IP_RPI>:%d"%a.port)
+    srv=ThreadingHTTPServer((a.host,a.port),H)
+    if a.open:webbrowser.open("http://127.0.0.1:%d"%a.port)
+    try:srv.serve_forever()
+    except KeyboardInterrupt:pass
 if __name__=="__main__":main()

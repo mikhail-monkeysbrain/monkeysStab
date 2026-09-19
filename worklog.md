@@ -176,3 +176,13 @@ self-contained interactive HTML canvas. The scene includes a schematic
 3D vehicle centered on the IMU, the camera lever, trajectory endpoints,
 and explicit HIGHRES CAMERA / LEVER / IMU = CAMERA - LEVER vectors.
 No production estimator or frozen branch changes.
+
+
+## 2026-09-19 — realtime ΔR 3D visualizer
+
+Extended tools/visualize_rotation_shadow.py with --live mode. It serves the
+same interactive 3D diagnostic scene over HTTP and follows the newest
+deltar_rotation_shadow.csv while runtime is writing it. Browser polls the
+diagnostic snapshot at 5 Hz, showing live WORKED5 / ATT / ATT-rate / HIGHRES
+trajectories plus HIGHRES CAMERA, LEVER and IMU residual vectors. Diagnostic
+only; no production estimator, runtime feed, or frozen branch changes.
