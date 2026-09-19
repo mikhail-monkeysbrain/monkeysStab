@@ -61,7 +61,7 @@ s=s.replace(anchor,method+anchor,1)
 # The production CSV is emitted once per processed frame. Insert immediately
 # before its existing write statement; local source is intentionally matched
 # by a stable prefix rather than line number.
-needle='''        csv<<now<<','<<ts<<','<<selected_v4l2_ts_ns<<','<<selected_dq_mono_ns<<',''''
+needle = "        csv<<now<<','<<ts<<','<<selected_v4l2_ts_ns<<','<<selected_dq_mono_ns<<','"
 if needle not in s:
     raise SystemExit("production CSV write anchor not found; source not modified")
 
