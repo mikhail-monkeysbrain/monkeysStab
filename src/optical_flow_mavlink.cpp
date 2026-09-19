@@ -220,8 +220,15 @@ struct FlowFcGyro {
 struct FlowFcImu {
   double ax=0,ay=0,az=0;       // HIGHRES_IMU body acceleration, m/s^2
   double gx=0,gy=0,gz=0;       // HIGHRES_IMU body gyro, rad/s
-  uint64_t time_usec=0;
-  int64_t recv_ns=0;
+  uint64_t time_usec=0;         // FC-provided HIGHRES_IMU measurement timestamp
+  int64_t recv_ns=0;            // RPi CLOCK_MONOTONIC receive timestamp
+  bool valid=false;
+};
+
+struct FlowFcRawGyro {
+  double x=0,y=0,z=0;           // HIGHRES_IMU gyro, body FRD rad/s
+  uint64_t fc_time_usec=0;       // FC measurement timestamp from MAVLink
+  int64_t recv_ns=0;             // RPi receive timestamp
   bool valid=false;
 };
 
@@ -307,7 +314,9 @@ struct FlowFc {
   FlowFcAttTarget att_target{};
   FlowFcOutputs outputs{};
   FlowFcRc rc{};
-  std::deque<FlowFcGyro> attitude_history; // FC sample times mapped to RPi monotonic clock
+  std::deque<FlowFcGyro> attitude_history; // ATTITUDE, currently keyed by RPi receive time
+  std::deque<FlowFcRawGyro> highres_gyro_history; // independent HIGHRES_IMU gyro stream
+  std::ofstream highres_gyro_shadow_ofs;
   uint64_t local_count=0;
   uint64_t ekf_count=0;
   uint64_t gyro_count=0;
@@ -619,7 +628,7 @@ struct FlowFc {
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_LOCAL_POSITION_NED,20);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_EKF_STATUS_REPORT,5);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_ATTITUDE,100);
-      requestRate(fd,sys,comp,MAVLINK_MSG_ID_HIGHRES_IMU,50);
+      requestRate(fd,sys,comp,MAVLINK_MSG_ID_HIGHRES_IMU,100);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_POSITION_TARGET_LOCAL_NED,20);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_ATTITUDE_TARGET,20);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_SERVO_OUTPUT_RAW,20);
@@ -687,6 +696,30 @@ struct FlowFc {
               imu.ax=q.xacc; imu.ay=q.yacc; imu.az=q.zacc;
               imu.gx=q.xgyro; imu.gy=q.ygyro; imu.gz=q.zgyro;
               imu.time_usec=q.time_usec; imu.recv_ns=monoNs(); imu.valid=true; ++imu_count;
+
+              // HIGHRES_GYRO_SHADOW_V1: independent raw gyro capture.
+              // This does not use ATTITUDE.rollspeed/pitchspeed/yawspeed and
+              // does not feed any production estimator or MAVLink output.
+              highres_gyro_history.push_back(
+                {q.xgyro,q.ygyro,q.zgyro,q.time_usec,imu.recv_ns,true});
+              while(highres_gyro_history.size()>2 &&
+                    imu.recv_ns-highres_gyro_history.front().recv_ns>3000000000LL)
+                highres_gyro_history.pop_front();
+
+              if(!highres_gyro_shadow_ofs.is_open()){
+                highres_gyro_shadow_ofs.open(
+                  "/home/vio/Desktop/monkeysStab/highres_gyro_shadow_latest.csv",
+                  std::ios::out|std::ios::trunc);
+                if(highres_gyro_shadow_ofs.is_open())
+                  highres_gyro_shadow_ofs
+                    <<"seq,fc_time_usec,recv_ns,gx_rad_s,gy_rad_s,gz_rad_s\n";
+              }
+              if(highres_gyro_shadow_ofs.is_open()){
+                highres_gyro_shadow_ofs
+                  <<imu_count<<','<<q.time_usec<<','<<imu.recv_ns<<','
+                  <<q.xgyro<<','<<q.ygyro<<','<<q.zgyro<<'\n';
+                highres_gyro_shadow_ofs.flush();
+              }
 
               // Diagnostic only: compare FC timestamps and RPi receive timing.
               // Does not change IMU DR inputs or integration.

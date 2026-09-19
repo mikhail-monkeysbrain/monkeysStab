@@ -99,3 +99,41 @@ Fix:
 
 Validation required:
 - rerun `scripts/smoke_build.sh` on Raspberry Pi before any rotation test.
+
+
+## 2026-09-19 — HIGHRES_GYRO_SHADOW_V1
+
+Ground truth correction from yaw test:
+- physical motion was rotation about the IMU centre: +90 deg then -90 deg;
+- final physical yaw and IMU-centre XY therefore returned to the start;
+- previous one-way-yaw interpretation was invalid.
+- ATTITUDE/ATTITUDE-rate shadow did not represent the full ~180 deg absolute
+  angular travel, so its ~30 mm endpoint must not be treated as validated
+  rotation compensation accuracy.
+
+Repository audit before change:
+- runtime already receives MAVLink HIGHRES_IMU and uses q.xgyro/ygyro/zgyro for
+  the existing IMU DR path;
+- HIGHRES_IMU was requested at 50 Hz;
+- the previous DELTAR_GYRO shadow did NOT use this stream: it integrated
+  ATTITUDE.rollspeed/pitchspeed/yawspeed.
+
+Change:
+- keep all production paths unchanged;
+- request HIGHRES_IMU at 100 Hz for this test branch;
+- capture every HIGHRES_IMU gyro sample into an independent shadow history;
+- write raw diagnostic file
+  `/home/vio/Desktop/monkeysStab/highres_gyro_shadow_latest.csv`;
+- each row records FC q.time_usec, RPi monotonic receive time, and raw
+  xgyro/ygyro/zgyro in rad/s.
+
+Purpose of next test:
+- repeat +90 deg then -90 deg about IMU centre;
+- verify raw signed gyro-z integral returns near zero;
+- verify integral of |gyro| is near the expected ~180 deg physical angular
+  travel before coupling raw gyro to camera-frame delta-R.
+
+Isolation:
+- frozen branch untouched;
+- WORKED5, OPTICAL_FLOW, focal scale, KLT/RANSAC, lever geometry and all
+  production estimator outputs are unchanged.
