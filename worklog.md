@@ -186,3 +186,13 @@ deltar_rotation_shadow.csv while runtime is writing it. Browser polls the
 diagnostic snapshot at 5 Hz, showing live WORKED5 / ATT / ATT-rate / HIGHRES
 trajectories plus HIGHRES CAMERA, LEVER and IMU residual vectors. Diagnostic
 only; no production estimator, runtime feed, or frozen branch changes.
+
+
+## 2026-09-19 — fix realtime visualizer JavaScript
+
+Fixed tools/visualize_rotation_shadow.py live-page generation: the Python
+triple-quoted HTML contained escaped JavaScript template-literal delimiters
+(\` and \${), which were emitted literally into the browser and caused a
+JavaScript parse error. The page shell loaded but the canvas/legend stayed
+blank. Live polling logic and estimator data are otherwise unchanged.
+No production estimator or frozen branch changes.

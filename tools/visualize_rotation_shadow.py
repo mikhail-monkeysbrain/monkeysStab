@@ -97,9 +97,9 @@ if(location.protocol.startsWith('http')){
  setInterval(async()=>{try{
    const r=await fetch('/api/live?t='+Date.now(),{cache:'no-store'});if(!r.ok)return;
    const n=await r.json();D.paths=n.paths;D.camera=n.camera;D.lever=n.lever;D.imu=n.imu;
-   let L='';for(const name of Object.keys(D.paths))L+=\`<div class=row><span class=sw style="background:\${colors[name]}"></span>\${name}: <b>\${Math.hypot(...D.paths[name].at(-1).slice(0,2)).toFixed(1)} mm</b></div>\`;
+   let L='';for(const name of Object.keys(D.paths))L+=`<div class=row><span class=sw style="background:${colors[name]}"></span>${name}: <b>${Math.hypot(...D.paths[name].at(-1).slice(0,2)).toFixed(1)} mm</b></div>`;
    document.getElementById('legend').innerHTML=L;
-   document.getElementById('nums').innerHTML=\`<div class=row>HIGHRES CAMERA: <b>\${mag(D.camera)} mm</b></div><div class=row>HIGHRES LEVER: <b>\${mag(D.lever)} mm</b></div><div class=row>остаток IMU: <b>\${mag(D.imu)} mm</b></div><div class=muted>LIVE · \${n.source}</div>\`;
+   document.getElementById('nums').innerHTML=`<div class=row>HIGHRES CAMERA: <b>${mag(D.camera)} mm</b></div><div class=row>HIGHRES LEVER: <b>${mag(D.lever)} mm</b></div><div class=row>остаток IMU: <b>${mag(D.imu)} mm</b></div><div class=muted>LIVE · ${n.source}</div>`;
    draw();
  }catch(e){}},200);
 }
