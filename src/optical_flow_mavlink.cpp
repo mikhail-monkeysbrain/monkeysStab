@@ -3131,7 +3131,9 @@ int main(int argc,char** argv){
                         "scale_left_valid,scale_left_n,scale_left_rate,"
                         "scale_right_valid,scale_right_n,scale_right_rate,"
                         "scale_top_valid,scale_top_n,scale_top_rate,"
-                        "scale_bottom_valid,scale_bottom_n,scale_bottom_rate\n";
+                        "scale_bottom_valid,scale_bottom_n,scale_bottom_rate,"
+                        "prev_camera_height_valid,prev_camera_height_m,"
+                        "camera_height_valid,camera_height_m,range_raw_m,range_age_ms\n";
               bal_header=true;
             }
             bal_csv<<frame<<','<<now<<','<<(s.valid?1:0)<<','
@@ -3148,7 +3150,10 @@ int main(int argc,char** argv){
                    <<(s.scale_region_valid[0]?1:0)<<','<<s.scale_region_n[0]<<','<<s.scale_region_rate[0]<<','
                    <<(s.scale_region_valid[1]?1:0)<<','<<s.scale_region_n[1]<<','<<s.scale_region_rate[1]<<','
                    <<(s.scale_region_valid[2]?1:0)<<','<<s.scale_region_n[2]<<','<<s.scale_region_rate[2]<<','
-                   <<(s.scale_region_valid[3]?1:0)<<','<<s.scale_region_n[3]<<','<<s.scale_region_rate[3]<<'\n';
+                   <<(s.scale_region_valid[3]?1:0)<<','<<s.scale_region_n[3]<<','<<s.scale_region_rate[3]<<','
+                   <<(prev_camera_height_valid?1:0)<<','<<prev_camera_height_m<<','
+                   <<(current_camera_height_valid?1:0)<<','<<current_camera_height_m<<','
+                   <<lm<<','<<lage<<'\n';
           }
         }
 
