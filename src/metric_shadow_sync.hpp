@@ -73,4 +73,110 @@ inline AttitudeLookup interpolateAttitude(const std::deque<TimedAttitude>& h,
   return out;
 }
 
+
+struct TimedBodyRate {
+  double x=0.0,y=0.0,z=0.0; // body FRD rad/s
+  int64_t sample_ns=0;
+  bool valid=false;
+};
+
+struct BodyRateIntegration {
+  cv::Matx33d delta_R=cv::Matx33d::eye(); // body(t0) -> body(t1), right-multiplied into body-to-local R
+  bool valid=false;
+  double max_bracket_gap_ms=-1.0;
+  double integrated_angle_deg=0.0;
+  int segments=0;
+};
+
+inline cv::Matx33d expSO3(const cv::Vec3d& rv){
+  const double th=cv::norm(rv);
+  if(!(th>1e-12) || !std::isfinite(th)) return cv::Matx33d::eye();
+  const cv::Vec3d a=rv*(1.0/th);
+  const double x=a[0],y=a[1],z=a[2];
+  const double c=std::cos(th),s=std::sin(th),v=1.0-c;
+  return cv::Matx33d(
+    c+x*x*v,   x*y*v-z*s, x*z*v+y*s,
+    y*x*v+z*s, c+y*y*v,   y*z*v-x*s,
+    z*x*v-y*s, z*y*v+x*s, c+z*z*v);
+}
+
+inline bool interpolateBodyRate(const std::deque<TimedBodyRate>& h,
+                                int64_t t_ns,
+                                TimedBodyRate* out,
+                                double* bracket_gap_ms,
+                                double max_bracket_gap_ms){
+  if(!out || h.size()<2 || t_ns<=0) return false;
+  auto hi=std::lower_bound(h.begin(),h.end(),t_ns,
+    [](const TimedBodyRate& a,int64_t t){ return a.sample_ns<t; });
+  if(hi==h.end()) return false;
+  if(hi->sample_ns==t_ns && hi->valid){
+    *out=*hi;
+    if(bracket_gap_ms) *bracket_gap_ms=0.0;
+    return true;
+  }
+  if(hi==h.begin()) return false;
+  const auto lo=std::prev(hi);
+  if(!lo->valid || !hi->valid || hi->sample_ns<=lo->sample_ns) return false;
+  const double gap=(hi->sample_ns-lo->sample_ns)*1e-6;
+  if(bracket_gap_ms) *bracket_gap_ms=gap;
+  if(!(gap>=0.0 && gap<=max_bracket_gap_ms)) return false;
+  const double u=(double)(t_ns-lo->sample_ns)/(double)(hi->sample_ns-lo->sample_ns);
+  if(!(u>=0.0 && u<=1.0)) return false;
+  out->x=lo->x+u*(hi->x-lo->x);
+  out->y=lo->y+u*(hi->y-lo->y);
+  out->z=lo->z+u*(hi->z-lo->z);
+  out->sample_ns=t_ns;
+  out->valid=true;
+  return true;
+}
+
+// Integrate FC body rates exactly over the camera interval using piecewise
+// trapezoidal angular velocity and SO(3) composition. Timestamps are still RPi
+// MAVLink receive times in this shadow; the purpose is to test whether rate
+// integration is less sensitive to ATTITUDE phase/latency than endpoint Euler
+// interpolation, not to hide the remaining clock-mapping limitation.
+inline BodyRateIntegration integrateBodyRates(const std::deque<TimedBodyRate>& h,
+                                              int64_t t0_ns,int64_t t1_ns,
+                                              double max_bracket_gap_ms=30.0){
+  BodyRateIntegration out;
+  if(h.size()<2 || t0_ns<=0 || t1_ns<=t0_ns) return out;
+
+  TimedBodyRate r0{},r1{};
+  double g0=-1.0,g1=-1.0;
+  if(!interpolateBodyRate(h,t0_ns,&r0,&g0,max_bracket_gap_ms) ||
+     !interpolateBodyRate(h,t1_ns,&r1,&g1,max_bracket_gap_ms))
+    return out;
+
+  std::vector<TimedBodyRate> p;
+  p.push_back(r0);
+  for(const auto& q:h)
+    if(q.valid && q.sample_ns>t0_ns && q.sample_ns<t1_ns) p.push_back(q);
+  p.push_back(r1);
+  std::sort(p.begin(),p.end(),
+    [](const TimedBodyRate& a,const TimedBodyRate& b){return a.sample_ns<b.sample_ns;});
+
+  cv::Matx33d dR=cv::Matx33d::eye();
+  double angle_sum=0.0;
+  int segs=0;
+  for(size_t k=1;k<p.size();++k){
+    const double dt=(p[k].sample_ns-p[k-1].sample_ns)*1e-9;
+    if(!(dt>0.0 && dt<0.1)) return out;
+    const cv::Vec3d w(
+      0.5*(p[k-1].x+p[k].x),
+      0.5*(p[k-1].y+p[k].y),
+      0.5*(p[k-1].z+p[k].z));
+    const cv::Vec3d rv=w*dt;
+    dR=dR*expSO3(rv);
+    angle_sum+=cv::norm(rv);
+    ++segs;
+  }
+
+  out.delta_R=dR;
+  out.valid=segs>0;
+  out.max_bracket_gap_ms=std::max(g0,g1);
+  out.integrated_angle_deg=angle_sum*180.0/3.14159265358979323846;
+  out.segments=segs;
+  return out;
+}
+
 } // namespace metric_shadow

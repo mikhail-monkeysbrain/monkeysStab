@@ -99,7 +99,7 @@ inline double median(std::vector<double> v){
   return m;
 }
 
-inline Step estimate(const Input& in){
+inline Step estimateWithRotations(const Input& in,\n                                      const cv::Matx33d& R0,\n                                      const cv::Matx33d& R1){
   Step out;
   out.dt=(in.t1_ns-in.t0_ns)*1e-9;
   if(!(out.dt>0.0 && out.dt<0.2)){
@@ -107,9 +107,6 @@ inline Step estimate(const Input& in){
   }
   if(in.px0.size()!=in.px1.size() || in.px0.size()<20 || in.K.empty()){
     out.reason=RejectReason::BAD_CORRESPONDENCES; return out;
-  }
-  if(!in.a0.valid || !in.a1.valid){
-    out.reason=RejectReason::BAD_ATTITUDE; return out;
   }
   if(!in.range0_valid || !in.range1_valid || !(in.range0_m>0.05) || !(in.range1_m>0.05)){
     out.reason=RejectReason::BAD_RANGE; return out;
@@ -122,8 +119,6 @@ inline Step estimate(const Input& in){
   cv::undistortPoints(in.px0,q0,in.K,in.D);
   cv::undistortPoints(in.px1,q1,in.K,in.D);
 
-  const cv::Matx33d R0=bodyToLocal(in.a0.roll,in.a0.pitch,in.a0.yaw);
-  const cv::Matx33d R1=bodyToLocal(in.a1.roll,in.a1.pitch,in.a1.yaw);
   const cv::Vec3d down(0,0,1);
   cv::Vec3d lidar_ray_body=in.range_ray_body_frd;
   const double lrnorm=cv::norm(lidar_ray_body);
@@ -196,6 +191,19 @@ inline Step estimate(const Input& in){
   out.residual_median_m=rmed;
   out.residual_mad_m=mad;
   return out;
+}
+
+
+inline Step estimate(const Input& in){
+  if(!in.a0.valid || !in.a1.valid){
+    Step out;
+    out.dt=(in.t1_ns-in.t0_ns)*1e-9;
+    out.reason=RejectReason::BAD_ATTITUDE;
+    return out;
+  }
+  const cv::Matx33d R0=bodyToLocal(in.a0.roll,in.a0.pitch,in.a0.yaw);
+  const cv::Matx33d R1=bodyToLocal(in.a1.roll,in.a1.pitch,in.a1.yaw);
+  return estimateWithRotations(in,R0,R1);
 }
 
 struct Integrator {

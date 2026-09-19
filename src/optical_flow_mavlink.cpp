@@ -2298,7 +2298,9 @@ int main(int argc,char** argv){
         static uint64_t metric_shadow_interval_id=0;
         static int64_t metric_shadow_last_print_ns=0;
         metric_shadow::Step metric_step;
+        metric_shadow::Step metric_gyro_step;
         metric_shadow::AttitudeLookup metric_a0{}, metric_a1{};
+        metric_shadow::BodyRateIntegration metric_gyro_delta{};
         bool metric_attempted=false;
         double metric_att_gap0_ms=-1.0,metric_att_gap1_ms=-1.0;
         double metric_range_gap0_ms=-1.0,metric_range_gap1_ms=-1.0;
@@ -2307,13 +2309,17 @@ int main(int argc,char** argv){
           ++metric_shadow_interval_id;
 
           std::deque<metric_shadow::TimedAttitude> ah;
+          std::deque<metric_shadow::TimedBodyRate> gh;
           {
             std::lock_guard<std::mutex> lock(fc.mu);
             ah.clear();
+            gh.clear();
             ah.resize(fc.attitude_history.size());
+            gh.resize(fc.attitude_history.size());
             for(size_t i=0;i<fc.attitude_history.size();++i){
               const auto& g=fc.attitude_history[i];
               ah[i]={g.roll,g.pitch,g.yaw,g.sample_ns,g.valid};
+              gh[i]={g.x,g.y,g.z,g.sample_ns,g.valid};
             }
           }
           const auto a0=metric_shadow::interpolateAttitude(ah,prev_ts,30.0);
@@ -2344,6 +2350,19 @@ int main(int argc,char** argv){
           mi.range_pos_body_frd=cv::Vec3d(0.0855,0.0,diag_range_z_m);
 
           metric_step=metric_shadow::estimate(mi);
+
+          // DELTAR_GYRO_SHADOW_V1: use the same absolute R0 only as the local
+          // frame anchor, but obtain the inter-frame rotation from integrated
+          // body rates instead of the second ATTITUDE Euler endpoint.
+          metric_gyro_delta=metric_shadow::integrateBodyRates(
+            gh,prev_ts,ts,30.0);
+          if(a0.valid && metric_gyro_delta.valid){
+            const cv::Matx33d gyro_R0=metric_shadow::bodyToLocal(
+              a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
+            const cv::Matx33d gyro_R1=gyro_R0*metric_gyro_delta.delta_R;
+            metric_gyro_step=metric_shadow::estimateWithRotations(
+              mi,gyro_R0,gyro_R1);
+          }
 
           // Startup before the first synchronized metric interval is not a GAP.
           // After start, every rejected interval remains visible.
@@ -2905,8 +2924,10 @@ int main(int argc,char** argv){
         // DELTAR_ROTATION_SHADOW_V1
         // Dedicated A/B diagnostic for rotation contamination:
         //   A = frozen WORKED5 displacement;
-        //   B = full-attitude ray geometry using R0/R1;
-        //   C = B minus camera lever-arm motion, i.e. FC/IMU-center translation.
+        //   B = full-attitude ray geometry using ATTITUDE R0/R1;
+        //   C = B minus camera lever-arm motion, i.e. FC/IMU-center translation;
+        //   D = same geometry, but inter-frame delta-R is integrated from FC
+        //       body rates and then lever-arm corrected.
         // This block is logging only. It never changes WORKED5, OPTICAL_FLOW,
         // ArduPilot output, FUSED-V1/V2, or any production state.
         {
@@ -2929,7 +2950,11 @@ int main(int argc,char** argv){
               <<"camera_dN_m,camera_dE_m,"
               <<"lever_dN_m,lever_dE_m,"
               <<"imu_dN_m,imu_dE_m,"
-              <<"pairs,used,residual_median_m\n";
+              <<"gyro_valid,gyro_segments,gyro_bracket_gap_ms,gyro_angle_deg,"
+              <<"gyro_camera_dN_m,gyro_camera_dE_m,"
+              <<"gyro_lever_dN_m,gyro_lever_dE_m,"
+              <<"gyro_imu_dN_m,gyro_imu_dE_m,"
+              <<"pairs,used,residual_median_m,gyro_residual_median_m\n";
             dr_header=true;
           }
 
@@ -2966,9 +2991,20 @@ int main(int argc,char** argv){
             <<metric_step.lever_local_m[1]<<','
             <<metric_step.delta_local_m[0]<<','
             <<metric_step.delta_local_m[1]<<','
+            <<(metric_gyro_step.valid?1:0)<<','
+            <<metric_gyro_delta.segments<<','
+            <<metric_gyro_delta.max_bracket_gap_ms<<','
+            <<metric_gyro_delta.integrated_angle_deg<<','
+            <<metric_gyro_step.delta_camera_local_m[0]<<','
+            <<metric_gyro_step.delta_camera_local_m[1]<<','
+            <<metric_gyro_step.lever_local_m[0]<<','
+            <<metric_gyro_step.lever_local_m[1]<<','
+            <<metric_gyro_step.delta_local_m[0]<<','
+            <<metric_gyro_step.delta_local_m[1]<<','
             <<s.metric_prev_points.size()<<','
             <<metric_step.points<<','
-            <<metric_step.residual_median_m
+            <<metric_step.residual_median_m<<','
+            <<metric_gyro_step.residual_median_m
             <<'\n';
           dr_csv.flush();
         }
