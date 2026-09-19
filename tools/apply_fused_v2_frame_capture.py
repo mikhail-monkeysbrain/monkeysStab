@@ -61,14 +61,14 @@ s=s.replace(anchor,method+anchor,1)
 # The production CSV is emitted once per processed frame. Insert immediately
 # before its existing write statement; local source is intentionally matched
 # by a stable prefix rather than line number.
-needle='''        csv<<ts<<','<<camera_ts_ns'''
+needle='''        csv<<now<<','<<ts<<','<<selected_v4l2_ts_ns<<','<<selected_dq_mono_ns<<',''''
 if needle not in s:
     raise SystemExit("production CSV write anchor not found; source not modified")
 
 call=r'''        // FUSED_V2_FRAME_CAPTURE_V1
         // mono timestamp 'ts' is the same frame clock used by production CSV.
         fc.writeFusedV2FrameCapture(
-          csvpath,frame,ts,s.valid,s.invalid_reason,
+          csvpath,frame,now,s.valid,s.invalid_reason,
           s.tracked,s.inliers,s.inlier_ratio,dt);
 
 '''
