@@ -1007,6 +1007,18 @@ struct FlowStep {
   // It is never published to the FC.
   bool translation_only_shadow_valid=false;
   double translation_only_du_norm=0.0,translation_only_dv_norm=0.0;
+
+  // Diagnostic decomposition shadows on the same production RANSAC inliers:
+  // TS keeps translation+scale only (yaw fixed to zero);
+  // TY keeps translation+yaw only (scale fixed to zero).
+  // Together with full 4-param and translation-only they isolate which
+  // nuisance term drives the stationary translation bias.
+  bool trans_scale_shadow_valid=false;
+  double trans_scale_du_norm=0.0,trans_scale_dv_norm=0.0;
+  double trans_scale_rate=0.0;
+  bool trans_yaw_shadow_valid=false;
+  double trans_yaw_du_norm=0.0,trans_yaw_dv_norm=0.0;
+  double trans_yaw_rate_cam_z=0.0;
   double lk_height_scale=1; // initial KLT scale guess from TF-Luna, curr image / prev image
   double flow_cam_x=0,flow_cam_y=0;
   double flow_body_x=0,flow_body_y=0;
@@ -1501,6 +1513,65 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
     o.translation_only_shadow_valid=
       std::isfinite(o.translation_only_du_norm) &&
       std::isfinite(o.translation_only_dv_norm);
+  }
+
+  // STATIONARY_DECOMPOSITION_SHADOW_V1
+  // Translation + scale, yaw constrained to zero.
+  {
+    cv::Mat Ats((int)ai.size()*2,3,CV_64F);
+    cv::Mat bts((int)ai.size()*2,1,CV_64F);
+    for(size_t k=0;k<ai.size();++k){
+      const double x=(double)au[k].x, y=(double)au[k].y;
+      const double du=(double)bu[k].x-au[k].x;
+      const double dv=(double)bu[k].y-au[k].y;
+      Ats.at<double>((int)(2*k),0)=1.0;
+      Ats.at<double>((int)(2*k),1)=0.0;
+      Ats.at<double>((int)(2*k),2)=x;
+      bts.at<double>((int)(2*k),0)=du;
+      Ats.at<double>((int)(2*k+1),0)=0.0;
+      Ats.at<double>((int)(2*k+1),1)=1.0;
+      Ats.at<double>((int)(2*k+1),2)=y;
+      bts.at<double>((int)(2*k+1),0)=dv;
+    }
+    cv::Mat sts;
+    if(cv::solve(Ats,bts,sts,cv::DECOMP_SVD) && sts.rows==3){
+      o.trans_scale_du_norm=sts.at<double>(0,0);
+      o.trans_scale_dv_norm=sts.at<double>(1,0);
+      o.trans_scale_rate=sts.at<double>(2,0)/dt;
+      o.trans_scale_shadow_valid=
+        std::isfinite(o.trans_scale_du_norm) &&
+        std::isfinite(o.trans_scale_dv_norm) &&
+        std::isfinite(o.trans_scale_rate);
+    }
+  }
+
+  // Translation + yaw, scale constrained to zero.
+  {
+    cv::Mat Aty((int)ai.size()*2,3,CV_64F);
+    cv::Mat bty((int)ai.size()*2,1,CV_64F);
+    for(size_t k=0;k<ai.size();++k){
+      const double x=(double)au[k].x, y=(double)au[k].y;
+      const double du=(double)bu[k].x-au[k].x;
+      const double dv=(double)bu[k].y-au[k].y;
+      Aty.at<double>((int)(2*k),0)=1.0;
+      Aty.at<double>((int)(2*k),1)=0.0;
+      Aty.at<double>((int)(2*k),2)=-y;
+      bty.at<double>((int)(2*k),0)=du;
+      Aty.at<double>((int)(2*k+1),0)=0.0;
+      Aty.at<double>((int)(2*k+1),1)=1.0;
+      Aty.at<double>((int)(2*k+1),2)=x;
+      bty.at<double>((int)(2*k+1),0)=dv;
+    }
+    cv::Mat sty;
+    if(cv::solve(Aty,bty,sty,cv::DECOMP_SVD) && sty.rows==3){
+      o.trans_yaw_du_norm=sty.at<double>(0,0);
+      o.trans_yaw_dv_norm=sty.at<double>(1,0);
+      o.trans_yaw_rate_cam_z=sty.at<double>(2,0)/dt;
+      o.trans_yaw_shadow_valid=
+        std::isfinite(o.trans_yaw_du_norm) &&
+        std::isfinite(o.trans_yaw_dv_norm) &&
+        std::isfinite(o.trans_yaw_rate_cam_z);
+    }
   }
 
   // STATIONARY_BALANCED_SHADOW_V1
@@ -3000,19 +3071,26 @@ int main(int argc,char** argv){
           }
           if(bal_csv.is_open()){
             if(!bal_header){
-              bal_csv<<"frame,mono_ns,production_valid,balanced_valid,translation_only_valid,dt_s,"
+              bal_csv<<"frame,mono_ns,production_valid,balanced_valid,translation_only_valid,"
+                        "trans_scale_valid,trans_yaw_valid,dt_s,"
                         "prod_du_norm,prod_dv_norm,prod_scale_rate,prod_yaw_rate,"
                         "bal_du_norm,bal_dv_norm,bal_scale_rate,bal_yaw_rate,"
-                        "trans_du_norm,trans_dv_norm\n";
+                        "trans_du_norm,trans_dv_norm,"
+                        "ts_du_norm,ts_dv_norm,ts_scale_rate,"
+                        "ty_du_norm,ty_dv_norm,ty_yaw_rate\n";
               bal_header=true;
             }
             bal_csv<<frame<<','<<now<<','<<(s.valid?1:0)<<','
                    <<(s.balanced_shadow_valid?1:0)<<','
-                   <<(s.translation_only_shadow_valid?1:0)<<','<<dt<<','
+                   <<(s.translation_only_shadow_valid?1:0)<<','
+                   <<(s.trans_scale_shadow_valid?1:0)<<','
+                   <<(s.trans_yaw_shadow_valid?1:0)<<','<<dt<<','
                    <<s.du_norm<<','<<s.dv_norm<<','<<s.scale_rate<<','<<s.yaw_rate_cam_z<<','
                    <<s.balanced_du_norm<<','<<s.balanced_dv_norm<<','
                    <<s.balanced_scale_rate<<','<<s.balanced_yaw_rate_cam_z<<','
-                   <<s.translation_only_du_norm<<','<<s.translation_only_dv_norm<<'\n';
+                   <<s.translation_only_du_norm<<','<<s.translation_only_dv_norm<<','
+                   <<s.trans_scale_du_norm<<','<<s.trans_scale_dv_norm<<','<<s.trans_scale_rate<<','
+                   <<s.trans_yaw_du_norm<<','<<s.trans_yaw_dv_norm<<','<<s.trans_yaw_rate_cam_z<<'\n';
           }
         }
 
