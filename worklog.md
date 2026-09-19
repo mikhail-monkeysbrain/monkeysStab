@@ -50,3 +50,44 @@ Use only the existing console guided runner. For the next blind A->B:
 - do not tune anything after seeing GT.
 
 If reason5 loss still occurs, the next separate commit may promote the already-frozen FUSED-V2 bridge outside the WORKED5 estimator. Do not combine that recovery change with this first FPS-headroom experiment.
+
+
+## 2026-09-19 — blind validation WORKED5_INPUT_GUARD_V1
+
+Tested branch/commit:
+- branch: `test/worked5-input-cascade-fix`
+- commit: `c90fae492d39879badd1a12126af955aa9e8c208`
+- startup readback: `requested_fps=100 actual_fps=100`
+
+Blind estimate was fixed before GT:
+- selected interval: frame 502 -> 841
+- duration: 3.380 s
+- dN = -369.384 mm
+- dE = +94.141 mm
+- WORKED5 distance = 381.192 mm
+
+GT disclosed afterward:
+- physical distance = 393 mm
+- motion description: jerky
+- signed error = -11.808 mm
+- relative error = -3.005%
+
+Input-path diagnostics from the same run:
+- rows: 4090
+- mean camera interval = 9.991 ms (~100.09 FPS long-term)
+- median dt = 8.044 ms
+- p95 dt = 11.996 ms
+- max dt = 88.027 ms
+- queue drops = 26 total across 26 frames
+- invalid reasons: 4087 reason0, 2 reason5, 1 reason6
+
+Interpretation:
+- the long reason5/RANSAC-collapse cascade seen in BAD475 was not reproduced;
+- metric accuracy returned inside the frozen <=5% target on this blind jerky motion;
+- this supports the input-headroom hypothesis: 100 FPS removed enough pressure to prevent the positive-feedback queue-drop/dt/RANSAC cascade in this run;
+- one blind run is evidence, not final promotion proof;
+- frozen branch remains untouched pending explicit user approval.
+
+Next:
+- repeat at least one more blind A->B on the unchanged 100 FPS branch, preferably similarly jerky, before proposing promotion;
+- do not retune WORKED5 or enable FUSED-V2 in the same step.
