@@ -994,6 +994,12 @@ struct FlowStep {
   double du_px=0,dv_px=0;
   double yaw_rate_cam_z=0; // fitted optical-axis rotation, rad/s, removed before MAVLink
   double scale_rate=0;      // fitted isotropic image scale rate, 1/s; removed from XY flow
+  // Diagnostic E shadow: same production RANSAC inliers and same 4-parameter
+  // model, but every occupied 3x3 ROI cell contributes equal total weight.
+  // This tests spatial feature-count coupling only; production is untouched.
+  bool balanced_shadow_valid=false;
+  double balanced_du_norm=0.0,balanced_dv_norm=0.0;
+  double balanced_scale_rate=0.0,balanced_yaw_rate_cam_z=0.0;
   double lk_height_scale=1; // initial KLT scale guess from TF-Luna, curr image / prev image
   double flow_cam_x=0,flow_cam_y=0;
   double flow_body_x=0,flow_body_y=0;
@@ -1479,6 +1485,44 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
     o.scale_rate=0.0;
     o.yaw_rate_cam_z=0.0;
   }
+  // STATIONARY_BALANCED_SHADOW_V1
+  // Equalize total influence of each occupied 3x3 ROI cell while preserving
+  // every production RANSAC inlier.  Each point weight is 1/N_cell, then all
+  // rows are scaled by sqrt(weight) for weighted least squares.
+  {
+    std::array<int,9> counts{};
+    std::vector<int> point_cell(ai.size(),0);
+    for(size_t k=0;k<ai.size();++k){
+      const double nx=(ai[k].x/(double)prev.cols-g_feature_roi.x0)/
+                      (g_feature_roi.x1-g_feature_roi.x0);
+      const double ny=(ai[k].y/(double)prev.rows-g_feature_roi.y0)/
+                      (g_feature_roi.y1-g_feature_roi.y0);
+      const int cx=std::clamp((int)std::floor(nx*3.0),0,2);
+      const int cy=std::clamp((int)std::floor(ny*3.0),0,2);
+      point_cell[k]=cy*3+cx;
+      counts[point_cell[k]]++;
+    }
+    cv::Mat Ab=A.clone(), bbb=bb.clone();
+    for(size_t k=0;k<ai.size();++k){
+      const int n=counts[point_cell[k]];
+      const double sw=(n>0)?std::sqrt(1.0/(double)n):0.0;
+      const int r=(int)(2*k);
+      for(int c=0;c<4;c++){ Ab.at<double>(r,c)*=sw; Ab.at<double>(r+1,c)*=sw; }
+      bbb.at<double>(r,0)*=sw; bbb.at<double>(r+1,0)*=sw;
+    }
+    cv::Mat sb;
+    if(cv::solve(Ab,bbb,sb,cv::DECOMP_SVD) && sb.rows==4){
+      o.balanced_du_norm=sb.at<double>(0,0);
+      o.balanced_dv_norm=sb.at<double>(1,0);
+      o.balanced_scale_rate=sb.at<double>(2,0)/dt;
+      o.balanced_yaw_rate_cam_z=sb.at<double>(3,0)/dt;
+      o.balanced_shadow_valid=std::isfinite(o.balanced_du_norm) &&
+                              std::isfinite(o.balanced_dv_norm) &&
+                              std::isfinite(o.balanced_scale_rate) &&
+                              std::isfinite(o.balanced_yaw_rate_cam_z);
+    }
+  }
+
   o.du_px=median(dup); o.dv_px=median(dvp);
 
   // OpenCV camera: +X image-right, +Y image-down, +Z optical-forward.
@@ -2926,6 +2970,30 @@ int main(int argc,char** argv){
         fc.updateFusedV2RealtimeShadow(
           csvpath,frame,now,s.valid,s.invalid_reason,
           s.tracked,s.inliers,s.inlier_ratio,dt);
+
+        // STATIONARY_BALANCED_SHADOW_V1 -- diagnostic only, never published.
+        {
+          static std::ofstream bal_csv;
+          static bool bal_header=false;
+          if(!bal_csv.is_open()){
+            const std::filesystem::path production_csv_path(csvpath);
+            bal_csv.open(production_csv_path.parent_path()/"stationary_balanced_shadow.csv",
+                         std::ios::out|std::ios::trunc);
+          }
+          if(bal_csv.is_open()){
+            if(!bal_header){
+              bal_csv<<"frame,mono_ns,production_valid,balanced_valid,dt_s,"
+                        "prod_du_norm,prod_dv_norm,prod_scale_rate,prod_yaw_rate,"
+                        "bal_du_norm,bal_dv_norm,bal_scale_rate,bal_yaw_rate\n";
+              bal_header=true;
+            }
+            bal_csv<<frame<<','<<now<<','<<(s.valid?1:0)<<','
+                   <<(s.balanced_shadow_valid?1:0)<<','<<dt<<','
+                   <<s.du_norm<<','<<s.dv_norm<<','<<s.scale_rate<<','<<s.yaw_rate_cam_z<<','
+                   <<s.balanced_du_norm<<','<<s.balanced_dv_norm<<','
+                   <<s.balanced_scale_rate<<','<<s.balanced_yaw_rate_cam_z<<'\n';
+          }
+        }
 
         csv<<now<<','<<ts<<','<<selected_v4l2_ts_ns<<','<<selected_dq_mono_ns<<','
            <<selected_v4l2_flags<<','<<v4l2_to_dequeue_ms<<','
