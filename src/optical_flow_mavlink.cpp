@@ -2762,6 +2762,16 @@ int main(int argc,char** argv){
         double worked5_diag_du_norm=0.0,worked5_diag_dv_norm=0.0;
         double worked5_diag_dx=0.0,worked5_diag_dy=0.0;
         double worked5_diag_dN=0.0,worked5_diag_dE=0.0;
+
+        // WORKED5_TRANSLATION_SHADOW_V1: diagnostic only.
+        // Same production RANSAC inliers + same WORKED5 normalization.
+        // Production WORKED5/MAVLink/anchor policy are untouched.
+        bool worked5_tshadow_valid=false;
+        int worked5_tshadow_points=0;
+        double worked5_tls_du=0.0,worked5_tls_dv=0.0;
+        double worked5_tmed_du=0.0,worked5_tmed_dv=0.0;
+        double worked5_tls_dN=0.0,worked5_tls_dE=0.0;
+        double worked5_tmed_dN=0.0,worked5_tmed_dE=0.0;
         web_raw_step_valid=false;
         web_raw_vn=web_raw_ve=0.0;
         if(s.valid && fg_ok && dt>0.0 && dt<0.2){
@@ -2782,6 +2792,32 @@ int main(int argc,char** argv){
             worked5_diag_dv_norm=w5.dv_norm;
             worked5_diag_dx=w5.dx_m;
             worked5_diag_dy=w5.dy_m;
+
+            const auto tshadow=worked5::estimateTranslationOnly(
+              s.metric_prev_points,s.metric_curr_points,
+              calib.K,focal_scale,calib.D,hcam,dt);
+            if(tshadow.valid){
+              worked5_tshadow_valid=true;
+              worked5_tshadow_points=tshadow.points;
+              worked5_tls_du=tshadow.tls_du_norm;
+              worked5_tls_dv=tshadow.tls_dv_norm;
+              worked5_tmed_du=tshadow.tmed_du_norm;
+              worked5_tmed_dv=tshadow.tmed_dv_norm;
+
+              // Use exactly the same attitude mapping as frozen WORKED5.
+              const double ts_cr=std::cos(fg.roll),  ts_sr=std::sin(fg.roll);
+              const double ts_cp=std::cos(fg.pitch), ts_sp=std::sin(fg.pitch);
+              const double ts_cy=std::cos(fg.yaw),   ts_sy=std::sin(fg.yaw);
+              const double ts_r00=ts_cy*ts_cp;
+              const double ts_r01=ts_cy*ts_sp*ts_sr-ts_sy*ts_cr;
+              const double ts_r10=ts_sy*ts_cp;
+              const double ts_r11=ts_sy*ts_sp*ts_sr+ts_cy*ts_cr;
+              worked5_tls_dN=ts_r00*tshadow.tls_dx_m+ts_r01*tshadow.tls_dy_m;
+              worked5_tls_dE=ts_r10*tshadow.tls_dx_m+ts_r11*tshadow.tls_dy_m;
+              worked5_tmed_dN=ts_r00*tshadow.tmed_dx_m+ts_r01*tshadow.tmed_dy_m;
+              worked5_tmed_dE=ts_r10*tshadow.tmed_dx_m+ts_r11*tshadow.tmed_dy_m;
+            }
+
             if(w5.valid){
               ++fps_w5_valid; ++w5w_valid;
               // Frozen blind convention gives a metric displacement in the
@@ -2914,6 +2950,40 @@ int main(int argc,char** argv){
         }
 
         if(csv_logging_enabled){
+        // Separate shadow CSV keeps the production optical_flow_mavlink.csv
+        // schema untouched. One row per camera loop; invalid shadow rows are
+        // explicit so interval selection can be reproduced causally.
+        {
+          static std::ofstream tshadow_csv;
+          static bool tshadow_header=false;
+          if(!tshadow_csv.is_open()){
+            const std::filesystem::path production_csv_path(csvpath);
+            tshadow_csv.open(production_csv_path.parent_path()/"worked5_translation_shadow.csv",
+                             std::ios::out|std::ios::trunc);
+          }
+          if(tshadow_csv.is_open()){
+            if(!tshadow_header){
+              tshadow_csv
+                <<"frame,mono_ns,production_valid,invalid_reason,dt_s,hcam_m,pairs,"
+                <<"shadow_valid,tls_du_norm,tls_dv_norm,tmed_du_norm,tmed_dv_norm,"
+                <<"tls_dN_m,tls_dE_m,tmed_dN_m,tmed_dE_m,"
+                <<"w5_valid,w5_du_norm,w5_dv_norm,w5_dN_m,w5_dE_m,scale_rate,yaw_rate_cam_z\\n";
+              tshadow_header=true;
+            }
+            tshadow_csv<<frame<<','<<now<<','<<(s.valid?1:0)<<','<<s.invalid_reason<<','
+              <<dt<<','<<worked5_diag_hcam<<','<<worked5_tshadow_points<<','
+              <<(worked5_tshadow_valid?1:0)<<','
+              <<worked5_tls_du<<','<<worked5_tls_dv<<','
+              <<worked5_tmed_du<<','<<worked5_tmed_dv<<','
+              <<worked5_tls_dN<<','<<worked5_tls_dE<<','
+              <<worked5_tmed_dN<<','<<worked5_tmed_dE<<','
+              <<(worked5_diag_valid?1:0)<<','
+              <<worked5_diag_du_norm<<','<<worked5_diag_dv_norm<<','
+              <<worked5_diag_dN<<','<<worked5_diag_dE<<','
+              <<s.scale_rate<<','<<s.yaw_rate_cam_z<<'\\n';
+            tshadow_csv.flush();
+          }
+        }
         const double v4l2_to_dequeue_ms =
           (selected_v4l2_ts_ns>0 && selected_dq_mono_ns>0)
             ? (selected_dq_mono_ns-selected_v4l2_ts_ns)*1e-6 : -1.0;
