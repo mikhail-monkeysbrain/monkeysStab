@@ -1027,6 +1027,15 @@ struct FlowStep {
   std::array<int,4> scale_region_n{};       // left,right,top,bottom
   std::array<double,4> scale_region_rate{};
   std::array<bool,4> scale_region_valid{};
+
+  // CENTERED_SIMILARITY_SCALE_SHADOW_V1: translation-invariant, rotation-aware
+  // Procrustes scale on the SAME production RANSAC inliers. Diagnostic only.
+  bool centered_scale_valid=false;
+  double centered_scale_rate=0.0;
+  double centered_rotation_rate=0.0;
+  std::array<int,4> centered_region_n{};       // left,right,top,bottom
+  std::array<double,4> centered_region_scale_rate{};
+  std::array<bool,4> centered_region_valid{};
   double lk_height_scale=1; // initial KLT scale guess from TF-Luna, curr image / prev image
   double flow_cam_x=0,flow_cam_y=0;
   double flow_body_x=0,flow_body_y=0;
@@ -1621,6 +1630,55 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
           o.scale_region_valid[ri]=true;
         }
       }
+    }
+  }
+
+  // CENTERED_SIMILARITY_SCALE_SHADOW_V1
+  // Center previous/current normalized point clouds independently, then solve
+  // the 2-D similarity q*R. Centering makes scale independent of translation.
+  // q is converted to log(q)/dt, matching log(h_prev/h_curr)/dt physically.
+  {
+    auto fit_centered=[&](const std::vector<size_t>& idx,double* scale_rate,double* rot_rate)->bool{
+      if(idx.size()<10) return false;
+      cv::Point2d ca(0,0),cb(0,0);
+      for(size_t k:idx){
+        ca.x+=au[k].x; ca.y+=au[k].y;
+        cb.x+=bu[k].x; cb.y+=bu[k].y;
+      }
+      const double inv=1.0/(double)idx.size();
+      ca.x*=inv; ca.y*=inv; cb.x*=inv; cb.y*=inv;
+      double dot=0.0,cross=0.0,den=0.0;
+      for(size_t k:idx){
+        const double ax=au[k].x-ca.x, ay=au[k].y-ca.y;
+        const double bx=bu[k].x-cb.x, by=bu[k].y-cb.y;
+        dot+=ax*bx+ay*by;
+        cross+=ax*by-ay*bx;
+        den+=ax*ax+ay*ay;
+      }
+      if(!(den>1e-12)) return false;
+      const double A=dot/den, B=cross/den;
+      const double q=std::hypot(A,B);
+      if(!(q>0.0) || !std::isfinite(q)) return false;
+      *scale_rate=std::log(q)/dt;
+      *rot_rate=std::atan2(B,A)/dt;
+      return std::isfinite(*scale_rate)&&std::isfinite(*rot_rate);
+    };
+
+    std::vector<size_t> all(ai.size());
+    for(size_t k=0;k<ai.size();++k) all[k]=k;
+    o.centered_scale_valid=fit_centered(all,&o.centered_scale_rate,&o.centered_rotation_rate);
+
+    std::array<std::vector<size_t>,4> ridx;
+    for(size_t k=0;k<ai.size();++k){
+      const double x=(double)au[k].x, y=(double)au[k].y;
+      if(x<=0.0) ridx[0].push_back(k); else ridx[1].push_back(k);
+      if(y<=0.0) ridx[2].push_back(k); else ridx[3].push_back(k);
+    }
+    for(int ri=0;ri<4;++ri){
+      o.centered_region_n[ri]=(int)ridx[ri].size();
+      double dummy_rot=0.0;
+      o.centered_region_valid[ri]=fit_centered(
+        ridx[ri],&o.centered_region_scale_rate[ri],&dummy_rot);
     }
   }
 
@@ -3133,7 +3191,12 @@ int main(int argc,char** argv){
                         "scale_top_valid,scale_top_n,scale_top_rate,"
                         "scale_bottom_valid,scale_bottom_n,scale_bottom_rate,"
                         "prev_camera_height_valid,prev_camera_height_m,"
-                        "camera_height_valid,camera_height_m,range_raw_m,range_age_ms\n";
+                        "camera_height_valid,camera_height_m,range_raw_m,range_age_ms,"
+                        "centered_valid,centered_scale_rate,centered_rotation_rate,"
+                        "centered_left_valid,centered_left_n,centered_left_scale_rate,"
+                        "centered_right_valid,centered_right_n,centered_right_scale_rate,"
+                        "centered_top_valid,centered_top_n,centered_top_scale_rate,"
+                        "centered_bottom_valid,centered_bottom_n,centered_bottom_scale_rate\n";
               bal_header=true;
             }
             bal_csv<<frame<<','<<now<<','<<(s.valid?1:0)<<','
@@ -3153,7 +3216,12 @@ int main(int argc,char** argv){
                    <<(s.scale_region_valid[3]?1:0)<<','<<s.scale_region_n[3]<<','<<s.scale_region_rate[3]<<','
                    <<(prev_camera_height_valid?1:0)<<','<<prev_camera_height_m<<','
                    <<(current_camera_height_valid?1:0)<<','<<current_camera_height_m<<','
-                   <<lm<<','<<lage<<'\n';
+                   <<lm<<','<<lage<<','
+                   <<(s.centered_scale_valid?1:0)<<','<<s.centered_scale_rate<<','<<s.centered_rotation_rate<<','
+                   <<(s.centered_region_valid[0]?1:0)<<','<<s.centered_region_n[0]<<','<<s.centered_region_scale_rate[0]<<','
+                   <<(s.centered_region_valid[1]?1:0)<<','<<s.centered_region_n[1]<<','<<s.centered_region_scale_rate[1]<<','
+                   <<(s.centered_region_valid[2]?1:0)<<','<<s.centered_region_n[2]<<','<<s.centered_region_scale_rate[2]<<','
+                   <<(s.centered_region_valid[3]?1:0)<<','<<s.centered_region_n[3]<<','<<s.centered_region_scale_rate[3]<<'\n';
           }
         }
 
