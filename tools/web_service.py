@@ -247,6 +247,36 @@ def live_payload(raw):
         "raw_of_drift_mm":math.hypot(raw_rel_n,raw_rel_e)*1000.0 if raw_rel_n is not None and raw_rel_e is not None else None,
         "raw_of_vn":raw.get("raw_of_vn"),
         "raw_of_ve":raw.get("raw_of_ve"),
+        "imu_dr_n_mm":raw.get("imu_dr_n_mm"),
+        "imu_dr_e_mm":raw.get("imu_dr_e_mm"),
+        "imu_dr_d_mm":raw.get("imu_dr_d_mm"),
+        "imu_dr_vn":raw.get("imu_dr_vn"),
+        "imu_dr_ve":raw.get("imu_dr_ve"),
+        "imu_dr_vd":raw.get("imu_dr_vd"),
+        "imu_dr_stationary":bool(raw.get("imu_dr_stationary",False)),
+        "imu_dr_acc_n":raw.get("imu_dr_acc_n"),
+        "imu_dr_acc_e":raw.get("imu_dr_acc_e"),
+        "imu_dr_acc_d":raw.get("imu_dr_acc_d"),
+        "imu_dr_dt":raw.get("imu_dr_dt"),
+        "imu_cam_vn":raw.get("imu_cam_vn"),
+        "imu_cam_ve":raw.get("imu_cam_ve"),
+        "imu_cam_speed":raw.get("imu_cam_speed"),
+        "imu_cam_age_ms":raw.get("imu_cam_age_ms"),
+        "imu_cam_fresh":bool(raw.get("imu_cam_fresh",False)),
+        "imu_cam_stationary":bool(raw.get("imu_cam_stationary",False)),
+        "imu_zupt_shadow":bool(raw.get("imu_zupt_shadow",False)),
+        "imu_zupt_shadow_accepts":raw.get("imu_zupt_shadow_accepts",0),
+        "imu_zupt_shadow_blocks":raw.get("imu_zupt_shadow_blocks",0),
+        "imu_cam_seq":raw.get("imu_cam_seq",0),
+        "fused_v1_visual_updates":raw.get("fused_v1_visual_updates",0),
+        "fused_v1_imu_predictions":raw.get("fused_v1_imu_predictions",0),
+        "fused_v1_stop_constraints":raw.get("fused_v1_stop_constraints",0),
+        "fused_v1_stationary":bool(raw.get("fused_v1_stationary",False)),
+        "fused_v1_stop_confirm":raw.get("fused_v1_stop_confirm",0),
+        "fused_v1_n_mm":raw.get("fused_v1_n_mm"),
+        "fused_v1_e_mm":raw.get("fused_v1_e_mm"),
+        "fused_v1_vn":raw.get("fused_v1_vn"),
+        "fused_v1_ve":raw.get("fused_v1_ve"),
         "rc_zero_event":rc_zero_event,
         "rc_zero_seq":rc_seq,
         "rc6_us":raw.get("rc6_us",0),
@@ -858,26 +888,6 @@ def set_zero():
             # Current cumulative raw values = previous zero + current relative values.
             _raw_zero["n"]=(_raw_zero["n"] or 0.0)+float(rn)/1000.0
             _raw_zero["e"]=(_raw_zero["e"] or 0.0)+float(re)/1000.0
-
-        # Durable forensic marker for Web HOME.  The C++ accumulator is deliberately
-        # NOT reset here: Web HOME remains a presentation/reference zero only.
-        # The frame number lets offline analysis cut the production CSV at the exact
-        # sample used by the Web UI, while raw_abs_n/e preserve the WORKED5 baseline.
-        marker_path=RUN_ROOT/"web_home_events.csv"
-        marker_new=not marker_path.exists() or marker_path.stat().st_size==0
-        with open(marker_path,"a",encoding="utf-8",newline="",buffering=1) as mh:
-            mw=csv.writer(mh)
-            if marker_new:
-                mw.writerow(["wall_time","frame","raw_abs_n_m","raw_abs_e_m","runtime_csv"])
-            mw.writerow([
-                f"{time.time():.6f}",
-                int(cur.get("frame",0) or 0),
-                f"{(_raw_zero['n'] if _raw_zero['n'] is not None else float('nan')):.9f}",
-                f"{(_raw_zero['e'] if _raw_zero['e'] is not None else float('nan')):.9f}",
-                str(_active_csv or ""),
-            ])
-        log_event("INFO",f"HOME/0 Web forensic marker: frame={int(cur.get('frame',0) or 0)} rawN={_raw_zero['n']} rawE={_raw_zero['e']}")
-
         cur["x_mm"]=cur["y_mm"]=cur["z_mm"]=0.0
         cur["ekf_drift_mm"]=0.0
         if rn is not None and re is not None:
@@ -978,7 +988,6 @@ button{cursor:pointer}
 .telemetryStrip{position:absolute;right:14px;bottom:12px;background:#081521cc;border:1px solid #24445a;border-radius:6px;padding:8px 11px;font-size:12px;color:#a9c0d0;z-index:4}
 .metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px}
 .metric{background:#09151f;border:1px solid #163147;border-radius:7px;padding:9px}.metric span{font-size:11px;color:#7fa1ba}.metric b{display:block;font-size:18px;margin-top:2px}
-.navEstimateCard{margin-top:10px;padding:10px 12px}.navEstimateCard h3{margin:0 0 8px}.navEstimateRow{display:grid;grid-template-columns:220px repeat(3,minmax(90px,1fr));gap:8px;align-items:center;padding:8px 0;border-top:1px solid #142d40}.navEstimateRow:first-of-type{border-top:0}.navEstimateLabel{color:#9fb7ca;font-size:12px}.navEstimateAxis{background:#09151f;border:1px solid #163147;border-radius:6px;padding:7px 9px}.navEstimateAxis span{display:block;color:#6f91aa;font-size:10px}.navEstimateAxis b{display:block;margin-top:2px;font-size:15px}.navEstimateNote{margin-top:7px;color:#6f91aa;font-size:10px}
 .gaugeBox{padding:10px 12px}.gLine{display:grid;grid-template-columns:58px 1fr 52px;gap:7px;align-items:center;margin:12px 0;font-size:12px}.gLine strong{text-align:right}
 .bar{height:7px;background:#19364a;border-radius:10px;position:relative}.bar:after{content:"";position:absolute;left:50%;top:-5px;height:17px;width:2px;background:#5f7f95}.needle{position:absolute;top:-4px;width:5px;height:15px;border-radius:2px;background:#18e278;box-shadow:0 0 8px currentColor;transform:translateX(-50%)}
 #compass{width:100%;height:205px;display:block}
@@ -1073,40 +1082,23 @@ button{cursor:pointer}
   </div>
 
   <div class="metrics">
-   <div class="metric"><span>EKF X</span><b id="mx">—</b></div>
-   <div class="metric"><span>EKF Y</span><b id="my">—</b></div>
-   <div class="metric"><span>EKF Z</span><b id="mz">—</b></div>
+   <div class="metric"><span>X</span><b id="mx">—</b></div>
+   <div class="metric"><span>Y</span><b id="my">—</b></div>
+   <div class="metric"><span>Z</span><b id="mz">—</b></div>
    <div class="metric"><span>TF-Luna</span><b id="mr">—</b></div>
    <div class="metric"><span>Flow quality</span><b id="mq">—</b></div>
   </div>
 
-  <div class="card navEstimateCard">
-   <h3>Навигационная оценка от HOME</h3>
-   <div class="navEstimateRow">
-    <div class="navEstimateLabel">Оценка по камере</div>
-    <div class="navEstimateAxis"><span>X</span><b id="camX">—</b></div>
-    <div class="navEstimateAxis"><span>Y</span><b id="camY">—</b></div>
-    <div class="navEstimateAxis"><span>Z</span><b id="camZ">—</b></div>
+  <div class="card" style="margin-top:10px">
+   <h3>Дрейф от HOME — EKF vs RAW Optical Flow</h3>
+   <div class="kv" style="grid-template-columns:155px 1fr 155px 1fr 155px 1fr">
+    <span>EKF ΔN / ΔE</span><span id="ekfNE">—</span>
+    <span>EKF |XY|</span><span id="ekfDrift">—</span>
+    <span>EKF vN / vE</span><span id="ekfVel">—</span>
+    <span>RAW OF ΔN / ΔE</span><span id="rawNE">—</span>
+    <span>RAW OF |XY|</span><span id="rawDrift">—</span>
+    <span>RAW OF vN / vE</span><span id="rawVel">—</span>
    </div>
-   <div class="navEstimateRow">
-    <div class="navEstimateLabel">Оценка по IMU</div>
-    <div class="navEstimateAxis"><span>X</span><b id="imuX">—</b></div>
-    <div class="navEstimateAxis"><span>Y</span><b id="imuY">—</b></div>
-    <div class="navEstimateAxis"><span>Z</span><b id="imuZ">—</b></div>
-   </div>
-   <div class="navEstimateRow">
-    <div class="navEstimateLabel">Итоговая оценка</div>
-    <div class="navEstimateAxis"><span>X</span><b id="finalX">—</b></div>
-    <div class="navEstimateAxis"><span>Y</span><b id="finalY">—</b></div>
-    <div class="navEstimateAxis"><span>Z</span><b id="finalZ">—</b></div>
-   </div>
-   <div class="navEstimateRow">
-    <div class="navEstimateLabel">Поправка / удаление от старта</div>
-    <div class="navEstimateAxis"><span>X</span><b id="corrX">—</b></div>
-    <div class="navEstimateAxis"><span>Y</span><b id="corrY">—</b></div>
-    <div class="navEstimateAxis"><span>Z</span><b id="corrZ">—</b></div>
-   </div>
-   <div class="navEstimateNote">Камера: WORKED5 X/Y. Отдельная IMU-позиция и fusion XYZ пока не публикуются runtime и поэтому не подменяются EKF-данными.</div>
   </div>
 
   <div class="bottomCharts">
@@ -1475,7 +1467,7 @@ function updateHud(t){
    $('footerRuntime').textContent=t.running?'запускается…':'остановлен';
    $('mx').textContent='—';$('my').textContent='—';$('mz').textContent='—';$('mr').textContent='—';$('mq').textContent='—';
    $('frame').textContent='—';$('inl').textContent='—';$('ekf').textContent='—';
-   ['camX','camY','camZ','imuX','imuY','imuZ','finalX','finalY','finalZ','corrX','corrY','corrZ'].forEach(id=>{if($(id))$(id).textContent='—'});
+   ['ekfNE','ekfDrift','ekfVel','rawNE','rawDrift','rawVel'].forEach(id=>{if($(id))$(id).textContent='—'});
    $('sceneXYZ').textContent=t.running?'Ожидание WebSocket телеметрии…':'Runtime остановлен — live данные отсутствуют';
    let box=$('runtimeError');
    if(t.runtime_exit&&t.runtime_exit.log_tail){
@@ -1489,17 +1481,12 @@ function updateHud(t){
  $('mx').textContent=fmt(t.x_mm,0)+' мм';$('my').textContent=fmt(t.y_mm,0)+' мм';$('mz').textContent=fmt(t.z_mm,0)+' мм';$('mr').textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';$('mq').textContent=t.quality??'—';
  $('roll').textContent=fmt(t.roll_deg,1)+'°';$('pitch').textContent=fmt(t.pitch_deg,1)+'°';$('yaw').textContent=fmt(t.yaw_deg,1)+'°';
  $('inl').textContent=(t.inliers??'—')+'/'+(t.tracked??'—');$('frame').textContent=t.frame??'—';$('ekf').textContent=t.ekf_valid?'VALID':'NO DATA';
- if($('camX'))$('camX').textContent=t.raw_of_n_mm==null?'—':fmt(t.raw_of_n_mm,1)+' мм';
- if($('camY'))$('camY').textContent=t.raw_of_e_mm==null?'—':fmt(t.raw_of_e_mm,1)+' мм';
- if($('camZ'))$('camZ').textContent='—';
- // A standalone IMU position is not currently published by runtime. Do not label FC EKF as IMU.
- ['imuX','imuY','imuZ'].forEach(id=>{if($(id))$(id).textContent='—'});
- // No camera+IMU fusion position exists yet. Keep the row explicit instead of fabricating a value.
- ['finalX','finalY','finalZ'].forEach(id=>{if($(id))$(id).textContent='—'});
- // Until fusion is implemented, correction uses the only independent metric displacement: WORKED5 X/Y.
- if($('corrX'))$('corrX').textContent=t.raw_of_n_mm==null?'—':fmt(t.raw_of_n_mm,1)+' мм';
- if($('corrY'))$('corrY').textContent=t.raw_of_e_mm==null?'—':fmt(t.raw_of_e_mm,1)+' мм';
- if($('corrZ'))$('corrZ').textContent='—';
+ if($('ekfNE'))$('ekfNE').textContent=fmt(t.x_mm,1)+' / '+fmt(t.y_mm,1)+' мм';
+ if($('ekfDrift'))$('ekfDrift').textContent=fmt(t.ekf_drift_mm,1)+' мм';
+ if($('ekfVel'))$('ekfVel').textContent=fmt((t.vx||0)*1000,1)+' / '+fmt((t.vy||0)*1000,1)+' мм/с';
+ if($('rawNE'))$('rawNE').textContent=t.raw_of_n_mm==null?'—':fmt(t.raw_of_n_mm,1)+' / '+fmt(t.raw_of_e_mm,1)+' мм';
+ if($('rawDrift'))$('rawDrift').textContent=t.raw_of_drift_mm==null?'—':fmt(t.raw_of_drift_mm,1)+' мм';
+ if($('rawVel'))$('rawVel').textContent=t.raw_of_vn==null?'—':fmt(t.raw_of_vn*1000,1)+' / '+fmt(t.raw_of_ve*1000,1)+' мм/с';
  $('sceneXYZ').textContent='X '+fmt((t.x_mm||0)/1000,3)+' · Y '+fmt((t.y_mm||0)/1000,3)+' · Z '+fmt((t.z_mm||0)/1000,3)+' m';
  $('rollNeedle').style.left=(50+clamp(t.roll_deg||0,-45,45)/45*50)+'%';
  $('pitchNeedle').style.left=(50+clamp(t.pitch_deg||0,-45,45)/45*50)+'%';

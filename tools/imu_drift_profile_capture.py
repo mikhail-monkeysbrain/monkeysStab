@@ -17,7 +17,9 @@ def get(url):
 def sample(t, elapsed):
     keys = [
         "imu_dr_amag", "imu_dr_gmag",
+        "imu_raw_ax", "imu_raw_ay", "imu_raw_az",
         "imu_dr_acc_n", "imu_dr_acc_e", "imu_dr_acc_d",
+        "imu_dr_bias_n", "imu_dr_bias_e", "imu_dr_bias_d",
         "imu_dr_vn", "imu_dr_ve", "imu_dr_vd",
         "imu_dr_n_mm", "imu_dr_e_mm", "imu_dr_d_mm",
         "imu_dr_stationary_samples", "imu_dr_stationary",

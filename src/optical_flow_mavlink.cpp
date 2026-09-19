@@ -1,3 +1,9 @@
+// OPENCV_PARALLEL_PROBE_V1 headers
+#include <mutex>
+#include <set>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <time.h>
 // monkeysStab — standalone OpticalFlow MAVLink publisher (migrated from JT-Zero).
 //
 // Production chain: OV9281 -> optical-flow rate -> MAVLink OPTICAL_FLOW -> ArduPilot EKF3.
@@ -14,8 +20,10 @@
 #include "metric_shadow_sync.hpp"
 #include "metric_shadow_range_sync.hpp"
 #include "worked5_estimator.hpp"
+#include "imu_dead_reckoning.hpp"
 
 #include <deque>
+#include <filesystem>
 #include <sstream>
 #include <atomic>
 #include <array>
@@ -209,6 +217,14 @@ struct FlowFcGyro {
   bool valid=false;
 };
 
+struct FlowFcImu {
+  double ax=0,ay=0,az=0;       // HIGHRES_IMU body acceleration, m/s^2
+  double gx=0,gy=0,gz=0;       // HIGHRES_IMU body gyro, rad/s
+  uint64_t time_usec=0;
+  int64_t recv_ns=0;
+  bool valid=false;
+};
+
 struct FlowFcTarget {
   float x=0,y=0,vx=0,vy=0;
   uint16_t type_mask=0;
@@ -242,6 +258,51 @@ struct FlowFc {
   FlowFcLocal local{};
   FlowEkfStatus ekf{};
   FlowFcGyro gyro{};
+  FlowFcImu imu{};
+  imu_dr::State imu_dr_state{};
+
+  // Camera velocity-constraint shadow.
+  // Diagnostic only: never modifies the real imu_dr_state.
+  imu_dr::State imu_camvc_state{};
+  int imu_camvc_stop_samples=0;
+  bool imu_camvc_active=false;
+  uint64_t imu_camvc_activations=0;
+
+  // Shadow-only camera gate for IMU ZUPT diagnostics.
+  double imu_cam_vn=0.0,imu_cam_ve=0.0;
+  int64_t imu_cam_recv_ns=0;
+  bool imu_cam_valid=false;
+
+  // FUSED-V1 event-driven shadow.
+  uint64_t imu_cam_seq=0;
+  double imu_cam_dN=0.0,imu_cam_dE=0.0,imu_cam_dt=0.0;
+
+  // FUSED_V2_CAPTURE_V1
+  // Diagnostic-only time-aligned IMU history for a future V2 bridge.
+  struct FusedV2ImuSample {
+    int64_t recv_ns=0;
+    double pos_n=0.0,pos_e=0.0;
+    double vel_n=0.0,vel_e=0.0;
+  };
+  std::deque<FusedV2ImuSample> fused_v2_imu_history;
+
+  uint64_t fused_v1_seen_cam_seq=0;
+  uint64_t fused_v1_visual_updates=0;
+  uint64_t fused_v1_imu_predictions=0;
+  uint64_t fused_v1_stop_constraints=0;
+  double fused_v1_n=0.0,fused_v1_e=0.0;
+  double fused_v1_vn=0.0,fused_v1_ve=0.0;
+  double fused_v1_vn_hist[5]{};
+  double fused_v1_ve_hist[5]{};
+  int fused_v1_vhist_count=0;
+  int fused_v1_vhist_head=0;
+  bool fused_v1_stationary=false;
+  int fused_v1_stop_confirm=0;
+  bool imu_zupt_cam_fresh=false;
+  bool imu_zupt_cam_stationary=false;
+  bool imu_zupt_shadow=false;
+  uint64_t imu_zupt_shadow_accepts=0;
+  uint64_t imu_zupt_shadow_blocks=0;
   FlowFcTarget target{};
   FlowFcAttTarget att_target{};
   FlowFcOutputs outputs{};
@@ -250,6 +311,7 @@ struct FlowFc {
   uint64_t local_count=0;
   uint64_t ekf_count=0;
   uint64_t gyro_count=0;
+  uint64_t imu_count=0;
   double gyro_sum_x=0,gyro_sum_y=0,gyro_sum_z=0;
   uint64_t gyro_sum_count=0;
   bool armed=false;
@@ -267,6 +329,185 @@ struct FlowFc {
 
   static constexpr uint8_t self_sys=191;
   static constexpr uint8_t self_comp=MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY;
+
+  // FUSED_V2_FRAME_CAPTURE_V1
+  // Snapshot latest causal buffered IMU DR state for every camera frame, including
+  // invalid reason5/reason6 frames. Diagnostic only.
+  void writeFusedV2FrameCapture(const std::string& csvpath,
+                                uint64_t frame,
+                                int64_t cam_ns,
+                                bool production_valid,
+                                int invalid_reason,
+                                int tracked,
+                                int inliers,
+                                double inlier_ratio,
+                                double dt_s){
+    std::lock_guard<std::mutex> l(mu);
+    if(fused_v2_imu_history.empty()) return;
+    // FUSED_V2_CAUSAL_CAPTURE_V1
+    // Realtime-causal lookup: never use an IMU sample newer than this camera frame.
+    auto best=fused_v2_imu_history.end();
+    for(auto it=fused_v2_imu_history.begin();it!=fused_v2_imu_history.end();++it){
+      if(it->recv_ns<=cam_ns && (best==fused_v2_imu_history.end() ||
+                                it->recv_ns>best->recv_ns)){
+        best=it;
+      }
+    }
+    if(best==fused_v2_imu_history.end()) return;
+    static std::ofstream out;
+    static bool header=false;
+    if(!out.is_open()){
+      const std::filesystem::path production_csv_path(csvpath);
+      out.open(production_csv_path.parent_path()/"fused_v2_frame_capture.csv",
+               std::ios::out|std::ios::trunc);
+    }
+    if(!out.is_open()) return;
+    if(!header){
+      out<<"frame,cam_ns,imu_recv_ns,age_ms,production_valid,invalid_reason,"
+           "tracked,inliers,inlier_ratio,dt_s,imu_n_m,imu_e_m,imu_vn,imu_ve\n";
+      header=true;
+    }
+    out<<frame<<','<<cam_ns<<','<<best->recv_ns<<','
+       <<(cam_ns-best->recv_ns)*1e-6<<','
+       <<(production_valid?1:0)<<','<<invalid_reason<<','
+       <<tracked<<','<<inliers<<','<<inlier_ratio<<','<<dt_s<<','
+       <<best->pos_n<<','<<best->pos_e<<','<<best->vel_n<<','<<best->vel_e<<'\n';
+    out.flush();
+  }
+
+  // FUSED_V2_REALTIME_SHADOW_V1
+  // Frozen policy, identical to tools/analyze_fused_v2_full_shadow.py:
+  // BAD      = eligible && ratio < 0.50 && inliers < 100
+  // RECOVER  = two consecutive eligible frames with ratio > 0.70 && inliers >= 100
+  // pre-roll = 150 ms
+  // IMU      = latest causal sample (recv_ns <= camera monotonic timestamp)
+  //
+  // Diagnostic shadow only. It never changes WORKED5, FUSED-V1 or MAVLink output.
+  struct FusedV2RtSnap {
+    uint64_t frame=0;
+    int64_t cam_ns=0;
+    double shadow_n=0.0,shadow_e=0.0;
+    double imu_n=0.0,imu_e=0.0;
+  };
+  std::deque<FusedV2RtSnap> fused_v2_rt_history;
+  double fused_v2_rt_n=0.0,fused_v2_rt_e=0.0;
+  uint64_t fused_v2_rt_last_cam_seq=0;
+  bool fused_v2_rt_bridge=false;
+  int fused_v2_rt_good_streak=0;
+  uint64_t fused_v2_rt_events=0;
+  uint64_t fused_v2_rt_anchor_frame=0,fused_v2_rt_bad_frame=0;
+  double fused_v2_rt_base_n=0.0,fused_v2_rt_base_e=0.0;
+  double fused_v2_rt_base_imu_n=0.0,fused_v2_rt_base_imu_e=0.0;
+
+  void updateFusedV2RealtimeShadow(const std::string& csvpath,
+                                   uint64_t frame,
+                                   int64_t cam_ns,
+                                   bool production_valid,
+                                   int invalid_reason,
+                                   int tracked,
+                                   int inliers,
+                                   double inlier_ratio,
+                                   double dt_s){
+    std::lock_guard<std::mutex> l(mu);
+    if(fused_v2_imu_history.empty()) return;
+
+    // Strictly causal IMU lookup: never use a sample from the future.
+    auto imu_it=fused_v2_imu_history.end();
+    for(auto it=fused_v2_imu_history.begin();it!=fused_v2_imu_history.end();++it){
+      if(it->recv_ns<=cam_ns &&
+         (imu_it==fused_v2_imu_history.end() || it->recv_ns>imu_it->recv_ns))
+        imu_it=it;
+    }
+    if(imu_it==fused_v2_imu_history.end()) return;
+
+    // Consume every unique WORKED5 event exactly once. While bridging, the event
+    // is deliberately consumed but not added: offline shadow removes the same
+    // WORKED5 increments from (anchor,recovery].
+    bool new_w5=false;
+    double w5_dn=0.0,w5_de=0.0;
+    if(imu_cam_seq!=fused_v2_rt_last_cam_seq){
+      fused_v2_rt_last_cam_seq=imu_cam_seq;
+      if(imu_cam_valid){
+        new_w5=true;
+        w5_dn=imu_cam_dN;
+        w5_de=imu_cam_dE;
+      }
+    }
+
+    const bool eligible=(dt_s>0.0 && tracked>=20);
+    const bool is_bad=(eligible && inlier_ratio<0.50 && inliers<100);
+    const bool is_good=(eligible && inlier_ratio>0.70 && inliers>=100);
+
+    // Healthy mode follows frozen WORKED5 exactly.
+    if(!fused_v2_rt_bridge && new_w5){
+      fused_v2_rt_n+=w5_dn;
+      fused_v2_rt_e+=w5_de;
+    }
+
+    if(!fused_v2_rt_bridge && is_bad){
+      const int64_t target=cam_ns-150000000LL;
+      auto a=fused_v2_rt_history.end();
+      for(auto it=fused_v2_rt_history.begin();it!=fused_v2_rt_history.end();++it)
+        if(it->cam_ns<=target) a=it;
+
+      if(a!=fused_v2_rt_history.end()){
+        fused_v2_rt_bridge=true;
+        fused_v2_rt_good_streak=0;
+        ++fused_v2_rt_events;
+        fused_v2_rt_anchor_frame=a->frame;
+        fused_v2_rt_bad_frame=frame;
+        fused_v2_rt_base_n=a->shadow_n;
+        fused_v2_rt_base_e=a->shadow_e;
+        fused_v2_rt_base_imu_n=a->imu_n;
+        fused_v2_rt_base_imu_e=a->imu_e;
+        // Rewind the already accumulated visual trajectory to the frozen
+        // 150-ms anchor, then replace it with causal IMU displacement.
+        fused_v2_rt_n=fused_v2_rt_base_n+(imu_it->pos_n-fused_v2_rt_base_imu_n);
+        fused_v2_rt_e=fused_v2_rt_base_e+(imu_it->pos_e-fused_v2_rt_base_imu_e);
+      }
+    }else if(fused_v2_rt_bridge){
+      fused_v2_rt_n=fused_v2_rt_base_n+(imu_it->pos_n-fused_v2_rt_base_imu_n);
+      fused_v2_rt_e=fused_v2_rt_base_e+(imu_it->pos_e-fused_v2_rt_base_imu_e);
+      if(is_good) ++fused_v2_rt_good_streak;
+      else fused_v2_rt_good_streak=0;
+      if(fused_v2_rt_good_streak>=2){
+        // Recovery confirmation frame is still covered by IMU. Future WORKED5
+        // events resume from the next processed frame.
+        fused_v2_rt_bridge=false;
+        fused_v2_rt_good_streak=0;
+      }
+    }
+
+    fused_v2_rt_history.push_back({
+      frame,cam_ns,fused_v2_rt_n,fused_v2_rt_e,imu_it->pos_n,imu_it->pos_e});
+    while(!fused_v2_rt_history.empty() &&
+          cam_ns-fused_v2_rt_history.front().cam_ns>500000000LL)
+      fused_v2_rt_history.pop_front();
+
+    static std::ofstream out;
+    static bool header=false;
+    if(!out.is_open()){
+      const std::filesystem::path production_csv_path(csvpath);
+      out.open(production_csv_path.parent_path()/"fused_v2_realtime_shadow.csv",
+               std::ios::out|std::ios::trunc);
+    }
+    if(!out.is_open()) return;
+    if(!header){
+      out<<"frame,cam_ns,production_valid,invalid_reason,tracked,inliers,inlier_ratio,dt_s,"
+           "new_w5,w5_dN_m,w5_dE_m,bridge,event_count,anchor_frame,bad_frame,"
+           "imu_age_ms,shadow_n_m,shadow_e_m,shadow_endpoint_m\n";
+      header=true;
+    }
+    out<<frame<<','<<cam_ns<<','<<(production_valid?1:0)<<','<<invalid_reason<<','
+       <<tracked<<','<<inliers<<','<<inlier_ratio<<','<<dt_s<<','
+       <<(new_w5?1:0)<<','<<w5_dn<<','<<w5_de<<','
+       <<(fused_v2_rt_bridge?1:0)<<','<<fused_v2_rt_events<<','
+       <<fused_v2_rt_anchor_frame<<','<<fused_v2_rt_bad_frame<<','
+       <<(cam_ns-imu_it->recv_ns)*1e-6<<','
+       <<fused_v2_rt_n<<','<<fused_v2_rt_e<<','
+       <<std::hypot(fused_v2_rt_n,fused_v2_rt_e)<<'\n';
+    out.flush();
+  }
 
   ~FlowFc(){ stop(); }
 
@@ -378,6 +619,7 @@ struct FlowFc {
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_LOCAL_POSITION_NED,20);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_EKF_STATUS_REPORT,5);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_ATTITUDE,100);
+      requestRate(fd,sys,comp,MAVLINK_MSG_ID_HIGHRES_IMU,50);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_POSITION_TARGET_LOCAL_NED,20);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_ATTITUDE_TARGET,20);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_SERVO_OUTPUT_RAW,20);
@@ -439,6 +681,120 @@ struct FlowFc {
                 attitude_history.pop_front();
               gyro_sum_x+=q.rollspeed; gyro_sum_y+=q.pitchspeed; gyro_sum_z+=q.yawspeed;
               ++gyro_sum_count;
+            } else if(m.msgid==MAVLINK_MSG_ID_HIGHRES_IMU){
+              mavlink_highres_imu_t q{}; mavlink_msg_highres_imu_decode(&m,&q);
+              std::lock_guard<std::mutex> l(mu);
+              imu.ax=q.xacc; imu.ay=q.yacc; imu.az=q.zacc;
+              imu.gx=q.xgyro; imu.gy=q.ygyro; imu.gz=q.zgyro;
+              imu.time_usec=q.time_usec; imu.recv_ns=monoNs(); imu.valid=true; ++imu_count;
+
+              // Diagnostic only: compare FC timestamps and RPi receive timing.
+              // Does not change IMU DR inputs or integration.
+              if(gyro.valid && (imu_count % 25u)==0u) {
+                const double highres_ms=static_cast<double>(q.time_usec)*1e-3;
+                const double fc_delta_ms=
+                    highres_ms-static_cast<double>(gyro.time_boot_ms);
+                const double recv_delta_ms=
+                    (imu.recv_ns-gyro.recv_ns)*1e-6;
+
+                const double dt_s=fc_delta_ms*1e-3;
+                const double droll_deg=
+                    gyro.x*dt_s*180.0/M_PI;
+                const double dpitch_deg=
+                    gyro.y*dt_s*180.0/M_PI;
+
+                // First-order gravity projection caused by attitude age.
+                const double g_roll_mps2=
+                    9.80665*std::sin(std::abs(droll_deg)*M_PI/180.0);
+                const double g_pitch_mps2=
+                    9.80665*std::sin(std::abs(dpitch_deg)*M_PI/180.0);
+
+                std::cerr<<"IMU_TIME"
+                         <<" fc_dt_ms="<<fc_delta_ms
+                         <<" recv_dt_ms="<<recv_delta_ms
+                         <<" rateRP_deg_s=["
+                         <<gyro.x*180.0/M_PI<<","
+                         <<gyro.y*180.0/M_PI<<"]"
+                         <<" dRP_deg=["
+                         <<droll_deg<<","
+                         <<dpitch_deg<<"]"
+                         <<" gerrRP_mps2=["
+                         <<g_roll_mps2<<","
+                         <<g_pitch_mps2<<"]\\n";
+              }
+
+              if(gyro.valid) {
+                imu_dr::update(imu_dr_state,q.xacc,q.yacc,q.zacc,q.xgyro,q.ygyro,q.zgyro,
+                               gyro.roll,gyro.pitch,gyro.yaw,q.time_usec,
+                (imu_cam_valid && (monoNs()-imu_cam_recv_ns)>=0 &&
+                 (monoNs()-imu_cam_recv_ns)<100000000LL &&
+                 std::hypot(imu_cam_vn,imu_cam_ve)<0.01));
+      // FUSED-V1 IMU velocity prediction. Position remains WORKED5-only in V1.
+      if(imu_dr_state.calibrated &&
+         imu_dr_state.diag_dt>0.0 &&
+         imu_dr_state.diag_dt<0.1){
+        fused_v1_vn += imu_dr_state.acc_n * imu_dr_state.diag_dt;
+        fused_v1_ve += imu_dr_state.acc_e * imu_dr_state.diag_dt;
+        ++fused_v1_imu_predictions;
+      }
+      // FUSED_V2_CAPTURE_V1: keep 500 ms of the exact DR state, keyed
+      // by RPi monotonic receive time. No production state is modified.
+      if(imu_dr_state.calibrated){
+        const int64_t v2_now_ns=imu.recv_ns;
+        fused_v2_imu_history.push_back({
+          v2_now_ns,
+          imu_dr_state.pos_n,imu_dr_state.pos_e,
+          imu_dr_state.vel_n,imu_dr_state.vel_e});
+        while(!fused_v2_imu_history.empty() &&
+              v2_now_ns-fused_v2_imu_history.front().recv_ns>500000000LL)
+          fused_v2_imu_history.pop_front();
+      }
+              const int64_t zupt_now_ns=monoNs();
+              const double cam_age_ms=imu_cam_valid
+                ? (zupt_now_ns-imu_cam_recv_ns)*1e-6 : 1e9;
+              imu_zupt_cam_fresh=imu_cam_valid && cam_age_ms>=0.0 && cam_age_ms<100.0;
+              const double cam_speed=std::hypot(imu_cam_vn,imu_cam_ve);
+              imu_zupt_cam_stationary=imu_zupt_cam_fresh && cam_speed<0.01;
+              const bool imu_stationary=imu_dr_state.diag_stationary;
+
+      // FUSED-V1 horizontal stop constraint is maintained by unique
+      // WORKED5 events in the camera producer below.
+      if(fused_v1_stationary){
+        fused_v1_vn=0.0;
+        fused_v1_ve=0.0;
+      }
+
+              // Independent DR shadow from the same IMU sample.
+              // Internal IMU ZUPT is disabled for this shadow.
+              imu_dr::update(
+                  imu_camvc_state,
+                  q.xacc,q.yacc,q.zacc,
+                  q.xgyro,q.ygyro,q.zgyro,
+                  gyro.roll,gyro.pitch,gyro.yaw,
+                  q.time_usec,
+                  false);
+
+              // Three consecutive fresh WORKED5 stationary observations
+              // confirm horizontal zero velocity in the shadow only.
+              if(imu_zupt_cam_stationary)
+                ++imu_camvc_stop_samples;
+              else
+                imu_camvc_stop_samples=0;
+
+              const bool camvc_now=imu_camvc_stop_samples>=3;
+              if(camvc_now){
+                if(!imu_camvc_active) ++imu_camvc_activations;
+                imu_camvc_state.vel_n=0.0;
+                imu_camvc_state.vel_e=0.0;
+              }
+              imu_camvc_active=camvc_now;
+
+              imu_zupt_shadow=imu_stationary && imu_zupt_cam_stationary;
+              if(imu_stationary){
+                if(imu_zupt_shadow) ++imu_zupt_shadow_accepts;
+                else ++imu_zupt_shadow_blocks;
+              }
+              }
             } else if(m.msgid==MAVLINK_MSG_ID_LOCAL_POSITION_NED){
               mavlink_local_position_ned_t q{}; mavlink_msg_local_position_ned_decode(&m,&q);
               std::lock_guard<std::mutex> l(mu);
@@ -696,6 +1052,33 @@ struct FlowStep {
 FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const CameraCalib& calib,
                          double prev_camera_height_m=0.0,double curr_camera_height_m=0.0,
                          const cv::Matx33d* C1_R_C0=nullptr,double dr_interp_gap_ms=-1.0){
+  // OPENCV_PARALLEL_PROBE_V1 -- one-shot diagnostic from the production flow thread.
+  {
+    static std::once_flag jtzero_parallel_probe_once;
+    std::call_once(jtzero_parallel_probe_once, [] {
+      std::mutex mu;
+      std::set<long> tids;
+      cv::parallel_for_(cv::Range(0, 4096), [&](const cv::Range& r) {
+        const long tid = static_cast<long>(::syscall(SYS_gettid));
+        {
+          std::lock_guard<std::mutex> lk(mu);
+          tids.insert(tid);
+        }
+        volatile double sink = 0.0;
+        for (int i = r.start; i < r.end; ++i)
+          for (int k = 0; k < 4000; ++k)
+            sink += (i + 1) * 1e-12 + k * 1e-15;
+        (void)sink;
+      }, 64.0);
+      std::cerr << "OPENCV_PARALLEL_PROBE workers=" << tids.size()
+                << " configured_threads=" << cv::getNumThreads()
+                << " cpus=" << cv::getNumberOfCPUs()
+                << " tids=";
+      for (long tid : tids) std::cerr << tid << ",";
+      std::cerr << "\n";
+    });
+  }
+
   FlowStep o;
   if(prev.empty()||curr.empty()||!(dt>0&&dt<0.2)){ o.invalid_reason=1; return o; }
 
@@ -769,11 +1152,30 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
   // 4-parameter fit below estimates image scale from tracked features instead.
   o.lk_height_scale=1.0;
 
+  // LK_RUNTIME_TIMING_V1
+  // Diagnostic only. Production LK inputs, parameters and output are unchanged.
+  timespec lk_thr0{}, lk_thr1{}, lk_proc0{}, lk_proc1{};
+  clock_gettime(CLOCK_THREAD_CPUTIME_ID,&lk_thr0);
+  clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&lk_proc0);
   const int64_t t_lk0=monoNs();
   cv::calcOpticalFlowPyrLK(prev,curr,p0,p1,st,err,{21,21},3,
                            cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,30,0.01),
                            0,1e-4);
   o.t_lk_ms=(monoNs()-t_lk0)*1e-6;
+  clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&lk_proc1);
+  clock_gettime(CLOCK_THREAD_CPUTIME_ID,&lk_thr1);
+  const auto lk_ts_ms=[](const timespec& a,const timespec& b){
+    return double(b.tv_sec-a.tv_sec)*1000.0+
+           double(b.tv_nsec-a.tv_nsec)/1000000.0;
+  };
+  const double lk_thread_cpu_ms=lk_ts_ms(lk_thr0,lk_thr1);
+  const double lk_process_cpu_ms=lk_ts_ms(lk_proc0,lk_proc1);
+  if(o.t_lk_ms>20.0){
+    std::cerr<<"LK_RUNTIME wall_ms="<<o.t_lk_ms
+             <<" thread_cpu_ms="<<lk_thread_cpu_ms
+             <<" process_cpu_ms="<<lk_process_cpu_ms
+             <<" features="<<p0.size()<<"\n";
+  }
   std::vector<cv::Point2f> a,b;
   for(size_t i=0;i<p0.size();++i){if(st[i]){a.push_back(p0[i]);b.push_back(p1[i]);}}
   o.tracked=(int)a.size();
@@ -1148,6 +1550,12 @@ std::string ekfFlagsText(uint16_t f){
 
 #ifndef JTZERO_OPTFLOW_LIBRARY
 int main(int argc,char** argv){
+  // OPENCV_RUNTIME_DIAG_V1 -- startup diagnostics only.
+  std::cerr << "OPENCV_RUNTIME threads=" << cv::getNumThreads()
+            << " cpus=" << cv::getNumberOfCPUs()
+            << " optimized=" << (cv::useOptimized() ? 1 : 0)
+            << "\n";
+
   if(argc<7){
     std::cerr<<"Использование: "<<argv[0]
              <<" <camera> <luna> <fc> <csv> <camera_yaml> <focal_scale>\n";
@@ -1328,7 +1736,7 @@ int main(int argc,char** argv){
         std::cerr<<", D=same B inliers + adaptive structure-tensor observability weights";
       std::cerr<<"; shadow arms diagnostic only and NEVER sent to FC\n";
     }
-    cv::setNumThreads(1);
+    cv::setNumThreads(4);
     std::signal(SIGINT,onSignal); std::signal(SIGTERM,onSignal);
     if(!dataset_dir.empty()) dataset_start_ns=monoNs();
 
@@ -1643,6 +2051,39 @@ int main(int argc,char** argv){
       // (~0.4-0.8 с в плохом прогоне), а ArduPilot компенсирует такой старый
       // flow СВЕЖИМ gyro. Поэтому всегда выкидываем промежуточные queued
       // кадры и обрабатываем только самый свежий доступный кадр.
+      // FPS FORENSIC: считаем все DQBUF, выбранные newest кадры, decode и WORKED5.
+      static uint64_t fps_dqbuf=0, fps_selected=0, fps_queue_drop=0;
+      static uint64_t fps_decoded=0, fps_w5_attempt=0, fps_w5_valid=0;
+      static int64_t fps_t0_ns=monoNs();
+      static int64_t fps_prev_selected_ts=0;
+      static double fps_dt_sum_ms=0.0, fps_dt_max_ms=0.0;
+      static uint64_t fps_dt_n=0;
+
+      // W5 WINDOW FORENSIC: локальное окно 250 ms, чтобы короткий провал
+      // не растворялся в cumulative FPS_FORENSIC.
+      static uint64_t w5w_dqbuf=0, w5w_selected=0, w5w_drop=0;
+      static uint64_t w5w_decoded=0, w5w_attempt=0, w5w_valid=0;
+      static uint64_t w5w_dt_n=0;
+      static double w5w_dt_sum_ms=0.0, w5w_dt_max_ms=0.0;
+      static int64_t w5w_t0_ns=monoNs();
+
+      // LK_FORENSIC_CAPTURE_V1: compressed MJPEG ring in RAM.
+      // Diagnostic only: no WORKED5/LK parameters or measurements are changed.
+      struct LkForensicFrame {
+        uint64_t frame=0;
+        int64_t mono_ns=0, v4l2_ns=0, dq_ns=0;
+        uint32_t v4l2_flags=0;
+        std::vector<uint8_t> jpeg;
+      };
+      static std::deque<LkForensicFrame> lkfc_ring;
+      static bool lkfc_triggered=false;
+      static int64_t lkfc_trigger_ns=0;
+      static uint64_t lkfc_trigger_frame=0;
+      static constexpr int64_t kLkfcPreNs=2000000000LL;
+      static constexpr int64_t kLkfcPostNs=2000000000LL;
+      static constexpr double kLkfcTriggerMs=20.0;
+      static uint64_t lkfc_seq=0;
+
       std::vector<uint8_t> latest_jpeg;
       int64_t ts=0;
       int64_t selected_v4l2_ts_ns=0;
@@ -1655,6 +2096,7 @@ int main(int argc,char** argv){
           if(errno==EAGAIN)break;
           fail("VIDIOC_DQBUF");
         }
+        ++fps_dqbuf; ++w5w_dqbuf;
         const int64_t bts=(int64_t)b.timestamp.tv_sec*1000000000LL+(int64_t)b.timestamp.tv_usec*1000LL;
         // UVC/V4L2 reports a monotonic frame timestamp on this production
         // camera (verified from V4L2 buffer flags and measured against DQBUF).
@@ -1674,6 +2116,17 @@ int main(int argc,char** argv){
       }
       if(latest_jpeg.empty()) continue;
       camera_queue_dropped_total += camera_queue_dropped;
+      ++fps_selected; ++w5w_selected;
+      fps_queue_drop += camera_queue_dropped;
+      w5w_drop += camera_queue_dropped;
+      if(fps_prev_selected_ts>0 && ts>fps_prev_selected_ts){
+        const double dms=(ts-fps_prev_selected_ts)*1e-6;
+        fps_dt_sum_ms+=dms;
+        fps_dt_max_ms=std::max(fps_dt_max_ms,dms);
+        ++fps_dt_n;
+        w5w_dt_sum_ms+=dms; w5w_dt_max_ms=std::max(w5w_dt_max_ms,dms); ++w5w_dt_n;
+      }
+      fps_prev_selected_ts=ts;
 
       const int64_t now=monoNs();
 
@@ -1704,7 +2157,48 @@ int main(int argc,char** argv){
       cv::Mat raw(1,(int)latest_jpeg.size(),CV_8UC1,latest_jpeg.data());
       cv::Mat gray=cv::imdecode(raw,cv::IMREAD_GRAYSCALE);
       if(gray.empty()) continue;
+      ++fps_decoded; ++w5w_decoded;
       ++frame;
+
+      // Preserve only successfully decoded selected MJPEG frames. frame now
+      // exactly matches the production CSV frame counter.
+      lkfc_ring.push_back(LkForensicFrame{frame,ts,selected_v4l2_ts_ns,
+                                          selected_dq_mono_ns,selected_v4l2_flags,
+                                          latest_jpeg});
+      while(lkfc_ring.size()>1 && ts-lkfc_ring.front().mono_ns>kLkfcPreNs+kLkfcPostNs)
+        lkfc_ring.pop_front();
+
+        if(now-w5w_t0_ns>=250000000LL){
+          const double wsec=(now-w5w_t0_ns)*1e-9;
+          std::cerr<<"W5_WINDOW"
+                   <<" dqbuf_hz="<<(w5w_dqbuf/wsec)
+                   <<" selected_hz="<<(w5w_selected/wsec)
+                   <<" dropped_hz="<<(w5w_drop/wsec)
+                   <<" decoded_hz="<<(w5w_decoded/wsec)
+                   <<" attempt_hz="<<(w5w_attempt/wsec)
+                   <<" valid_hz="<<(w5w_valid/wsec)
+                   <<" valid_ratio="<<(w5w_attempt?double(w5w_valid)/double(w5w_attempt):0.0)
+                   <<" dt_mean_ms="<<(w5w_dt_n?w5w_dt_sum_ms/w5w_dt_n:0.0)
+                   <<" dt_max_ms="<<w5w_dt_max_ms
+                   <<"\n";
+          w5w_dqbuf=w5w_selected=w5w_drop=w5w_decoded=w5w_attempt=w5w_valid=0;
+          w5w_dt_n=0; w5w_dt_sum_ms=0.0; w5w_dt_max_ms=0.0;
+          w5w_t0_ns=now;
+        }
+
+        if(now-fps_t0_ns>=2000000000LL){
+          const double sec=(now-fps_t0_ns)*1e-9;
+          std::cerr<<"FPS_FORENSIC"
+                   <<" dqbuf_hz="<<(fps_dqbuf/sec)
+                   <<" selected_hz="<<(fps_selected/sec)
+                   <<" dropped_hz="<<(fps_queue_drop/sec)
+                   <<" decoded_hz="<<(fps_decoded/sec)
+                   <<" w5_attempt_hz="<<(fps_w5_attempt/sec)
+                   <<" w5_valid_hz="<<(fps_w5_valid/sec)
+                   <<" selected_dt_mean_ms="<<(fps_dt_n?fps_dt_sum_ms/fps_dt_n:0.0)
+                   <<" selected_dt_max_ms="<<fps_dt_max_ms
+                   <<"\n";
+        }
 
         double lm=0; int strength=0; int64_t lns=0;
         const bool hl=luna.latest(&lm,&strength,&lns);
@@ -1756,6 +2250,45 @@ int main(int argc,char** argv){
           prev,gray,dt,calib,
           prev_camera_height_valid?prev_camera_height_m:0.0,
           current_camera_height_valid?current_camera_height_m:0.0);
+
+        // Trigger on production forward-LK wall time.  Do not use valid=0:
+        // the observed collapse begins before the final validity gate fails.
+        if(!lkfc_triggered && s.t_lk_ms>kLkfcTriggerMs){
+          lkfc_triggered=true;
+          lkfc_trigger_ns=ts;
+          lkfc_trigger_frame=frame;
+          std::cerr<<"LK_FORENSIC TRIGGER frame="<<frame
+                   <<" lk_ms="<<s.t_lk_ms<<" dt_ms="<<(dt*1000.0)<<"\n";
+        }
+        if(lkfc_triggered && ts-lkfc_trigger_ns>=kLkfcPostNs){
+          const auto dir=std::filesystem::path("/tmp")/
+            ("monkeysstab_lk_forensic_"+std::to_string(++lkfc_seq));
+          std::filesystem::create_directories(dir);
+          std::ofstream meta(dir/"frames.csv");
+          meta<<"seq,frame,mono_ns,v4l2_ns,dq_ns,v4l2_flags,jpeg\n";
+          size_t n=0;
+          for(const auto& q:lkfc_ring){
+            if(q.mono_ns < lkfc_trigger_ns-kLkfcPreNs ||
+               q.mono_ns > lkfc_trigger_ns+kLkfcPostNs) continue;
+            const std::string name="frame_"+std::to_string(q.frame)+".jpg";
+            std::ofstream jf(dir/name,std::ios::binary);
+            jf.write(reinterpret_cast<const char*>(q.jpeg.data()),
+                     static_cast<std::streamsize>(q.jpeg.size()));
+            meta<<n++<<','<<q.frame<<','<<q.mono_ns<<','<<q.v4l2_ns<<','
+                <<q.dq_ns<<','<<q.v4l2_flags<<','<<name<<"\n";
+          }
+          meta.flush();
+          std::ofstream trig(dir/"trigger.txt");
+          trig<<"trigger_frame="<<lkfc_trigger_frame<<"\n"
+              <<"trigger_mono_ns="<<lkfc_trigger_ns<<"\n"
+              <<"threshold_lk_ms="<<kLkfcTriggerMs<<"\n";
+          trig.flush();
+          std::cerr<<"LK_FORENSIC SAVED dir="<<dir.string()
+                   <<" frames="<<n<<" trigger_frame="<<lkfc_trigger_frame<<"\n";
+          lkfc_triggered=false;
+          lkfc_ring.clear();
+        }
+
         web_live.sendPreview(now,gray,s.inlier_points,g_feature_roi);
 
         // Metric odometry shadow. This path is diagnostic only: it consumes
@@ -1903,6 +2436,164 @@ int main(int argc,char** argv){
         FlowFcGyro fg{}; double fg_age=1e9; uint64_t fg_samples=0;
         const bool fg_ok=fc.consumeGyroAverage(&fg,&fg_age,&fg_samples);
 
+        // WORKED5_REASON5_SHADOW_V1
+        // Diagnostic C arms only. Production validity and frozen WORKED5 are untouched.
+        // Re-fit the exact production RANSAC inliers on reason5 frames with lower
+        // diagnostic-only point-count floors: 15, 10, 7.
+        {
+          static std::ofstream r5_csv;
+          static bool r5_header=false;
+          static double c15_n=0.0,c15_e=0.0,c10_n=0.0,c10_e=0.0,c7_n=0.0,c7_e=0.0;
+          if(!r5_csv.is_open()){
+            const std::filesystem::path production_csv_path(csvpath);
+            r5_csv.open(production_csv_path.parent_path()/"worked5_reason5_shadow.csv",
+                        std::ios::out|std::ios::trunc);
+          }
+          if(r5_csv.is_open() && !r5_header){
+            r5_csv<<"frame,mono_ns,production_valid,invalid_reason,pairs,dt_s,hcam_m,"
+                     "c15_valid,c15_dN_m,c15_dE_m,c15_pN_m,c15_pE_m,"
+                     "c10_valid,c10_dN_m,c10_dE_m,c10_pN_m,c10_pE_m,"
+                     "c7_valid,c7_dN_m,c7_dE_m,c7_pN_m,c7_pE_m\n";
+            r5_header=true;
+          }
+
+          double h=0.0;
+          if(bench_true_camera_height>0.0) h=bench_true_camera_height;
+          else if(current_camera_height_valid) h=current_camera_height_m;
+          const int np=(int)std::min(s.metric_prev_points.size(),s.metric_curr_points.size());
+
+          auto fit=[&](int minpts, double& dN, double& dE)->bool{
+            dN=dE=0.0;
+            if(s.invalid_reason!=5 || !fg_ok || np<minpts ||
+               !(dt>0.0 && dt<0.2) || !(h>0.02) || !std::isfinite(h)) return false;
+
+            cv::Mat K=calib.K.clone();
+            const double k=worked5::kFocalScale/focal_scale;
+            K.at<double>(0,0)*=k; K.at<double>(1,1)*=k;
+            std::vector<cv::Point2f> a,b;
+            cv::undistortPoints(s.metric_prev_points,a,K,calib.D);
+            cv::undistortPoints(s.metric_curr_points,b,K,calib.D);
+            if(a.size()!=b.size() || (int)a.size()<minpts) return false;
+
+            cv::Mat A((int)a.size()*2,4,CV_64F), rhs((int)a.size()*2,1,CV_64F);
+            for(size_t i=0;i<a.size();++i){
+              const double x=a[i].x,y=a[i].y;
+              const double du=b[i].x-a[i].x,dv=b[i].y-a[i].y;
+              const int r=(int)(2*i);
+              A.at<double>(r,0)=1.0; A.at<double>(r,1)=0.0;
+              A.at<double>(r,2)=x;   A.at<double>(r,3)=-y;
+              rhs.at<double>(r,0)=du;
+              A.at<double>(r+1,0)=0.0; A.at<double>(r+1,1)=1.0;
+              A.at<double>(r+1,2)=y;   A.at<double>(r+1,3)=x;
+              rhs.at<double>(r+1,0)=dv;
+            }
+            cv::Mat sol;
+            if(!cv::solve(A,rhs,sol,cv::DECOMP_SVD) || sol.rows!=4) return false;
+            const double du=sol.at<double>(0,0), dv=sol.at<double>(1,0);
+            const double dx=dv*h, dy=-du*h;
+            if(!std::isfinite(dx)||!std::isfinite(dy)) return false;
+
+            const double cr=std::cos(fg.roll),sr=std::sin(fg.roll);
+            const double cp=std::cos(fg.pitch),sp=std::sin(fg.pitch);
+            const double cy=std::cos(fg.yaw),sy=std::sin(fg.yaw);
+            const double r00=cy*cp, r01=cy*sp*sr-sy*cr;
+            const double r10=sy*cp, r11=sy*sp*sr+cy*cr;
+            dN=r00*dx+r01*dy; dE=r10*dx+r11*dy;
+            return std::isfinite(dN)&&std::isfinite(dE);
+          };
+
+          double n15=0,e15=0,n10=0,e10=0,n7=0,e7=0;
+          const bool v15=fit(15,n15,e15);
+          const bool v10=fit(10,n10,e10);
+          const bool v7 =fit(7,n7,e7);
+          if(v15){c15_n+=n15;c15_e+=e15;}
+          if(v10){c10_n+=n10;c10_e+=e10;}
+          if(v7 ){c7_n +=n7; c7_e +=e7;}
+
+          if(r5_csv.is_open()){
+            r5_csv<<frame<<','<<ts<<','<<(s.valid?1:0)<<','<<s.invalid_reason<<','
+                  <<np<<','<<dt<<','<<h<<','
+                  <<(v15?1:0)<<','<<n15<<','<<e15<<','<<c15_n<<','<<c15_e<<','
+                  <<(v10?1:0)<<','<<n10<<','<<e10<<','<<c10_n<<','<<c10_e<<','
+                  <<(v7?1:0)<<','<<n7<<','<<e7<<','<<c7_n<<','<<c7_e<<'\n';
+            r5_csv.flush();
+          }
+        }
+
+        // WORKED5_MAG_SHADOW_V1
+        // Diagnostic B arm only. Production s.valid, MAVLink and WORKED5-A are untouched.
+        // Reuse the exact production RANSAC correspondences before the mag<4 gate.
+        {
+          static double mag_shadow_n=0.0, mag_shadow_e=0.0;
+          static uint64_t mag_shadow_attempts=0, mag_shadow_valid=0;
+          static std::ofstream mag_shadow_csv;
+          static bool mag_shadow_header=false;
+
+          if(!mag_shadow_csv.is_open()){
+            const std::filesystem::path production_csv_path(csvpath);
+            mag_shadow_csv.open(
+              production_csv_path.parent_path() / "worked5_mag_shadow.csv",
+              std::ios::out | std::ios::trunc);
+          }
+          if(mag_shadow_csv.is_open() && !mag_shadow_header){
+            mag_shadow_csv
+              <<"frame,mono_ns,production_valid,invalid_reason,pairs,dt_s,hcam_m,"
+              <<"shadow_attempted,shadow_valid,dN_m,dE_m,pN_m,pE_m,"
+              <<"du_norm,dv_norm,dx_m,dy_m\n";
+            mag_shadow_header=true;
+          }
+
+          double shadow_hcam=0.0;
+          if(bench_true_camera_height>0.0) shadow_hcam=bench_true_camera_height;
+          else if(current_camera_height_valid) shadow_hcam=current_camera_height_m;
+
+          const int shadow_pairs=(int)std::min(
+            s.metric_prev_points.size(),s.metric_curr_points.size());
+          const bool shadow_attempt =
+            fg_ok && dt>0.0 && dt<0.2 &&
+            shadow_hcam>0.02 && std::isfinite(shadow_hcam) &&
+            shadow_pairs>=20;
+
+          bool shadow_valid=false;
+          double shadow_dN=0.0,shadow_dE=0.0;
+          worked5::Step shadow_w5{};
+          if(shadow_attempt){
+            ++mag_shadow_attempts;
+            shadow_w5=worked5::estimate(
+              s.metric_prev_points,s.metric_curr_points,
+              calib.K,focal_scale,calib.D,shadow_hcam,dt);
+            if(shadow_w5.valid){
+              const double cr=std::cos(fg.roll),  sr=std::sin(fg.roll);
+              const double cp=std::cos(fg.pitch), sp=std::sin(fg.pitch);
+              const double cy=std::cos(fg.yaw),   sy=std::sin(fg.yaw);
+              const double r00=cy*cp;
+              const double r01=cy*sp*sr-sy*cr;
+              const double r10=sy*cp;
+              const double r11=sy*sp*sr+cy*cr;
+              shadow_dN=r00*shadow_w5.dx_m+r01*shadow_w5.dy_m;
+              shadow_dE=r10*shadow_w5.dx_m+r11*shadow_w5.dy_m;
+              if(std::isfinite(shadow_dN) && std::isfinite(shadow_dE)){
+                shadow_valid=true;
+                ++mag_shadow_valid;
+                mag_shadow_n+=shadow_dN;
+                mag_shadow_e+=shadow_dE;
+              }
+            }
+          }
+
+          if(mag_shadow_csv.is_open()){
+            mag_shadow_csv
+              <<frame<<','<<ts<<','<<(s.valid?1:0)<<','<<s.invalid_reason<<','
+              <<shadow_pairs<<','<<dt<<','<<shadow_hcam<<','
+              <<(shadow_attempt?1:0)<<','<<(shadow_valid?1:0)<<','
+              <<shadow_dN<<','<<shadow_dE<<','
+              <<mag_shadow_n<<','<<mag_shadow_e<<','
+              <<shadow_w5.du_norm<<','<<shadow_w5.dv_norm<<','
+              <<shadow_w5.dx_m<<','<<shadow_w5.dy_m<<'\n';
+            mag_shadow_csv.flush();
+          }
+        }
+
         // Production lever-arm candidate. flow_body_x/y are angular image rates in AP body
         // convention, not linear velocity. For a downward camera, a camera
         // translation [vx,vy] produces approximately [-vy/h,+vx/h].
@@ -2017,6 +2708,7 @@ int main(int argc,char** argv){
             if(pressed && !rc_zero_latched){
               rc_zero_latched=true;
               ++rc_zero_seq;
+        { std::lock_guard<std::mutex> l(fc.mu); imu_dr::reset(fc.imu_dr_state); }
 
               // Reset local diagnostic reference points immediately as well.
               web_raw_n=web_raw_e=0.0;
@@ -2082,6 +2774,7 @@ int main(int argc,char** argv){
           worked5_diag_hcam=hcam;
           if(hcam>0.02 && std::isfinite(hcam)){
             worked5_diag_points=(int)std::min(s.metric_prev_points.size(),s.metric_curr_points.size());
+            ++fps_w5_attempt; ++w5w_attempt;
             const auto w5=worked5::estimate(
               s.metric_prev_points,s.metric_curr_points,
               calib.K,focal_scale,calib.D,hcam,dt);
@@ -2090,6 +2783,7 @@ int main(int argc,char** argv){
             worked5_diag_dx=w5.dx_m;
             worked5_diag_dy=w5.dy_m;
             if(w5.valid){
+              ++fps_w5_valid; ++w5w_valid;
               // Frozen blind convention gives a metric displacement in the
               // camera/body horizontal plane: X=+dv*H, Y=-du*H.  Rotate that
               // already-metric delta into NED using the FC attitude.  No extra
@@ -2112,6 +2806,95 @@ int main(int argc,char** argv){
               web_raw_vn=dN/dt;
               web_raw_ve=dE/dt;
               web_raw_step_valid=true;
+              {
+                std::lock_guard<std::mutex> l(fc.mu);
+                fc.imu_cam_vn=web_raw_vn;
+                fc.imu_cam_ve=web_raw_ve;
+                fc.imu_cam_dN=dN;
+                fc.imu_cam_dE=dE;
+                fc.imu_cam_dt=dt;
+                ++fc.imu_cam_seq;
+                fc.imu_cam_recv_ns=monoNs();
+                fc.imu_cam_valid=true;
+
+                // FUSED_V2_CAPTURE_V1
+                // Capture-only probe: nearest IMU state to this visual event.
+                // This intentionally does NOT alter WORKED5/FUSED-V1.
+                if(!fc.fused_v2_imu_history.empty()){
+                  const int64_t v2_cam_ns=fc.imu_cam_recv_ns;
+                  auto best=fc.fused_v2_imu_history.begin();
+                  int64_t best_abs=std::llabs(best->recv_ns-v2_cam_ns);
+                  for(auto it=fc.fused_v2_imu_history.begin();it!=fc.fused_v2_imu_history.end();++it){
+                    const int64_t d=std::llabs(it->recv_ns-v2_cam_ns);
+                    if(d<best_abs){best=it;best_abs=d;}
+                  }
+                  static std::ofstream v2_capture_csv;
+                  static bool v2_capture_header=false;
+                  if(!v2_capture_csv.is_open()){
+                    const std::filesystem::path production_csv_path(csvpath);
+                    v2_capture_csv.open(production_csv_path.parent_path()/"fused_v2_capture.csv",
+                                        std::ios::out|std::ios::trunc);
+                  }
+                  if(v2_capture_csv.is_open()){
+                    if(!v2_capture_header){
+                      v2_capture_csv<<"cam_seq,cam_recv_ns,imu_recv_ns,age_ms,imu_n_m,imu_e_m,imu_vn,imu_ve,dN_m,dE_m,dt_s\n";
+                      v2_capture_header=true;
+                    }
+                    v2_capture_csv<<fc.imu_cam_seq<<','<<v2_cam_ns<<','<<best->recv_ns<<','
+                      <<(v2_cam_ns-best->recv_ns)*1e-6<<','
+                      <<best->pos_n<<','<<best->pos_e<<','<<best->vel_n<<','<<best->vel_e<<','
+                      <<dN<<','<<dE<<','<<dt<<'\n';
+                    v2_capture_csv.flush();
+                  }
+                }
+
+                // FUSED-V1 visual update happens HERE, once per unique WORKED5
+                // observation. No latest-value mailbox is consumed by IMU.
+                ++fc.fused_v1_visual_updates;
+                fc.fused_v1_seen_cam_seq=fc.imu_cam_seq;
+                fc.fused_v1_n += dN;
+                fc.fused_v1_e += dE;
+
+                const double vobs_n=dN/dt;
+                const double vobs_e=dE/dt;
+                fc.fused_v1_vn_hist[fc.fused_v1_vhist_head]=vobs_n;
+                fc.fused_v1_ve_hist[fc.fused_v1_vhist_head]=vobs_e;
+                fc.fused_v1_vhist_head=(fc.fused_v1_vhist_head+1)%5;
+                if(fc.fused_v1_vhist_count<5) ++fc.fused_v1_vhist_count;
+
+                double fused_sn=0.0,fused_se=0.0;
+                for(int k=0;k<fc.fused_v1_vhist_count;++k){
+                  fused_sn+=fc.fused_v1_vn_hist[k];
+                  fused_se+=fc.fused_v1_ve_hist[k];
+                }
+
+                const double fused_cam_speed=std::hypot(web_raw_vn,web_raw_ve);
+                if(fc.fused_v1_stationary){
+                  if(fused_cam_speed>0.010){
+                    fc.fused_v1_stationary=false;
+                    fc.fused_v1_stop_confirm=0;
+                  }
+                }else{
+                  if(fused_cam_speed<0.005){
+                    ++fc.fused_v1_stop_confirm;
+                    if(fc.fused_v1_stop_confirm>=3){
+                      fc.fused_v1_stationary=true;
+                      fc.fused_v1_stop_confirm=3;
+                      ++fc.fused_v1_stop_constraints;
+                    }
+                  }else{
+                    fc.fused_v1_stop_confirm=0;
+                  }
+                }
+
+                if(fc.fused_v1_stationary){
+                  fc.fused_v1_vn=0.0;
+                  fc.fused_v1_ve=0.0;
+                }else{
+                  fc.fused_v1_vn=fused_sn/fc.fused_v1_vhist_count;
+                  fc.fused_v1_ve=fused_se/fc.fused_v1_vhist_count;
+                }
+              }
             }
           }
         }
@@ -2134,6 +2917,16 @@ int main(int argc,char** argv){
         const double v4l2_to_dequeue_ms =
           (selected_v4l2_ts_ns>0 && selected_dq_mono_ns>0)
             ? (selected_dq_mono_ns-selected_v4l2_ts_ns)*1e-6 : -1.0;
+        // FUSED_V2_FRAME_CAPTURE_V1
+        // 'now' is the monotonic frame timestamp used for causal IMU lookup.
+        fc.writeFusedV2FrameCapture(
+          csvpath,frame,now,s.valid,s.invalid_reason,
+          s.tracked,s.inliers,s.inlier_ratio,dt);
+        // FUSED_V2_REALTIME_SHADOW_V1
+        fc.updateFusedV2RealtimeShadow(
+          csvpath,frame,now,s.valid,s.invalid_reason,
+          s.tracked,s.inliers,s.inlier_ratio,dt);
+
         csv<<now<<','<<ts<<','<<selected_v4l2_ts_ns<<','<<selected_dq_mono_ns<<','
            <<selected_v4l2_flags<<','<<v4l2_to_dequeue_ms<<','
            <<flow_send_ns<<','<<frame_pipeline_latency_ms<<','
@@ -2221,6 +3014,65 @@ int main(int argc,char** argv){
             <<",\"raw_of_e\":"<<jsonNumber(web_raw_e)
             <<",\"raw_of_vn\":"<<jsonNumber(web_raw_vn)
             <<",\"raw_of_ve\":"<<jsonNumber(web_raw_ve)
+            <<",\"imu_raw_ax\":"<<jsonNumber(fc.imu.ax)
+            <<",\"imu_raw_ay\":"<<jsonNumber(fc.imu.ay)
+            <<",\"imu_raw_az\":"<<jsonNumber(fc.imu.az)
+            <<",\"imu_dr_calibrated\":"<<(fc.imu_dr_state.calibrated?"true":"false")
+            <<",\"imu_dr_calibrating\":"<<(fc.imu_dr_state.calibrating?"true":"false")
+            <<",\"imu_dr_bias_samples\":"<<fc.imu_dr_state.bias_samples
+            <<",\"imu_dr_bias_n\":"<<jsonNumber(fc.imu_dr_state.bias_n)
+            <<",\"imu_dr_bias_e\":"<<jsonNumber(fc.imu_dr_state.bias_e)
+            <<",\"imu_dr_bias_d\":"<<jsonNumber(fc.imu_dr_state.bias_d)
+            <<",\"imu_dr_n_mm\":"<<jsonNumber(fc.imu_dr_state.pos_n*1000.0)
+            <<",\"imu_dr_e_mm\":"<<jsonNumber(fc.imu_dr_state.pos_e*1000.0)
+            <<",\"imu_dr_d_mm\":"<<jsonNumber(fc.imu_dr_state.pos_d*1000.0)
+            <<",\"imu_dr_acc_n\":"<<jsonNumber(fc.imu_dr_state.acc_n)
+            <<",\"imu_dr_acc_e\":"<<jsonNumber(fc.imu_dr_state.acc_e)
+            <<",\"imu_dr_acc_d\":"<<jsonNumber(fc.imu_dr_state.acc_d)
+            <<",\"imu_dr_vn\":"<<jsonNumber(fc.imu_dr_state.vel_n)
+            <<",\"imu_dr_ve\":"<<jsonNumber(fc.imu_dr_state.vel_e)
+            <<",\"imu_dr_vd\":"<<jsonNumber(fc.imu_dr_state.vel_d)
+            <<",\"imu_dr_n\":"<<jsonNumber(fc.imu_dr_state.pos_n)
+            <<",\"imu_dr_e\":"<<jsonNumber(fc.imu_dr_state.pos_e)
+            <<",\"imu_dr_d\":"<<jsonNumber(fc.imu_dr_state.pos_d)
+            <<",\"imu_dr_stationary_samples\":"<<fc.imu_dr_state.stationary_samples
+            <<",\"imu_dr_amag\":"<<jsonNumber(fc.imu_dr_state.diag_amag)
+            <<",\"imu_dr_gmag\":"<<jsonNumber(fc.imu_dr_state.diag_gmag)
+            <<",\"imu_dr_dt\":"<<jsonNumber(fc.imu_dr_state.diag_dt)
+            <<",\"imu_dr_acc_ok\":"<<(fc.imu_dr_state.diag_acc_ok?"true":"false")
+            <<",\"imu_dr_gyro_ok\":"<<(fc.imu_dr_state.diag_gyro_ok?"true":"false")
+            <<",\"imu_dr_stationary\":"<<(fc.imu_dr_state.diag_stationary?"true":"false")
+            <<",\"imu_dr_acc_rejects\":"<<fc.imu_dr_state.diag_acc_rejects
+            <<",\"imu_dr_gyro_rejects\":"<<fc.imu_dr_state.diag_gyro_rejects
+            <<",\"imu_cam_vn\":"<<jsonNumber(fc.imu_cam_vn)
+            <<",\"imu_cam_ve\":"<<jsonNumber(fc.imu_cam_ve)
+            <<",\"imu_cam_speed\":"<<jsonNumber(std::hypot(fc.imu_cam_vn,fc.imu_cam_ve))
+            <<",\"imu_cam_age_ms\":"<<jsonNumber(fc.imu_cam_valid?(monoNs()-fc.imu_cam_recv_ns)*1e-6:-1.0)
+            <<",\"imu_cam_fresh\":"<<(fc.imu_zupt_cam_fresh?"true":"false")
+            <<",\"imu_cam_stationary\":"<<(fc.imu_zupt_cam_stationary?"true":"false")
+            <<",\"imu_zupt_shadow\":"<<(fc.imu_zupt_shadow?"true":"false")
+            <<",\"imu_zupt_shadow_accepts\":"<<fc.imu_zupt_shadow_accepts
+            <<",\"imu_zupt_shadow_blocks\":"<<fc.imu_zupt_shadow_blocks
+            <<",\"imu_cam_seq\":"<<fc.imu_cam_seq
+            <<",\"fused_v1_visual_updates\":"<<fc.fused_v1_visual_updates
+            <<",\"fused_v1_imu_predictions\":"<<fc.fused_v1_imu_predictions
+            <<",\"fused_v1_stop_constraints\":"<<fc.fused_v1_stop_constraints
+            <<",\"fused_v1_stationary\":"<<(fc.fused_v1_stationary?"true":"false")
+            <<",\"fused_v1_stop_confirm\":"<<fc.fused_v1_stop_confirm
+            <<",\"fused_v1_n_mm\":"<<jsonNumber(fc.fused_v1_n*1000.0)
+            <<",\"fused_v1_e_mm\":"<<jsonNumber(fc.fused_v1_e*1000.0)
+            <<",\"fused_v1_vn\":"<<jsonNumber(fc.fused_v1_vn)
+            <<",\"fused_v1_ve\":"<<jsonNumber(fc.fused_v1_ve)
+            <<",\"imu_camvc_active\":"<<(fc.imu_camvc_active?"true":"false")
+            <<",\"imu_camvc_stop_samples\":"<<fc.imu_camvc_stop_samples
+            <<",\"imu_camvc_activations\":"<<fc.imu_camvc_activations
+            <<",\"imu_camvc_n_mm\":"<<jsonNumber(fc.imu_camvc_state.pos_n*1000.0)
+            <<",\"imu_camvc_e_mm\":"<<jsonNumber(fc.imu_camvc_state.pos_e*1000.0)
+            <<",\"imu_camvc_d_mm\":"<<jsonNumber(fc.imu_camvc_state.pos_d*1000.0)
+            <<",\"imu_camvc_vn\":"<<jsonNumber(fc.imu_camvc_state.vel_n)
+            <<",\"imu_camvc_ve\":"<<jsonNumber(fc.imu_camvc_state.vel_e)
+            <<",\"imu_camvc_vd\":"<<jsonNumber(fc.imu_camvc_state.vel_d)
+            <<",\"imu_dr_attitude_age_ms\":"<<jsonNumber(fc.gyro.valid?(monoNs()-fc.gyro.recv_ns)*1e-6:-1.0)
             <<",\"rc_zero_seq\":"<<rc_zero_seq
             <<",\"rc6_us\":"<<rc6_last_us
             <<",\"rc8_us\":"<<rc8_last_us
