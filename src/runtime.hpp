@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <iostream>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -53,7 +54,13 @@ struct Camera {
   ~Camera(){ close(); }
 
   void openDev(const std::string& dev){
-    constexpr int kWidth=640, kHeight=480, kCameraFps=120;
+    // WORKED5_INPUT_GUARD_V1
+    // 120 FPS leaves almost no CPU headroom on RPi5 once LK/RANSAC cost rises
+    // during fast image motion. In the frozen BAD475 run this created a
+    // positive-feedback cascade: queue drops -> 16-28 ms intervals -> larger
+    // inter-frame motion -> slower/worse LK+RANSAC -> reason5 data loss.
+    // Test branch only. Promotion to frozen requires explicit operator approval.
+    constexpr int kWidth=640, kHeight=480, kCameraFps=100;
     constexpr int kExposureAbsolute=50, kGain=0;
 
     fd=::open(dev.c_str(),O_RDWR|O_NONBLOCK);
@@ -75,6 +82,17 @@ struct Camera {
     sp.parm.capture.timeperframe.numerator=1;
     sp.parm.capture.timeperframe.denominator=kCameraFps;
     if(xioctl(fd,VIDIOC_S_PARM,&sp)<0) fail("VIDIOC_S_PARM");
+
+    v4l2_streamparm actual{};
+    actual.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if(xioctl(fd,VIDIOC_G_PARM,&actual)<0) fail("VIDIOC_G_PARM");
+    const auto num=actual.parm.capture.timeperframe.numerator;
+    const auto den=actual.parm.capture.timeperframe.denominator;
+    const double actual_fps=(num>0)?static_cast<double>(den)/num:0.0;
+    std::cerr<<"WORKED5_INPUT_GUARD_V1 camera="
+             <<kWidth<<"x"<<kHeight
+             <<" MJPG requested_fps="<<kCameraFps
+             <<" actual_fps="<<actual_fps<<"\n";
 
     auto setc=[&](uint32_t id,int32_t v){
       v4l2_control c{}; c.id=id; c.value=v;
