@@ -25,7 +25,7 @@ def main():
     w5_valid=0
     with path.open(newline="") as fh:
         rd=csv.DictReader(fh)
-        required={"return_event","worked5_valid","worked5_dN_m","worked5_dE_m","worked5_pN_m","worked5_pE_m"}
+        required={"return_event","worked5_valid","worked5_dN_m","worked5_dE_m","worked5_acc_n_m","worked5_acc_e_m"}
         missing=required-set(rd.fieldnames or [])
         if missing:
             raise SystemExit("ERROR: CSV lacks frozen WORKED5 fields: "+", ".join(sorted(missing)))
@@ -37,8 +37,8 @@ def main():
             if ev:
                 events[ev]={
                     "frame": int(f(row,"frame",rows)),
-                    "pN": f(row,"worked5_pN_m"),
-                    "pE": f(row,"worked5_pE_m"),
+                    "pN": f(row,"worked5_acc_n_m"),
+                    "pE": f(row,"worked5_acc_e_m"),
                 }
 
     if 11 not in events or 12 not in events:
