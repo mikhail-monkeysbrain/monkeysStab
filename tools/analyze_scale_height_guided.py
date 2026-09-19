@@ -50,6 +50,30 @@ def sel(stage,trim=.8):
     return [r for r in rows if a<=r["test_t"]<=b]
 
 def med(v): return statistics.median(v) if v else float("nan")
+
+def transition_motion(stage, h_from, h_to):
+    rr=sel(stage, trim=0.0)
+    if not rr or not math.isfinite(h_from) or not math.isfinite(h_to):
+        return None
+    dh=h_to-h_from
+    if abs(dh)<0.005:
+        return None
+    p0=h_from+0.10*dh
+    p1=h_from+0.90*dh
+    lo_h=min(p0,p1); hi_h=max(p0,p1)
+    idx=[i for i,x in enumerate(rr) if lo_h<=x["h"]<=hi_h]
+    if not idx:
+        return None
+    active=rr[idx[0]:idx[-1]+1]
+    visual=sum(x["scale"]*x["dt"] for x in active)
+    k=max(1,min(30,len(active)))
+    h0=med([x["h"] for x in active[:k]])
+    h1=med([x["h"] for x in active[-k:]])
+    expected=math.log(h0/h1) if h0>0 and h1>0 else float("nan")
+    return {"n":len(active),"t":sum(x["dt"] for x in active),"h0":h0,"h1":h1,
+            "visual":visual,"expected":expected,
+            "ratio":visual/expected if abs(expected)>1e-9 else float("nan")}
+
 def summary(stage):
     rr=sel(stage)
     if not rr: return None
@@ -71,5 +95,15 @@ if lo and hi:
     print(f"Expected LOW->HIGH log image scale: {expected:+.6f}")
 if lo and lo2:
     print(f"LOW return height delta: {(lo2['h']-lo['h'])*1000:+.2f} mm")
-print("\nUse transition scale_int signs/magnitudes together with LOW/HIGH heights.")
+print("\nPHYSICAL MOTION WINDOWS (10..90% of measured height step)")
+if lo and hi and lo2:
+    for name,h0,h1 in (("LOW->HIGH",lo["h"],hi["h"]),("HIGH->LOW",hi["h"],lo2["h"])):
+        x=transition_motion(name,h0,h1)
+        if not x:
+            print(f"{name:18s} NO DATA")
+            continue
+        print(f"{name:18s} n={x['n']:5d} dt={x['t']:.3f}s h={x['h0']:.4f}->{x['h1']:.4f}m")
+        print(f"  visual_int={x['visual']:+.6f} expected={x['expected']:+.6f} visual/expected={x['ratio']:.3f}")
+
+print("\nUse physical-motion windows to judge magnitude; full transition windows remain useful for sign and context.")
 print("No production gate or WORKED5 parameter is changed.")
