@@ -1038,6 +1038,13 @@ struct FlowStep {
   // been estimated from centered coordinates. Never published to the FC.
   bool centered_xy_valid=false;
   double centered_du_norm=0.0,centered_dv_norm=0.0;
+
+  // RANGE_CONSTRAINED_XY_SHADOW_V1: scale comes only from a causally filtered
+  // TF-Luna camera height; visual correspondences estimate rotation/translation.
+  // Diagnostic only: never published to FC or WORKED5.
+  bool range_xy_valid=false;
+  double range_du_norm=0.0,range_dv_norm=0.0;
+  double range_scale_rate=0.0;
   std::array<int,4> centered_region_n{};       // left,right,top,bottom
   std::array<double,4> centered_region_scale_rate{};
   std::array<bool,4> centered_region_valid{};
@@ -1709,6 +1716,37 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
     }
   }
 
+  // RANGE_CONSTRAINED_XY_SHADOW_V1
+  // prev/curr camera heights supplied here are already causal-filtered by the
+  // caller. Fix physical image scale q=h_prev/h_curr, estimate rotation from
+  // centered visual geometry, then robustly recover translation as the median
+  // residual. This deliberately prevents visual false-scale from entering XY.
+  if(o.centered_scale_valid &&
+     prev_camera_height_m>0.05 && curr_camera_height_m>0.05 &&
+     std::isfinite(prev_camera_height_m) && std::isfinite(curr_camera_height_m)){
+    const double q=prev_camera_height_m/curr_camera_height_m;
+    const double th=o.centered_rotation_rate*dt;
+    if(q>0.0 && std::isfinite(q) && std::isfinite(th)){
+      const double cs=std::cos(th), sn=std::sin(th);
+      std::vector<double> rdu,rdv;
+      rdu.reserve(ai.size()); rdv.reserve(ai.size());
+      for(size_t k=0;k<ai.size();++k){
+        const double px=q*(cs*au[k].x-sn*au[k].y);
+        const double py=q*(sn*au[k].x+cs*au[k].y);
+        rdu.push_back((double)bu[k].x-px);
+        rdv.push_back((double)bu[k].y-py);
+      }
+      if(!rdu.empty()){
+        o.range_du_norm=median(rdu);
+        o.range_dv_norm=median(rdv);
+        o.range_scale_rate=std::log(q)/dt;
+        o.range_xy_valid=std::isfinite(o.range_du_norm) &&
+                         std::isfinite(o.range_dv_norm) &&
+                         std::isfinite(o.range_scale_rate);
+      }
+    }
+  }
+
   // STATIONARY_BALANCED_SHADOW_V1
   // Equalize total influence of each occupied 3x3 ROI cell while preserving
   // every production RANSAC inlier.  Each point weight is 1/N_cell, then all
@@ -2011,6 +2049,13 @@ int main(int argc,char** argv){
     cv::Mat prev; int64_t prev_ts=0; uint64_t frame=0;
     double prev_camera_height_m=0.0;
     bool prev_camera_height_valid=false;
+    // Fixed before XY evaluation: causal first-order height filter, tau=0.25 s.
+    // It filters height BEFORE differentiation/ratio; no GT-dependent tuning.
+    constexpr double kRangeShadowTauS=0.25;
+    double range_shadow_height_m=0.0;
+    bool range_shadow_height_valid=false;
+    double prev_range_shadow_height_m=0.0;
+    bool prev_range_shadow_height_valid=false;
     uint64_t flow_sent_total=0,flow_invalid_total=0,range_sent_total=0;
     uint64_t camera_queue_dropped_total=0, stale_flow_rejected_total=0;
     uint64_t bridge_hold_total=0, bridge_recovered_total=0, bridge_reset_total=0;
@@ -2513,11 +2558,24 @@ int main(int argc,char** argv){
         }
 
         const double dt=prev_ts?(ts-prev_ts)*1e-9:0.0;
+
+        // Causal height filtering for RANGE_CONSTRAINED_XY_SHADOW_V1 only.
+        // Production range/WORKED5 paths continue to use their existing values.
+        if(current_camera_height_valid){
+          if(!range_shadow_height_valid){
+            range_shadow_height_m=current_camera_height_m;
+            range_shadow_height_valid=true;
+          } else if(dt>0.0 && dt<0.2){
+            const double alpha=dt/(kRangeShadowTauS+dt);
+            range_shadow_height_m += alpha*(current_camera_height_m-range_shadow_height_m);
+          }
+        }
+
         FlowStep s;
         if(!prev.empty())s=estimateRawFlow(
           prev,gray,dt,calib,
-          prev_camera_height_valid?prev_camera_height_m:0.0,
-          current_camera_height_valid?current_camera_height_m:0.0);
+          prev_range_shadow_height_valid?prev_range_shadow_height_m:0.0,
+          range_shadow_height_valid?range_shadow_height_m:0.0);
 
         // Trigger on production forward-LK wall time.  Do not use valid=0:
         // the observed collapse begins before the final validity gate fails.
@@ -3221,6 +3279,8 @@ int main(int argc,char** argv){
                         "camera_height_valid,camera_height_m,range_raw_m,range_age_ms,"
                         "centered_valid,centered_scale_rate,centered_rotation_rate,"
                         "centered_xy_valid,centered_du_norm,centered_dv_norm,"
+                        "range_xy_valid,range_du_norm,range_dv_norm,range_scale_rate,"
+                        "range_filtered_height_m,"
                         "centered_left_valid,centered_left_n,centered_left_scale_rate,"
                         "centered_right_valid,centered_right_n,centered_right_scale_rate,"
                         "centered_top_valid,centered_top_n,centered_top_scale_rate,"
@@ -3247,6 +3307,8 @@ int main(int argc,char** argv){
                    <<lm<<','<<lage<<','
                    <<(s.centered_scale_valid?1:0)<<','<<s.centered_scale_rate<<','<<s.centered_rotation_rate<<','
                    <<(s.centered_xy_valid?1:0)<<','<<s.centered_du_norm<<','<<s.centered_dv_norm<<','
+                   <<(s.range_xy_valid?1:0)<<','<<s.range_du_norm<<','<<s.range_dv_norm<<','<<s.range_scale_rate<<','
+                   <<(range_shadow_height_valid?range_shadow_height_m:0.0)<<','
                    <<(s.centered_region_valid[0]?1:0)<<','<<s.centered_region_n[0]<<','<<s.centered_region_scale_rate[0]<<','
                    <<(s.centered_region_valid[1]?1:0)<<','<<s.centered_region_n[1]<<','<<s.centered_region_scale_rate[1]<<','
                    <<(s.centered_region_valid[2]?1:0)<<','<<s.centered_region_n[2]<<','<<s.centered_region_scale_rate[2]<<','
@@ -4285,6 +4347,8 @@ int main(int argc,char** argv){
         prev_ts=ts;
         prev_camera_height_m=current_camera_height_m;
         prev_camera_height_valid=current_camera_height_valid;
+        prev_range_shadow_height_m=range_shadow_height_m;
+        prev_range_shadow_height_valid=range_shadow_height_valid;
         bridge_pending=false;
     }
 
