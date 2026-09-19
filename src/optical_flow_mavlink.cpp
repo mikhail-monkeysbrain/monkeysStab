@@ -1045,6 +1045,16 @@ struct FlowStep {
   bool range_xy_valid=false;
   double range_du_norm=0.0,range_dv_norm=0.0;
   double range_scale_rate=0.0;
+
+  // SPATIAL_HOLDOUT_SCALE_SHADOW_V1: fit translation-only (M0) and
+  // translation+scale (M1) on three image quadrants, then score both on the
+  // held-out quadrant. Same production RANSAC inliers; equal 3x3-cell total
+  // weights; diagnostic only. G=(E0-E1)/(E0+E1), no gate/threshold.
+  bool holdout_scale_valid=false;
+  double holdout_scale_g=0.0;
+  double holdout_e0=0.0,holdout_e1=0.0;
+  double holdout_scale=0.0;
+  int holdout_folds=0;
   std::array<int,4> centered_region_n{};       // left,right,top,bottom
   std::array<double,4> centered_region_scale_rate{};
   std::array<bool,4> centered_region_valid{};
@@ -1642,6 +1652,83 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
           o.scale_region_valid[ri]=true;
         }
       }
+    }
+  }
+
+  // SPATIAL_HOLDOUT_SCALE_SHADOW_V1
+  // Astra diagnostic: does scale learned on three quadrants predict the fourth?
+  // M0 and M1 use the same production RANSAC inliers, equal-cell weights and
+  // ordinary weighted LS. This is deliberately NOT a production gate.
+  {
+    struct HoldPt { double x,y,du,dv,w; int q; };
+    std::vector<HoldPt> hp;
+    hp.reserve(ai.size());
+    std::array<int,9> cell_count{};
+    for(size_t k=0;k<ai.size();++k){
+      const double nx=(ai[k].x/(double)prev.cols-g_feature_roi.x0)/
+                      (g_feature_roi.x1-g_feature_roi.x0);
+      const double ny=(ai[k].y/(double)prev.rows-g_feature_roi.y0)/
+                      (g_feature_roi.y1-g_feature_roi.y0);
+      const int cx=std::clamp((int)std::floor(nx*3.0),0,2);
+      const int cy=std::clamp((int)std::floor(ny*3.0),0,2);
+      cell_count[cy*3+cx]++;
+    }
+    for(size_t k=0;k<ai.size();++k){
+      const double nx=(ai[k].x/(double)prev.cols-g_feature_roi.x0)/
+                      (g_feature_roi.x1-g_feature_roi.x0);
+      const double ny=(ai[k].y/(double)prev.rows-g_feature_roi.y0)/
+                      (g_feature_roi.y1-g_feature_roi.y0);
+      const int cx=std::clamp((int)std::floor(nx*3.0),0,2);
+      const int cy=std::clamp((int)std::floor(ny*3.0),0,2);
+      const int ci=cy*3+cx;
+      const int q=(ai[k].x>=0.5*prev.cols?1:0)+(ai[k].y>=0.5*prev.rows?2:0);
+      hp.push_back({(double)au[k].x,(double)au[k].y,
+                    (double)bu[k].x-au[k].x,(double)bu[k].y-au[k].y,
+                    1.0/std::max(1,cell_count[ci]),q});
+    }
+    double e0_sum=0.0,e1_sum=0.0,wtest_sum=0.0,scale_sum=0.0,wscale_sum=0.0;
+    int folds=0;
+    for(int hold=0;hold<4;++hold){
+      double sw=0,sx=0,sy=0,sdu=0,sdv=0;
+      int ntrain=0,ntest=0;
+      for(const auto& p:hp){
+        if(p.q==hold){ ntest++; continue; }
+        sw+=p.w; sx+=p.w*p.x; sy+=p.w*p.y;
+        sdu+=p.w*p.du; sdv+=p.w*p.dv; ntrain++;
+      }
+      if(ntrain<20 || ntest<5 || !(sw>0)) continue;
+      const double mx=sx/sw,my=sy/sw,mdu=sdu/sw,mdv=sdv/sw;
+      double num=0,den=0;
+      for(const auto& p:hp) if(p.q!=hold){
+        const double x=p.x-mx,y=p.y-my;
+        num+=p.w*(x*(p.du-mdu)+y*(p.dv-mdv));
+        den+=p.w*(x*x+y*y);
+      }
+      if(!(den>1e-12)) continue;
+      const double sc=num/den;
+      const double c1x=mdu-sc*mx,c1y=mdv-sc*my;
+      const double c0x=mdu,c0y=mdv;
+      double fe0=0,fe1=0,fw=0;
+      for(const auto& p:hp) if(p.q==hold){
+        const double r0u=p.du-c0x,r0v=p.dv-c0y;
+        const double r1u=p.du-c1x-sc*p.x,r1v=p.dv-c1y-sc*p.y;
+        fe0+=p.w*(r0u*r0u+r0v*r0v);
+        fe1+=p.w*(r1u*r1u+r1v*r1v);
+        fw+=p.w;
+      }
+      if(!(fw>0)) continue;
+      e0_sum+=fe0; e1_sum+=fe1; wtest_sum+=fw;
+      scale_sum+=sc*sw; wscale_sum+=sw; folds++;
+    }
+    if(folds>=3 && wtest_sum>0 && (e0_sum+e1_sum)>1e-20){
+      o.holdout_e0=e0_sum/wtest_sum;
+      o.holdout_e1=e1_sum/wtest_sum;
+      o.holdout_scale_g=(e0_sum-e1_sum)/(e0_sum+e1_sum);
+      o.holdout_scale=(wscale_sum>0)?scale_sum/wscale_sum:0.0;
+      o.holdout_folds=folds;
+      o.holdout_scale_valid=std::isfinite(o.holdout_scale_g) &&
+                            std::isfinite(o.holdout_e0) &&
+                            std::isfinite(o.holdout_e1);
     }
   }
 
