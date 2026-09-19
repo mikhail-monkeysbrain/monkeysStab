@@ -62,6 +62,14 @@ struct Step {
   bool valid=false;
   RejectReason reason=RejectReason::NONE;
   double dt=0.0;
+  // DELTAR_ROTATION_SHADOW_V1 diagnostics.
+  // delta_camera_local_m is the camera optical-center displacement after full
+  // attitude (R0/R1) ray rotation. lever_local_m is the apparent camera-center
+  // displacement caused only by the rigid camera lever arm rotating about FC/IMU.
+  // delta_local_m = delta_camera_local_m - lever_local_m is therefore the
+  // estimated FC/IMU translation. These fields are diagnostic only.
+  cv::Vec3d delta_camera_local_m{0,0,0};
+  cv::Vec3d lever_local_m{0,0,0};
   cv::Vec3d delta_local_m{0,0,0};
   cv::Vec3d velocity_local_mps{0,0,0};
   int points=0;
@@ -181,6 +189,8 @@ inline Step estimate(const Input& in){
   out.valid=true;
   out.reason=RejectReason::NONE;
   out.points=(int)deltas.size();
+  out.delta_camera_local_m=delta_cam;
+  out.lever_local_m=lever;
   out.delta_local_m=delta_imu;
   out.velocity_local_mps=delta_imu*(1.0/out.dt);
   out.residual_median_m=rmed;

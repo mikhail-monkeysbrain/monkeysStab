@@ -2298,6 +2298,7 @@ int main(int argc,char** argv){
         static uint64_t metric_shadow_interval_id=0;
         static int64_t metric_shadow_last_print_ns=0;
         metric_shadow::Step metric_step;
+        metric_shadow::AttitudeLookup metric_a0{}, metric_a1{};
         bool metric_attempted=false;
         double metric_att_gap0_ms=-1.0,metric_att_gap1_ms=-1.0;
         double metric_range_gap0_ms=-1.0,metric_range_gap1_ms=-1.0;
@@ -2317,6 +2318,8 @@ int main(int argc,char** argv){
           }
           const auto a0=metric_shadow::interpolateAttitude(ah,prev_ts,30.0);
           const auto a1=metric_shadow::interpolateAttitude(ah,ts,30.0);
+          metric_a0=a0;
+          metric_a1=a1;
           metric_att_gap0_ms=a0.bracket_gap_ms;
           metric_att_gap1_ms=a1.bracket_gap_ms;
 
@@ -2897,6 +2900,77 @@ int main(int argc,char** argv){
               }
             }
           }
+        }
+
+        // DELTAR_ROTATION_SHADOW_V1
+        // Dedicated A/B diagnostic for rotation contamination:
+        //   A = frozen WORKED5 displacement;
+        //   B = full-attitude ray geometry using R0/R1;
+        //   C = B minus camera lever-arm motion, i.e. FC/IMU-center translation.
+        // This block is logging only. It never changes WORKED5, OPTICAL_FLOW,
+        // ArduPilot output, FUSED-V1/V2, or any production state.
+        {
+          static std::ofstream dr_csv;
+          static bool dr_header=false;
+          if(!dr_csv.is_open()){
+            const std::filesystem::path production_csv_path(csvpath);
+            dr_csv.open(
+              production_csv_path.parent_path()/"deltar_rotation_shadow.csv",
+              std::ios::out|std::ios::trunc);
+          }
+          if(dr_csv.is_open() && !dr_header){
+            dr_csv
+              <<"frame,t0_ns,t1_ns,dt_s,"
+              <<"att0_valid,att1_valid,att0_gap_ms,att1_gap_ms,"
+              <<"roll0,pitch0,yaw0,roll1,pitch1,yaw1,"
+              <<"droll_deg,dpitch_deg,dyaw_deg,"
+              <<"w5_valid,w5_dN_m,w5_dE_m,"
+              <<"deltar_valid,deltar_reason,"
+              <<"camera_dN_m,camera_dE_m,"
+              <<"lever_dN_m,lever_dE_m,"
+              <<"imu_dN_m,imu_dE_m,"
+              <<"pairs,used,residual_median_m\n";
+            dr_header=true;
+          }
+
+          const bool av0=metric_a0.valid;
+          const bool av1=metric_a1.valid;
+          double droll=0.0,dpitch=0.0,dyaw=0.0;
+          if(av0 && av1){
+            droll=metric_shadow::wrapPi(
+              metric_a1.attitude.roll-metric_a0.attitude.roll)*180.0/M_PI;
+            dpitch=metric_shadow::wrapPi(
+              metric_a1.attitude.pitch-metric_a0.attitude.pitch)*180.0/M_PI;
+            dyaw=metric_shadow::wrapPi(
+              metric_a1.attitude.yaw-metric_a0.attitude.yaw)*180.0/M_PI;
+          }
+
+          dr_csv
+            <<frame<<','<<prev_ts<<','<<ts<<','<<dt<<','
+            <<(av0?1:0)<<','<<(av1?1:0)<<','
+            <<metric_att_gap0_ms<<','<<metric_att_gap1_ms<<','
+            <<(av0?metric_a0.attitude.roll:0.0)<<','
+            <<(av0?metric_a0.attitude.pitch:0.0)<<','
+            <<(av0?metric_a0.attitude.yaw:0.0)<<','
+            <<(av1?metric_a1.attitude.roll:0.0)<<','
+            <<(av1?metric_a1.attitude.pitch:0.0)<<','
+            <<(av1?metric_a1.attitude.yaw:0.0)<<','
+            <<droll<<','<<dpitch<<','<<dyaw<<','
+            <<(worked5_diag_valid?1:0)<<','
+            <<worked5_diag_dN<<','<<worked5_diag_dE<<','
+            <<(metric_step.valid?1:0)<<','
+            <<metric_shadow::rejectReasonName(metric_step.reason)<<','
+            <<metric_step.delta_camera_local_m[0]<<','
+            <<metric_step.delta_camera_local_m[1]<<','
+            <<metric_step.lever_local_m[0]<<','
+            <<metric_step.lever_local_m[1]<<','
+            <<metric_step.delta_local_m[0]<<','
+            <<metric_step.delta_local_m[1]<<','
+            <<s.metric_prev_points.size()<<','
+            <<metric_step.points<<','
+            <<metric_step.residual_median_m
+            <<'\n';
+          dr_csv.flush();
         }
 
         FlowFcTarget csv_ct{}; FlowFcAttTarget csv_ca{}; FlowFcOutputs csv_co{};
