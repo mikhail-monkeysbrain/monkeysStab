@@ -53,7 +53,20 @@ struct Camera {
   ~Camera(){ close(); }
 
   void openDev(const std::string& dev){
-    constexpr int kWidth=640, kHeight=480, kCameraFps=120;
+    // WORKED5_INPUT_GUARD_V1
+    // Promoted to frozen after explicit operator approval.
+    // 120 FPS left too little CPU headroom on RPi5 during fast/jerky image
+    // motion: queue drops increased the adjacent-frame interval to 16-28 ms,
+    // which increased image displacement, degraded LK/RANSAC and could trigger
+    // a positive-feedback reason5 cascade that permanently lost translation.
+    //
+    // 100 FPS increases the nominal frame budget from 8.33 ms to 10 ms while
+    // keeping the WORKED5 estimator itself unchanged. Blind validation on the
+    // test branch produced:
+    //   GT 393 mm -> WORKED5 381.192 mm (-3.005%)
+    //   GT 465 mm -> WORKED5 455.067 mm (-2.136%)
+    // The second run had 2935/2935 valid frames with no reason5/reason6.
+    constexpr int kWidth=640, kHeight=480, kCameraFps=100;
     constexpr int kExposureAbsolute=50, kGain=0;
 
     fd=::open(dev.c_str(),O_RDWR|O_NONBLOCK);
@@ -75,6 +88,20 @@ struct Camera {
     sp.parm.capture.timeperframe.numerator=1;
     sp.parm.capture.timeperframe.denominator=kCameraFps;
     if(xioctl(fd,VIDIOC_S_PARM,&sp)<0) fail("VIDIOC_S_PARM");
+
+    // Read back the accepted V4L2 frame period. This is diagnostic only: it
+    // proves whether the camera/driver actually accepted the requested 100 FPS
+    // and does not alter WORKED5 math or flow thresholds.
+    v4l2_streamparm actual{};
+    actual.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if(xioctl(fd,VIDIOC_G_PARM,&actual)<0) fail("VIDIOC_G_PARM");
+    const auto num=actual.parm.capture.timeperframe.numerator;
+    const auto den=actual.parm.capture.timeperframe.denominator;
+    const double actual_fps=(num>0)?static_cast<double>(den)/num:0.0;
+    std::cerr<<"WORKED5_INPUT_GUARD_V1 camera="
+             <<kWidth<<"x"<<kHeight
+             <<" MJPG requested_fps="<<kCameraFps
+             <<" actual_fps="<<actual_fps<<"\n";
 
     auto setc=[&](uint32_t id,int32_t v){
       v4l2_control c{}; c.id=id; c.value=v;
