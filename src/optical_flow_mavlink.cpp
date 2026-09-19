@@ -2332,8 +2332,10 @@ int main(int argc,char** argv){
         static int64_t metric_shadow_last_print_ns=0;
         metric_shadow::Step metric_step;
         metric_shadow::Step metric_gyro_step;
+        metric_shadow::Step metric_highres_gyro_step;
         metric_shadow::AttitudeLookup metric_a0{}, metric_a1{};
         metric_shadow::BodyRateIntegration metric_gyro_delta{};
+        metric_shadow::BodyRateIntegration metric_highres_gyro_delta{};
         bool metric_attempted=false;
         double metric_att_gap0_ms=-1.0,metric_att_gap1_ms=-1.0;
         double metric_range_gap0_ms=-1.0,metric_range_gap1_ms=-1.0;
@@ -2343,16 +2345,25 @@ int main(int argc,char** argv){
 
           std::deque<metric_shadow::TimedAttitude> ah;
           std::deque<metric_shadow::TimedBodyRate> gh;
+          std::deque<metric_shadow::TimedBodyRate> hgh;
           {
             std::lock_guard<std::mutex> lock(fc.mu);
             ah.clear();
             gh.clear();
+            hgh.clear();
             ah.resize(fc.attitude_history.size());
             gh.resize(fc.attitude_history.size());
             for(size_t i=0;i<fc.attitude_history.size();++i){
               const auto& g=fc.attitude_history[i];
               ah[i]={g.roll,g.pitch,g.yaw,g.sample_ns,g.valid};
               gh[i]={g.x,g.y,g.z,g.sample_ns,g.valid};
+            }
+            hgh.resize(fc.highres_gyro_history.size());
+            for(size_t i=0;i<fc.highres_gyro_history.size();++i){
+              const auto& g=fc.highres_gyro_history[i];
+              // First online A/B uses the same RPi receive-time domain as the
+              // camera. FC time_usec remains logged separately for timing audit.
+              hgh[i]={g.x,g.y,g.z,g.recv_ns,g.valid};
             }
           }
           const auto a0=metric_shadow::interpolateAttitude(ah,prev_ts,30.0);
@@ -2395,6 +2406,20 @@ int main(int argc,char** argv){
             const cv::Matx33d gyro_R1=gyro_R0*metric_gyro_delta.delta_R;
             metric_gyro_step=metric_shadow::estimateWithRotations(
               mi,gyro_R0,gyro_R1);
+          }
+
+          // HIGHRES_DELTAR_SHADOW_V1: same geometry and same absolute R0,
+          // but inter-frame delta-R comes from independent HIGHRES_IMU gyro.
+          // Receive timestamps are used deliberately for this first A/B so no
+          // unverified FC->RPi clock mapping is introduced.
+          metric_highres_gyro_delta=metric_shadow::integrateBodyRates(
+            hgh,prev_ts,ts,30.0);
+          if(a0.valid && metric_highres_gyro_delta.valid){
+            const cv::Matx33d raw_R0=metric_shadow::bodyToLocal(
+              a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
+            const cv::Matx33d raw_R1=raw_R0*metric_highres_gyro_delta.delta_R;
+            metric_highres_gyro_step=metric_shadow::estimateWithRotations(
+              mi,raw_R0,raw_R1);
           }
 
           // Startup before the first synchronized metric interval is not a GAP.
@@ -2987,7 +3012,11 @@ int main(int argc,char** argv){
               <<"gyro_camera_dN_m,gyro_camera_dE_m,"
               <<"gyro_lever_dN_m,gyro_lever_dE_m,"
               <<"gyro_imu_dN_m,gyro_imu_dE_m,"
-              <<"pairs,used,residual_median_m,gyro_residual_median_m\n";
+              <<"highres_valid,highres_segments,highres_bracket_gap_ms,highres_angle_deg,"
+              <<"highres_camera_dN_m,highres_camera_dE_m,"
+              <<"highres_lever_dN_m,highres_lever_dE_m,"
+              <<"highres_imu_dN_m,highres_imu_dE_m,"
+              <<"pairs,used,residual_median_m,gyro_residual_median_m,highres_residual_median_m\n";
             dr_header=true;
           }
 
@@ -3034,10 +3063,21 @@ int main(int argc,char** argv){
             <<metric_gyro_step.lever_local_m[1]<<','
             <<metric_gyro_step.delta_local_m[0]<<','
             <<metric_gyro_step.delta_local_m[1]<<','
+            <<(metric_highres_gyro_step.valid?1:0)<<','
+            <<metric_highres_gyro_delta.segments<<','
+            <<metric_highres_gyro_delta.max_bracket_gap_ms<<','
+            <<metric_highres_gyro_delta.integrated_angle_deg<<','
+            <<metric_highres_gyro_step.delta_camera_local_m[0]<<','
+            <<metric_highres_gyro_step.delta_camera_local_m[1]<<','
+            <<metric_highres_gyro_step.lever_local_m[0]<<','
+            <<metric_highres_gyro_step.lever_local_m[1]<<','
+            <<metric_highres_gyro_step.delta_local_m[0]<<','
+            <<metric_highres_gyro_step.delta_local_m[1]<<','
             <<s.metric_prev_points.size()<<','
             <<metric_step.points<<','
             <<metric_step.residual_median_m<<','
-            <<metric_gyro_step.residual_median_m
+            <<metric_gyro_step.residual_median_m<<','
+            <<metric_highres_gyro_step.residual_median_m
             <<'\n';
           dr_csv.flush();
         }

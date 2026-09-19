@@ -137,3 +137,31 @@ Isolation:
 - frozen branch untouched;
 - WORKED5, OPTICAL_FLOW, focal scale, KLT/RANSAC, lever geometry and all
   production estimator outputs are unchanged.
+
+
+## 2026-09-19 — HIGHRES_DELTAR_SHADOW_V1
+
+Validated source test:
+- physical maneuver: one-way yaw, approximately +90 deg about the IMU centre;
+- HIGHRES_IMU: 3096 samples / 30.950 s;
+- median dt 9.996 ms = 100.04 Hz, max accepted dt 11.190 ms;
+- static bias [gx,gy,gz] = [+0.000296,-0.000082,+0.000381] rad/s;
+- active-window signed integrals: X -0.881 deg, Y -0.153 deg, Z +86.512 deg;
+- |Z| path 97.558 deg, 3D path 97.943 deg.
+This confirms HIGHRES_IMU sees the intended yaw maneuver independently of
+ATTITUDE rate fields. No scale tuning is derived from the nominal 90 deg.
+
+Change:
+- add a third delta-R diagnostic arm to deltar_rotation_shadow.csv;
+- integrate HIGHRES_IMU xgyro/ygyro/zgyro over each camera interval;
+- use the same absolute ATTITUDE R0 only to define the local frame;
+- use HIGHRES_IMU delta-R for R1;
+- run the same ray/ground geometry and the same camera lever-arm correction;
+- log highres camera, lever and IMU-centre increments plus timing diagnostics.
+- first A/B deliberately keys HIGHRES samples by RPi receive_ns, while preserving
+  FC time_usec in the raw gyro log; no unverified FC->RPi time mapping is added.
+
+Isolation:
+- diagnostic only;
+- frozen branch untouched;
+- production WORKED5 / OPTICAL_FLOW / ArduPilot feed unchanged.
