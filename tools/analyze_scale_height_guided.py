@@ -53,26 +53,60 @@ def med(v): return statistics.median(v) if v else float("nan")
 
 def transition_motion(stage, h_from, h_to):
     rr=sel(stage, trim=0.0)
-    if not rr or not math.isfinite(h_from) or not math.isfinite(h_to):
+    if len(rr)<20 or not math.isfinite(h_from) or not math.isfinite(h_to):
         return None
     dh=h_to-h_from
     if abs(dh)<0.005:
         return None
-    p0=h_from+0.10*dh
-    p1=h_from+0.90*dh
-    lo_h=min(p0,p1); hi_h=max(p0,p1)
-    idx=[i for i,x in enumerate(rr) if lo_h<=x["h"]<=hi_h]
-    if not idx:
-        return None
-    active=rr[idx[0]:idx[-1]+1]
+
+    # Robust height trace: rolling median over ~0.5 s, using timestamps
+    # reconstructed from camera dt. Detection requires sustained departure
+    # from the source plateau and sustained arrival at the target plateau.
+    tt=[]; acc=0.0
+    for x in rr:
+        acc+=max(0.0,x["dt"]); tt.append(acc)
+
+    half=0.25
+    hs=[]
+    j0=0; j1=0
+    for i,t0 in enumerate(tt):
+        while j0<len(rr) and tt[j0]<t0-half: j0+=1
+        if j1<j0: j1=j0
+        while j1+1<len(rr) and tt[j1+1]<=t0+half: j1+=1
+        hs.append(med([rr[j]["h"] for j in range(j0,j1+1)]))
+
+    direction=1.0 if dh>0 else -1.0
+    depart=h_from+0.15*dh
+    arrive=h_from+0.85*dh
+    hold=0.35
+
+    def sustained(i, predicate):
+        t0=tt[i]; k=i
+        while k<len(rr) and tt[k]-t0<hold:
+            if not predicate(hs[k]): return False
+            k+=1
+        return k<len(rr) or (tt[-1]-t0)>=hold
+
+    if direction>0:
+        p_depart=lambda h: h>=depart
+        p_arrive=lambda h: h>=arrive
+    else:
+        p_depart=lambda h: h<=depart
+        p_arrive=lambda h: h<=arrive
+
+    i0=next((i for i in range(len(rr)) if sustained(i,p_depart)),None)
+    if i0 is None: return None
+    i1=next((i for i in range(i0,len(rr)) if sustained(i,p_arrive)),None)
+    if i1 is None or i1<=i0: return None
+
+    active=rr[i0:i1+1]
     visual=sum(x["scale"]*x["dt"] for x in active)
-    k=max(1,min(30,len(active)))
-    h0=med([x["h"] for x in active[:k]])
-    h1=med([x["h"] for x in active[-k:]])
+    h0=hs[i0]; h1=hs[i1]
     expected=math.log(h0/h1) if h0>0 and h1>0 else float("nan")
-    return {"n":len(active),"t":sum(x["dt"] for x in active),"h0":h0,"h1":h1,
+    return {"n":len(active),"t":tt[i1]-tt[i0],"h0":h0,"h1":h1,
             "visual":visual,"expected":expected,
-            "ratio":visual/expected if abs(expected)>1e-9 else float("nan")}
+            "ratio":visual/expected if abs(expected)>1e-9 else float("nan"),
+            "t0":tt[i0],"t1":tt[i1]}
 
 def summary(stage):
     rr=sel(stage)
@@ -95,15 +129,15 @@ if lo and hi:
     print(f"Expected LOW->HIGH log image scale: {expected:+.6f}")
 if lo and lo2:
     print(f"LOW return height delta: {(lo2['h']-lo['h'])*1000:+.2f} mm")
-print("\nPHYSICAL MOTION WINDOWS (10..90% of measured height step)")
+print("\nPHYSICAL MOTION WINDOWS (0.5s median, sustained 15%->85%)")
 if lo and hi and lo2:
     for name,h0,h1 in (("LOW->HIGH",lo["h"],hi["h"]),("HIGH->LOW",hi["h"],lo2["h"])):
         x=transition_motion(name,h0,h1)
         if not x:
             print(f"{name:18s} NO DATA")
             continue
-        print(f"{name:18s} n={x['n']:5d} dt={x['t']:.3f}s h={x['h0']:.4f}->{x['h1']:.4f}m")
+        print(f"{name:18s} n={x['n']:5d} dt={x['t']:.3f}s local_t={x['t0']:.3f}->{x['t1']:.3f}s h={x['h0']:.4f}->{x['h1']:.4f}m")
         print(f"  visual_int={x['visual']:+.6f} expected={x['expected']:+.6f} visual/expected={x['ratio']:.3f}")
 
-print("\nUse physical-motion windows to judge magnitude; full transition windows remain useful for sign and context.")
+print("\nMotion windows use a 0.5 s rolling median and require 0.35 s sustained departure/arrival. Full transition windows remain useful for sign and context.")
 print("No production gate or WORKED5 parameter is changed.")
