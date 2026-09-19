@@ -1,6 +1,7 @@
 #pragma once
 
 #include <opencv2/opencv.hpp>
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -29,6 +30,31 @@ struct Step {
   double dy_m = 0.0;  // frozen blind convention: -du_norm * height
 };
 
+inline bool normalizedCorrespondences(
+    const std::vector<cv::Point2f>& prev_inliers,
+    const std::vector<cv::Point2f>& curr_inliers,
+    const cv::Mat& production_K,
+    double production_focal_scale,
+    const cv::Mat& D,
+    std::vector<cv::Point2f>* prev_norm,
+    std::vector<cv::Point2f>* curr_norm) {
+  if (!prev_norm || !curr_norm ||
+      prev_inliers.size() != curr_inliers.size() ||
+      prev_inliers.size() < 20 ||
+      !(production_focal_scale > 0.0) || !std::isfinite(production_focal_scale)) {
+    return false;
+  }
+
+  cv::Mat K = production_K.clone();
+  const double k = kFocalScale / production_focal_scale;
+  K.at<double>(0,0) *= k;
+  K.at<double>(1,1) *= k;
+
+  cv::undistortPoints(prev_inliers, *prev_norm, K, D);
+  cv::undistortPoints(curr_inliers, *curr_norm, K, D);
+  return prev_norm->size() == curr_norm->size() && prev_norm->size() >= 20;
+}
+
 inline Step estimate(const std::vector<cv::Point2f>& prev_inliers,
                      const std::vector<cv::Point2f>& curr_inliers,
                      const cv::Mat& production_K,
@@ -45,19 +71,10 @@ inline Step estimate(const std::vector<cv::Point2f>& prev_inliers,
     return o;
   }
 
-  // Runtime CameraCalib.K has already been multiplied by the production
-  // focal_scale. Undo only that scale and apply the frozen WORKED scale. This
-  // keeps WORKED at exactly 1.10 even while the AP publisher remains at its
-  // independent production focal_scale (historically 0.931).
-  cv::Mat K = production_K.clone();
-  const double k = kFocalScale / production_focal_scale;
-  K.at<double>(0,0) *= k;
-  K.at<double>(1,1) *= k;
-
   std::vector<cv::Point2f> a, b;
-  cv::undistortPoints(prev_inliers, a, K, D);
-  cv::undistortPoints(curr_inliers, b, K, D);
-  if (a.size() != b.size() || a.size() < 20) return o;
+  if (!normalizedCorrespondences(prev_inliers, curr_inliers,
+                                 production_K, production_focal_scale, D,
+                                 &a, &b)) return o;
 
   cv::Mat A((int)a.size()*2, 4, CV_64F);
   cv::Mat rhs((int)a.size()*2, 1, CV_64F);
@@ -88,6 +105,69 @@ inline Step estimate(const std::vector<cv::Point2f>& prev_inliers,
   o.dy_m=-o.du_norm*camera_height_m;
   o.valid=std::isfinite(o.dx_m) && std::isfinite(o.dy_m) &&
           std::isfinite(o.scale) && std::isfinite(o.yaw);
+  return o;
+}
+
+// Diagnostic-only nested model for the WORKED5 causal experiment.
+// It uses the exact same accepted production RANSAC correspondences and the
+// exact same WORKED5 normalization, but fixes scale=yaw=0.  It never feeds FC.
+struct TranslationShadow {
+  bool valid=false;
+  int points=0;
+  double tls_du_norm=0.0,tls_dv_norm=0.0;
+  double tmed_du_norm=0.0,tmed_dv_norm=0.0;
+  double tls_dx_m=0.0,tls_dy_m=0.0;
+  double tmed_dx_m=0.0,tmed_dy_m=0.0;
+};
+
+inline double median(std::vector<double> v) {
+  if (v.empty()) return 0.0;
+  const size_t m=v.size()/2;
+  std::nth_element(v.begin(),v.begin()+m,v.end());
+  const double hi=v[m];
+  if (v.size()&1U) return hi;
+  std::nth_element(v.begin(),v.begin()+m-1,v.begin()+m);
+  return 0.5*(v[m-1]+hi);
+}
+
+inline TranslationShadow estimateTranslationOnly(
+    const std::vector<cv::Point2f>& prev_inliers,
+    const std::vector<cv::Point2f>& curr_inliers,
+    const cv::Mat& production_K,
+    double production_focal_scale,
+    const cv::Mat& D,
+    double camera_height_m,
+    double dt_s) {
+  TranslationShadow o;
+  if (!(camera_height_m>0.02) || !std::isfinite(camera_height_m) ||
+      !(dt_s>0.0 && dt_s<0.2)) return o;
+
+  std::vector<cv::Point2f> a,b;
+  if (!normalizedCorrespondences(prev_inliers,curr_inliers,
+                                 production_K,production_focal_scale,D,
+                                 &a,&b)) return o;
+
+  std::vector<double> dus,dvs;
+  dus.reserve(a.size()); dvs.reserve(a.size());
+  double sum_du=0.0,sum_dv=0.0;
+  for(size_t i=0;i<a.size();++i){
+    const double du=(double)b[i].x-a[i].x;
+    const double dv=(double)b[i].y-a[i].y;
+    if(!std::isfinite(du)||!std::isfinite(dv)) return o;
+    dus.push_back(du); dvs.push_back(dv);
+    sum_du+=du; sum_dv+=dv;
+  }
+  o.points=(int)dus.size();
+  o.tls_du_norm=sum_du/dus.size();
+  o.tls_dv_norm=sum_dv/dvs.size();
+  o.tmed_du_norm=median(dus);
+  o.tmed_dv_norm=median(dvs);
+  o.tls_dx_m=o.tls_dv_norm*camera_height_m;
+  o.tls_dy_m=-o.tls_du_norm*camera_height_m;
+  o.tmed_dx_m=o.tmed_dv_norm*camera_height_m;
+  o.tmed_dy_m=-o.tmed_du_norm*camera_height_m;
+  o.valid=std::isfinite(o.tls_dx_m)&&std::isfinite(o.tls_dy_m)&&
+          std::isfinite(o.tmed_dx_m)&&std::isfinite(o.tmed_dy_m);
   return o;
 }
 
