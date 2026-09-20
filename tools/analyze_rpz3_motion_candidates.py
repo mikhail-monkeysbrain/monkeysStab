@@ -86,4 +86,17 @@ def main():
         print(f"cluster{k}: {t0:.6f} -> {t1:.6f} rows {i0}->{i1} "
               f"dN={dn*1000:.2f}mm dE={de*1000:.2f}mm "
               f"vec={math.hypot(dn,de)*1000:.2f}mm")
+    print("\n===== W5 POSITION AROUND SEEDS =====")
+    # Показываем абсолютную W5-позицию вокруг каждого переноса. Это позволяет
+    # увидеть плато до/после движения и проверить, не обрезал ли edge detector
+    # медленные участки. Никакой физической длины здесь также нет.
+    for k,(lo,hi) in enumerate(clusters,1):
+        print(f"cluster{k}:")
+        for off in (-5,-3,-2,-1,0,1,2,3,5):
+            target=(lo if off<0 else hi)+off
+            idx=min(range(len(t)),key=lambda q:abs(t[q]-target))
+            print(f"  t={t[idx]:.6f} off={off:+d}s "
+                  f"N={n[idx]*1000:.2f}mm E={e[idx]*1000:.2f}mm "
+                  f"h={f(rows[idx],'worked5_hcam_m')*1000:.1f}mm "
+                  f"valid={rows[idx].get('worked5_valid','')}")
 if __name__=="__main__": main()
