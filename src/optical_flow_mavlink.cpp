@@ -2422,6 +2422,12 @@ int main(int argc,char** argv){
         std::array<std::array<double,kPixelExtrOffN>,kPixelExtrAxisN> pixel_extr_du{};
         std::array<std::array<double,kPixelExtrOffN>,kPixelExtrAxisN> pixel_extr_dv{};
         std::array<std::array<int,kPixelExtrOffN>,kPixelExtrAxisN> pixel_extr_valid{};
+        bool pixel_field_valid=false;
+        int pixel_field_points=0;
+        double pixel_field_affine_rms_px=0.0;
+        double pixel_field_const_rms_px=0.0;
+        double pixel_field_a00=0.0,pixel_field_a01=0.0,pixel_field_a10=0.0,pixel_field_a11=0.0;
+        double pixel_field_bu=0.0,pixel_field_bv=0.0;
         metric_shadow::AttitudeLookup metric_a0{}, metric_a1{};
         metric_shadow::BodyRateIntegration metric_gyro_delta{};
         metric_shadow::BodyRateIntegration metric_highres_gyro_delta{};
@@ -2639,6 +2645,53 @@ int main(int argc,char** argv){
                 static_cast<size_t>(std::floor(0.95*static_cast<double>(er.size()-1))));
               std::nth_element(er.begin(),er.begin()+k95,er.end());
               pixel_rot_p95_px=er[k95];
+            }
+
+            // PIXEL_RESIDUAL_FIELD_V1: fit residual flow as an affine field
+            // [du,dv] = A*[x-cx,y-cy] + b. A constant field is translation-like
+            // on a near-planar nadir scene; spatial gradients expose residual
+            // rotation/projective structure. Diagnostic only.
+            {
+              cv::Mat M(static_cast<int>(uq0.size()),3,CV_64F);
+              cv::Mat yu(static_cast<int>(uq0.size()),1,CV_64F);
+              cv::Mat yv(static_cast<int>(uq0.size()),1,CV_64F);
+              int n=0;
+              const double cx=mi.K.at<double>(0,2), cy=mi.K.at<double>(1,2);
+              for(size_t i=0;i<uq0.size();++i){
+                const cv::Vec3d q=C1_R_C0*cv::Vec3d(uq0[i].x,uq0[i].y,1.0);
+                if(!(q[2]>0.1) || !std::isfinite(q[2])) continue;
+                const double du=(static_cast<double>(uq1[i].x)-q[0]/q[2])*fx;
+                const double dv=(static_cast<double>(uq1[i].y)-q[1]/q[2])*fy;
+                if(!std::isfinite(du)||!std::isfinite(dv)) continue;
+                // uq coordinates are normalized; center them using normalized principal point = 0.
+                M.at<double>(n,0)=uq0[i].x;
+                M.at<double>(n,1)=uq0[i].y;
+                M.at<double>(n,2)=1.0;
+                yu.at<double>(n,0)=du;
+                yv.at<double>(n,0)=dv;
+                ++n;
+              }
+              (void)cx; (void)cy;
+              if(n>=20){
+                M=M.rowRange(0,n).clone(); yu=yu.rowRange(0,n).clone(); yv=yv.rowRange(0,n).clone();
+                cv::Mat cu,cvv;
+                if(cv::solve(M,yu,cu,cv::DECOMP_SVD) && cv::solve(M,yv,cvv,cv::DECOMP_SVD)){
+                  pixel_field_valid=true; pixel_field_points=n;
+                  pixel_field_a00=cu.at<double>(0); pixel_field_a01=cu.at<double>(1); pixel_field_bu=cu.at<double>(2);
+                  pixel_field_a10=cvv.at<double>(0); pixel_field_a11=cvv.at<double>(1); pixel_field_bv=cvv.at<double>(2);
+                  double sa=0.0,sc=0.0;
+                  for(int j=0;j<n;++j){
+                    const double pu=M.at<double>(j,0)*pixel_field_a00+M.at<double>(j,1)*pixel_field_a01+pixel_field_bu;
+                    const double pv=M.at<double>(j,0)*pixel_field_a10+M.at<double>(j,1)*pixel_field_a11+pixel_field_bv;
+                    const double eu=yu.at<double>(j)-pu, ev=yv.at<double>(j)-pv;
+                    sa+=eu*eu+ev*ev;
+                    const double ecu=yu.at<double>(j)-pixel_field_bu, ecv=yv.at<double>(j)-pixel_field_bv;
+                    sc+=ecu*ecu+ecv*ecv;
+                  }
+                  pixel_field_affine_rms_px=std::sqrt(sa/n);
+                  pixel_field_const_rms_px=std::sqrt(sc/n);
+                }
+              }
             }
 
             // Same correspondences, two controls:
@@ -3330,7 +3383,10 @@ int main(int argc,char** argv){
               <<"pixel_rot_direct_valid,pixel_rot_direct_median_px,"
               <<"pixel_rot_direct_du_median_px,pixel_rot_direct_dv_median_px,"
               <<"pixel_rot_att_valid,pixel_rot_att_median_px,"
-              <<"pixel_rot_att_du_median_px,pixel_rot_att_dv_median_px";
+              <<"pixel_rot_att_du_median_px,pixel_rot_att_dv_median_px,"
+              <<"pixel_field_valid,pixel_field_points,pixel_field_affine_rms_px,"
+              <<"pixel_field_const_rms_px,pixel_field_a00,pixel_field_a01,"
+              <<"pixel_field_a10,pixel_field_a11,pixel_field_bu,pixel_field_bv";
             static const char* kPixelExtrAxisName[kPixelExtrAxisN]={"roll","pitch","yaw"};
             for(int ax=0;ax<kPixelExtrAxisN;++ax){
               for(int oi=0;oi<kPixelExtrOffN;++oi){
@@ -3422,7 +3478,14 @@ int main(int argc,char** argv){
             <<(pixel_rot_att_valid?1:0)<<','
             <<pixel_rot_att_median_px<<','
             <<pixel_rot_att_du_median_px<<','
-            <<pixel_rot_att_dv_median_px;
+            <<pixel_rot_att_dv_median_px<<','
+            <<(pixel_field_valid?1:0)<<','
+            <<pixel_field_points<<','
+            <<pixel_field_affine_rms_px<<','
+            <<pixel_field_const_rms_px<<','
+            <<pixel_field_a00<<','<<pixel_field_a01<<','
+            <<pixel_field_a10<<','<<pixel_field_a11<<','
+            <<pixel_field_bu<<','<<pixel_field_bv;
           for(int ax=0;ax<kPixelExtrAxisN;++ax){
             for(int oi=0;oi<kPixelExtrOffN;++oi){
               dr_csv<<','<<pixel_extr_valid[ax][oi]
