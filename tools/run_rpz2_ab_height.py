@@ -45,7 +45,14 @@ def main():
     print("A→B измеряется по поверхности стола после посадки в B.")
     print("Финальная точная доводка в A выполняется только на земле по меткам.")
 
-    for p in ("/tmp/monkeys_rpz2_capture_first","/tmp/monkeys_rpz2_capture_last"):\n        try: os.unlink(p)\n        except FileNotFoundError: pass\n    pathlib.Path("/tmp/monkeys_rpz2_capture_first").touch()\n    mark("SNAPSHOT_REQUEST","1","FIRST")\n    timed("ПОКОЙ. Не двигать аппарат.",10,1,"REST_A")
+    for p in ("/tmp/monkeys_rpz2_capture_first", "/tmp/monkeys_rpz2_capture_last"):
+        try:
+            os.unlink(p)
+        except FileNotFoundError:
+            pass
+    pathlib.Path("/tmp/monkeys_rpz2_capture_first").touch()
+    mark("SNAPSHOT_REQUEST", "1", "FIRST")
+    timed("ПОКОЙ. Не двигать аппарат.", 10, 1, "REST_A")
 
     wait('"приготовиться, нажать enter"',2,"READY_AB")
 
