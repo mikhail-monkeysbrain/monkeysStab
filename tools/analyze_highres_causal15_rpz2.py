@@ -137,7 +137,8 @@ def main():
         raw.append((recv,fc,w))
     raw.sort(key=lambda x:x[0])
     mapper=ClockMap(); hist=deque(); hi=0
-    recovered=0; strict_rt=0; diffs=[]; holds=[]; rows=[]\n    buckets={\"causal15\":[],\"causal20_only\":[],\"causal25_only\":[],\"over25\":[]}
+    recovered=0; strict_rt=0; diffs=[]; holds=[]; rows=[]
+    buckets={"causal15":[],"causal20_only":[],"causal25_only":[],"over25":[]}
     for r in sorted(targets,key=lambda x:int(x["t1_ns"])):
         frame=int(r["frame"]); t0=int(r["t0_ns"]); t1=int(r["t1_ns"])
         m=by_frame.get(frame)
