@@ -100,6 +100,23 @@ Bench closure ранее:
 
 Следующий эксперимент: на одних и тех же LK correspondences параллельно сравнить текущий HIGHRES `ΔR^T`, альтернативный `ΔR` и endpoint rotation из ATTITUDE. Production/WORKED5 не менять.
 
+## 6.2. Rotation convention control — 2026-09-20
+
+Прогон `20260920_124928_OPTICAL_FLOW` сравнил на одних LK correspondences текущий HIGHRES `ΔR^T`, альтернативный `ΔR` и endpoint rotation ATTITUDE.
+
+На активном yaw (|dyaw| > 0.1°, 229 кадров):
+- HIGHRES `ΔR^T`: median residual ≈1.442 px, du≈-1.319 px, dv≈+0.045 px;
+- HIGHRES direct `ΔR`: ≈1.571 px, du≈-0.417 px, dv≈-0.293 px;
+- ATTITUDE endpoints: ≈1.328 px, du≈-1.229 px, dv≈-0.062 px.
+
+При |dyaw| > 0.3°: HIGHRES `ΔR^T` ≈1.856 px, direct `ΔR` ≈2.045 px, ATTITUDE ≈1.721 px.
+
+Выводы:
+- гипотеза простой ошибки transpose/convention не подтверждена; direct `ΔR` хуже и production convention менять нельзя;
+- ATTITUDE немного лучше HIGHRES уже в pixel-domain, что согласуется с прежним metric-shadow сравнением;
+- ни один вариант не устраняет систематический yaw residual, доминирующий по image-u;
+- следующий тест — shadow-only sweep малого angular camera extrinsic по трём осям, без изменения frozen geometry/WORKED5.
+
 ## 7. ΔR / HIGHRES: доказанные результаты
 
 Все ATTITUDE / ordinary gyro ΔR / HIGHRES ΔR варианты используют одинаковые:
