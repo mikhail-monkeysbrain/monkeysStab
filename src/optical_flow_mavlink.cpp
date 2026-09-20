@@ -2409,6 +2409,19 @@ int main(int argc,char** argv){
         std::array<metric_shadow::BodyRateIntegration,kHighresPhaseN> metric_highres_phase_delta{};
         std::array<metric_shadow::Step,kHighresPhaseN> metric_highres_phase_step{};
         bool metric_attempted=false;
+        // HIGHRES_PHASE_SWEEP_V2: positive offsets need future gyro samples.
+        // Keep complete metric inputs for ~30 ms and evaluate them later against
+        // the then-current HIGHRES history. Separate CSV avoids mixing causal
+        // availability with the actual phase comparison.
+        struct HighresPhasePending {
+          uint64_t frame=0;
+          int64_t t0_ns=0,t1_ns=0;
+          metric_shadow::Input input{};
+          cv::Matx33d R0=cv::Matx33d::eye();
+        };
+        static std::deque<HighresPhasePending> highres_phase_pending;
+        static std::ofstream highres_phase_csv;
+        static bool highres_phase_header=false;
         double metric_att_gap0_ms=-1.0,metric_att_gap1_ms=-1.0;
         double metric_range_gap0_ms=-1.0,metric_range_gap1_ms=-1.0;
         if(!prev.empty() && prev_ts>0 && ts>prev_ts){
@@ -2441,6 +2454,55 @@ int main(int argc,char** argv){
               hgh[i]={g.x,g.y,g.z,mapped_ns,g.valid};
             }
           }
+          // HIGHRES_PHASE_SWEEP_V2 delayed evaluation. A +10 ms test
+          // cannot be evaluated causally at t1 because those gyro samples do
+          // not exist yet. Wait 30 ms, then evaluate every offset on the same
+          // stored camera correspondences and geometry.
+          if(!highres_phase_csv.is_open()){
+            const std::filesystem::path production_csv_path(csvpath);
+            highres_phase_csv.open(
+              production_csv_path.parent_path()/"highres_phase_sweep_v2.csv",
+              std::ios::out|std::ios::trunc);
+          }
+          if(highres_phase_csv.is_open() && !highres_phase_header){
+            highres_phase_csv<<"frame,t0_ns,t1_ns";
+            for(int pi=0;pi<kHighresPhaseN;++pi){
+              highres_phase_csv<<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_valid"
+                <<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_angle_deg"
+                <<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_imu_dN_m"
+                <<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_imu_dE_m"
+                <<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_residual_median_m";
+            }
+            highres_phase_csv<<'\n';
+            highres_phase_header=true;
+          }
+          while(!highres_phase_pending.empty() &&
+                ts-highres_phase_pending.front().t1_ns>=30000000LL){
+            const auto q=highres_phase_pending.front();
+            highres_phase_pending.pop_front();
+            if(highres_phase_csv.is_open()){
+              highres_phase_csv<<q.frame<<','<<q.t0_ns<<','<<q.t1_ns;
+              for(int pi=0;pi<kHighresPhaseN;++pi){
+                const int64_t off_ns=
+                  static_cast<int64_t>(kHighresPhaseOffsetMs[pi])*1000000LL;
+                const auto pd=metric_shadow::integrateBodyRates(
+                  hgh,q.t0_ns+off_ns,q.t1_ns+off_ns,30.0);
+                metric_shadow::Step ps{};
+                if(pd.valid){
+                  const cv::Matx33d R1=q.R0*pd.delta_R;
+                  ps=metric_shadow::estimateWithRotations(q.input,q.R0,R1);
+                }
+                highres_phase_csv<<','<<(ps.valid?1:0)
+                  <<','<<pd.integrated_angle_deg
+                  <<','<<ps.delta_local_m[0]
+                  <<','<<ps.delta_local_m[1]
+                  <<','<<ps.residual_median_m;
+              }
+              highres_phase_csv<<'\n';
+              highres_phase_csv.flush();
+            }
+          }
+
           const auto a0=metric_shadow::interpolateAttitude(ah,prev_ts,30.0);
           const auto a1=metric_shadow::interpolateAttitude(ah,ts,30.0);
           metric_a0=a0;
@@ -2469,6 +2531,19 @@ int main(int argc,char** argv){
           mi.range_pos_body_frd=cv::Vec3d(0.0855,0.0,diag_range_z_m);
 
           metric_step=metric_shadow::estimate(mi);
+
+          if(a0.valid){
+            HighresPhasePending pq;
+            pq.frame=frame;
+            pq.t0_ns=prev_ts;
+            pq.t1_ns=ts;
+            pq.input=mi;
+            pq.R0=metric_shadow::bodyToLocal(
+              a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
+            highres_phase_pending.push_back(std::move(pq));
+            // Bound diagnostic memory even if camera timestamps stop advancing.
+            while(highres_phase_pending.size()>16) highres_phase_pending.pop_front();
+          }
 
           // DELTAR_GYRO_SHADOW_V1: use the same absolute R0 only as the local
           // frame anchor, but obtain the inter-frame rotation from integrated
