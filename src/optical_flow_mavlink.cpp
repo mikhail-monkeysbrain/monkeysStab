@@ -2415,6 +2415,13 @@ int main(int argc,char** argv){
         double pixel_rot_att_median_px=0.0;
         double pixel_rot_att_du_median_px=0.0;
         double pixel_rot_att_dv_median_px=0.0;
+        static constexpr int kPixelExtrAxisN=3;
+        static constexpr int kPixelExtrOffN=8;
+        static constexpr int kPixelExtrOffDeg[kPixelExtrOffN]={-5,-3,-2,-1,1,2,3,5};
+        std::array<std::array<double,kPixelExtrOffN>,kPixelExtrAxisN> pixel_extr_med{};
+        std::array<std::array<double,kPixelExtrOffN>,kPixelExtrAxisN> pixel_extr_du{};
+        std::array<std::array<double,kPixelExtrOffN>,kPixelExtrAxisN> pixel_extr_dv{};
+        std::array<std::array<int,kPixelExtrOffN>,kPixelExtrAxisN> pixel_extr_valid{};
         metric_shadow::AttitudeLookup metric_a0{}, metric_a1{};
         metric_shadow::BodyRateIntegration metric_gyro_delta{};
         metric_shadow::BodyRateIntegration metric_highres_gyro_delta{};
@@ -2677,6 +2684,31 @@ int main(int argc,char** argv){
                 C_R_B*A1.t()*A0*B_R_C,
                 pixel_rot_att_valid,pixel_rot_att_median_px,
                 pixel_rot_att_du_median_px,pixel_rot_att_dv_median_px);
+            }
+
+            // PIXEL_EXTRINSIC_SWEEP_V1: perturb only camera angular extrinsic.
+            // Evaluate against the same HIGHRES delta-R and LK correspondences.
+            // This is diagnostic-only and never changes production geometry.
+            auto axisRot=[](int axis,double a){
+              const double cs=std::cos(a), sn=std::sin(a);
+              if(axis==0) return cv::Matx33d(1,0,0, 0,cs,-sn, 0,sn,cs);
+              if(axis==1) return cv::Matx33d(cs,0,sn, 0,1,0, -sn,0,cs);
+              return cv::Matx33d(cs,-sn,0, sn,cs,0, 0,0,1);
+            };
+            for(int ax=0;ax<kPixelExtrAxisN;++ax){
+              for(int oi=0;oi<kPixelExtrOffN;++oi){
+                const double a=kPixelExtrOffDeg[oi]*M_PI/180.0;
+                const cv::Matx33d B_R_C_test=B_R_C*axisRot(ax,a);
+                const cv::Matx33d C_R_B_test=B_R_C_test.t();
+                bool vv=false; double mm=0.0,duv=0.0,dvv=0.0;
+                evalPixelRotation(
+                  C_R_B_test*metric_highres_gyro_delta.delta_R.t()*B_R_C_test,
+                  vv,mm,duv,dvv);
+                pixel_extr_valid[ax][oi]=vv?1:0;
+                pixel_extr_med[ax][oi]=mm;
+                pixel_extr_du[ax][oi]=duv;
+                pixel_extr_dv[ax][oi]=dvv;
+              }
             }
           }
 
@@ -3299,6 +3331,15 @@ int main(int argc,char** argv){
               <<"pixel_rot_direct_du_median_px,pixel_rot_direct_dv_median_px,"
               <<"pixel_rot_att_valid,pixel_rot_att_median_px,"
               <<"pixel_rot_att_du_median_px,pixel_rot_att_dv_median_px";
+            static const char* kPixelExtrAxisName[kPixelExtrAxisN]={"roll","pitch","yaw"};
+            for(int ax=0;ax<kPixelExtrAxisN;++ax){
+              for(int oi=0;oi<kPixelExtrOffN;++oi){
+                dr_csv<<",pixel_extr_"<<kPixelExtrAxisName[ax]<<"_"<<kPixelExtrOffDeg[oi]<<"deg_valid"
+                      <<",pixel_extr_"<<kPixelExtrAxisName[ax]<<"_"<<kPixelExtrOffDeg[oi]<<"deg_median_px"
+                      <<",pixel_extr_"<<kPixelExtrAxisName[ax]<<"_"<<kPixelExtrOffDeg[oi]<<"deg_du_px"
+                      <<",pixel_extr_"<<kPixelExtrAxisName[ax]<<"_"<<kPixelExtrOffDeg[oi]<<"deg_dv_px";
+              }
+            }
             for(int pi=0;pi<kHighresPhaseN;++pi){
               dr_csv<<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_valid"
                     <<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_angle_deg"
@@ -3382,6 +3423,14 @@ int main(int argc,char** argv){
             <<pixel_rot_att_median_px<<','
             <<pixel_rot_att_du_median_px<<','
             <<pixel_rot_att_dv_median_px;
+          for(int ax=0;ax<kPixelExtrAxisN;++ax){
+            for(int oi=0;oi<kPixelExtrOffN;++oi){
+              dr_csv<<','<<pixel_extr_valid[ax][oi]
+                    <<','<<pixel_extr_med[ax][oi]
+                    <<','<<pixel_extr_du[ax][oi]
+                    <<','<<pixel_extr_dv[ax][oi];
+            }
+          }
           for(int pi=0;pi<kHighresPhaseN;++pi){
             dr_csv<<','<<(metric_highres_phase_step[pi].valid?1:0)
                   <<','<<metric_highres_phase_delta[pi].integrated_angle_deg
