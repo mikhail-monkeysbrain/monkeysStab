@@ -49,6 +49,7 @@ _zero={"x":None,"y":None,"z":None}
 _raw_zero={"n":None,"e":None}
 _imu_zero={"n":None,"e":None,"d":None}
 _fused_zero={"n":None,"e":None}
+_camvc_zero={"n":None,"e":None}
 _journal=deque(maxlen=500)
 _messages=deque(maxlen=500)
 _ws_clients=set()
@@ -184,7 +185,7 @@ def ws_broadcast(obj):
             for sock in dead:_ws_clients.discard(sock)
 
 def live_payload(raw):
-    global _live_latest,_live_last_wall,_last_rc_zero_seq,_imu_zero,_fused_zero
+    global _live_latest,_live_last_wall,_last_rc_zero_seq,_imu_zero,_fused_zero,_camvc_zero
     try:
         x=float(raw.get("x",0.0));y=float(raw.get("y",0.0));z=float(raw.get("z",0.0))
     except Exception:
@@ -225,6 +226,8 @@ def live_payload(raw):
             if imu_d is not None: _imu_zero["d"]=imu_d
             if fused_n is not None: _fused_zero["n"]=fused_n
             if fused_e is not None: _fused_zero["e"]=fused_e
+            if camvc_n is not None: _camvc_zero["n"]=camvc_n
+            if camvc_e is not None: _camvc_zero["e"]=camvc_e
             rc_zero_event=True
             log_event("INFO",f"HOME/0 с пульта: RC6={raw.get('rc6_us',0)} RC8={raw.get('rc8_us',0)} RC10={raw.get('rc10_us',0)} seq={rc_seq}")
 
@@ -238,6 +241,9 @@ def live_payload(raw):
         if imu_d is not None and _imu_zero["d"] is None: _imu_zero["d"]=imu_d
         if fused_n is not None and _fused_zero["n"] is None: _fused_zero["n"]=fused_n
         if fused_e is not None and _fused_zero["e"] is None: _fused_zero["e"]=fused_e
+        if camvc_n is not None and _camvc_zero["n"] is None: _camvc_zero["n"]=camvc_n
+        if camvc_e is not None and _camvc_zero["e"] is None: _camvc_zero["e"]=camvc_e
+        czn,cze=_camvc_zero["n"],_camvc_zero["e"]
         rzn,rze=_raw_zero["n"],_raw_zero["e"]
         izn,ize,izd=_imu_zero["n"],_imu_zero["e"],_imu_zero["d"]
         fzn,fze=_fused_zero["n"],_fused_zero["e"]
@@ -248,6 +254,8 @@ def live_payload(raw):
     imu_rel_d=(imu_d-izd) if imu_d is not None and izd is not None else None
     fused_rel_n=(fused_n-fzn) if fused_n is not None and fzn is not None else None
     fused_rel_e=(fused_e-fze) if fused_e is not None and fze is not None else None
+    camvc_rel_n=(camvc_n-czn) if camvc_n is not None and czn is not None else None
+    camvc_rel_e=(camvc_e-cze) if camvc_e is not None and cze is not None else None
     ekf_rel_x=x-zx
     ekf_rel_y=y-zy
     out={
@@ -306,9 +314,11 @@ def live_payload(raw):
         "imu_camvc_active":bool(raw.get("imu_camvc_active",False)),
         "imu_camvc_stop_samples":raw.get("imu_camvc_stop_samples",0),
         "imu_camvc_activations":raw.get("imu_camvc_activations",0),
-        "imu_camvc_n_mm":camvc_n,
-        "imu_camvc_e_mm":camvc_e,
-        "imu_camvc_d_mm":camvc_d,
+        "imu_camvc_n_mm":camvc_rel_n,
+        "imu_camvc_e_mm":camvc_rel_e,
+        # Camera gate constrains horizontal velocity only; vertical DR remains
+        # unconstrained and must not be presented as a camera-ZUPT estimate.
+        "imu_camvc_d_mm":None,
         "imu_camvc_vn":raw.get("imu_camvc_vn"),
         "imu_camvc_ve":raw.get("imu_camvc_ve"),
         "imu_camvc_vd":raw.get("imu_camvc_vd"),
@@ -916,7 +926,7 @@ def telemetry():
     return latest
 
 def set_zero():
-    global _live_latest,_imu_zero,_fused_zero
+    global _live_latest,_imu_zero,_fused_zero,_camvc_zero
     with _lock:
         if not _live_latest:
             raise RuntimeError("Нет live-телеметрии WebSocket")
@@ -940,12 +950,17 @@ def set_zero():
         for key,axis in (("fused_v1_n_mm","n"),("fused_v1_e_mm","e")):
             v=cur.get(key)
             if v is not None: _fused_zero[axis]=(_fused_zero[axis] or 0.0)+float(v)
+        for key,axis in (("imu_camvc_n_mm","n"),("imu_camvc_e_mm","e")):
+            v=cur.get(key)
+            if v is not None: _camvc_zero[axis]=(_camvc_zero[axis] or 0.0)+float(v)
         cur["x_mm"]=cur["y_mm"]=cur["z_mm"]=0.0
         cur["ekf_drift_mm"]=0.0
         if rn is not None and re is not None:
             cur["raw_of_n_mm"]=0.0;cur["raw_of_e_mm"]=0.0;cur["raw_of_drift_mm"]=0.0
         cur["imu_dr_n_mm"]=cur["imu_dr_e_mm"]=cur["imu_dr_d_mm"]=0.0
         cur["fused_v1_n_mm"]=cur["fused_v1_e_mm"]=0.0
+        cur["imu_camvc_n_mm"]=cur["imu_camvc_e_mm"]=0.0
+        cur["imu_camvc_d_mm"]=None
         _live_latest=cur
     ws_broadcast({"type":"zero"})
 
@@ -1175,9 +1190,9 @@ button{cursor:pointer}
   <div class="metrics">
    <div class="metric"><span>X · IMU+CAM ZUPT</span><b id="camvcX">—</b></div>
    <div class="metric"><span>Y · IMU+CAM ZUPT</span><b id="camvcY">—</b></div>
-   <div class="metric"><span>Z · IMU+CAM ZUPT</span><b id="camvcZ">—</b></div>
-   <div class="metric"><span>V N/E/D</span><b id="camvcVel" style="font-size:12px">—</b></div>
-   <div class="metric"><span>ZUPT state</span><b id="camvcState">—</b></div>
+   <div class="metric"><span>Z · CAM constraint</span><b id="camvcZ">—</b></div>
+   <div class="metric"><span>V N/E</span><b id="camvcVel" style="font-size:12px">—</b></div>
+   <div class="metric"><span>XY ZUPT state</span><b id="camvcState">—</b></div>
   </div>
 
   <div class="metrics">
@@ -1660,8 +1675,8 @@ function updateHud(t){
  if($('imuCamStat'))$('imuCamStat').textContent=t.imu_cam_stationary?'ДА':'НЕТ';
  if($('camvcX'))$('camvcX').textContent=fmt(t.imu_camvc_n_mm,0)+' мм';
  if($('camvcY'))$('camvcY').textContent=fmt(t.imu_camvc_e_mm,0)+' мм';
- if($('camvcZ'))$('camvcZ').textContent=fmt(t.imu_camvc_d_mm,0)+' мм';
- if($('camvcVel'))$('camvcVel').textContent=fmt(t.imu_camvc_vn,3)+' / '+fmt(t.imu_camvc_ve,3)+' / '+fmt(t.imu_camvc_vd,3);
+ if($('camvcZ'))$('camvcZ').textContent='—';
+ if($('camvcVel'))$('camvcVel').textContent=fmt(t.imu_camvc_vn,3)+' / '+fmt(t.imu_camvc_ve,3);
  if($('camvcState'))$('camvcState').textContent=t.imu_camvc_active?'ACTIVE':'INACTIVE';
  if($('camX'))$('camX').textContent=fmt(t.raw_of_n_mm,0)+' мм';
  if($('camY'))$('camY').textContent=fmt(t.raw_of_e_mm,0)+' мм';
