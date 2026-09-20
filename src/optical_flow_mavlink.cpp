@@ -2407,6 +2407,14 @@ int main(int argc,char** argv){
         double pixel_rot_p95_px=0.0;
         double pixel_rot_du_median_px=0.0;
         double pixel_rot_dv_median_px=0.0;
+        bool pixel_rot_direct_valid=false;
+        double pixel_rot_direct_median_px=0.0;
+        double pixel_rot_direct_du_median_px=0.0;
+        double pixel_rot_direct_dv_median_px=0.0;
+        bool pixel_rot_att_valid=false;
+        double pixel_rot_att_median_px=0.0;
+        double pixel_rot_att_du_median_px=0.0;
+        double pixel_rot_att_dv_median_px=0.0;
         metric_shadow::AttitudeLookup metric_a0{}, metric_a1{};
         metric_shadow::BodyRateIntegration metric_gyro_delta{};
         metric_shadow::BodyRateIntegration metric_highres_gyro_delta{};
@@ -2624,6 +2632,51 @@ int main(int argc,char** argv){
                 static_cast<size_t>(std::floor(0.95*static_cast<double>(er.size()-1))));
               std::nth_element(er.begin(),er.begin()+k95,er.end());
               pixel_rot_p95_px=er[k95];
+            }
+
+            // Same correspondences, two controls:
+            // 1) direct delta_R instead of delta_R^T (convention/sign check);
+            // 2) ATTITUDE endpoint rotation, independent of gyro integration.
+            auto evalPixelRotation=[&](const cv::Matx33d& C1_R_C0,
+                                       bool& valid,double& mederr,
+                                       double& meddu,double& meddv){
+              std::vector<double> er2,du2,dv2;
+              er2.reserve(uq0.size()); du2.reserve(uq0.size()); dv2.reserve(uq0.size());
+              for(size_t i=0;i<uq0.size();++i){
+                const cv::Vec3d q=C1_R_C0*cv::Vec3d(uq0[i].x,uq0[i].y,1.0);
+                if(!(q[2]>0.1) || !std::isfinite(q[2])) continue;
+                const double du=(static_cast<double>(uq1[i].x)-q[0]/q[2])*fx;
+                const double dv=(static_cast<double>(uq1[i].y)-q[1]/q[2])*fy;
+                if(!std::isfinite(du)||!std::isfinite(dv)) continue;
+                du2.push_back(du); dv2.push_back(dv); er2.push_back(std::hypot(du,dv));
+              }
+              if(er2.size()>=20){
+                auto med2=[](std::vector<double> v){
+                  const size_t n=v.size(), k=n/2;
+                  std::nth_element(v.begin(),v.begin()+k,v.end());
+                  const double hi=v[k];
+                  if(n&1) return hi;
+                  std::nth_element(v.begin(),v.begin()+k-1,v.end());
+                  return 0.5*(v[k-1]+hi);
+                };
+                valid=true; mederr=med2(er2); meddu=med2(du2); meddv=med2(dv2);
+              }
+            };
+
+            evalPixelRotation(
+              C_R_B*metric_highres_gyro_delta.delta_R*B_R_C,
+              pixel_rot_direct_valid,pixel_rot_direct_median_px,
+              pixel_rot_direct_du_median_px,pixel_rot_direct_dv_median_px);
+
+            if(a0.valid && a1.valid){
+              const cv::Matx33d A0=metric_shadow::bodyToLocal(
+                a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
+              const cv::Matx33d A1=metric_shadow::bodyToLocal(
+                a1.attitude.roll,a1.attitude.pitch,a1.attitude.yaw);
+              evalPixelRotation(
+                C_R_B*A1.t()*A0*B_R_C,
+                pixel_rot_att_valid,pixel_rot_att_median_px,
+                pixel_rot_att_du_median_px,pixel_rot_att_dv_median_px);
             }
           }
 
@@ -3241,7 +3294,11 @@ int main(int argc,char** argv){
               <<"highres_imu_dN_m,highres_imu_dE_m,"
               <<"pairs,used,residual_median_m,gyro_residual_median_m,highres_residual_median_m,"
               <<"pixel_rot_valid,pixel_rot_points,pixel_rot_median_px,pixel_rot_p95_px,"
-              <<"pixel_rot_du_median_px,pixel_rot_dv_median_px";
+              <<"pixel_rot_du_median_px,pixel_rot_dv_median_px,"
+              <<"pixel_rot_direct_valid,pixel_rot_direct_median_px,"
+              <<"pixel_rot_direct_du_median_px,pixel_rot_direct_dv_median_px,"
+              <<"pixel_rot_att_valid,pixel_rot_att_median_px,"
+              <<"pixel_rot_att_du_median_px,pixel_rot_att_dv_median_px";
             for(int pi=0;pi<kHighresPhaseN;++pi){
               dr_csv<<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_valid"
                     <<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_angle_deg"
@@ -3316,7 +3373,15 @@ int main(int argc,char** argv){
             <<pixel_rot_median_px<<','
             <<pixel_rot_p95_px<<','
             <<pixel_rot_du_median_px<<','
-            <<pixel_rot_dv_median_px;
+            <<pixel_rot_dv_median_px<<','
+            <<(pixel_rot_direct_valid?1:0)<<','
+            <<pixel_rot_direct_median_px<<','
+            <<pixel_rot_direct_du_median_px<<','
+            <<pixel_rot_direct_dv_median_px<<','
+            <<(pixel_rot_att_valid?1:0)<<','
+            <<pixel_rot_att_median_px<<','
+            <<pixel_rot_att_du_median_px<<','
+            <<pixel_rot_att_dv_median_px;
           for(int pi=0;pi<kHighresPhaseN;++pi){
             dr_csv<<','<<(metric_highres_phase_step[pi].valid?1:0)
                   <<','<<metric_highres_phase_delta[pi].integrated_angle_deg
