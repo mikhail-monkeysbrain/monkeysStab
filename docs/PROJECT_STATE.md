@@ -230,6 +230,22 @@ B) полностью компенсировать вращение на RPi с 
 - `FLOW_OPTIONS` автоматически не менять;
 - focal/extrinsic/gyro scale не трогать.
 
+## 6.9. Stabilised corrected-ΔR flow shadow — 2026-09-20
+
+Commit `2143d59` добавляет только diagnostic shadow для будущего AP `FLOW_OPTIONS=Stabilised`; FC publisher не изменён.
+
+Из уже рассчитанного `HIGHRES_CORRECTED` metric step:
+- берётся FC/IMU displacement после full ΔR и lever-arm correction;
+- local velocity переводится через `R0^T` в body FRD;
+- используется та же геометрия camera height, что в metric estimator;
+- формируется stabilised angular flow для downward camera:
+  `flow_x=-v_body_y/h`, `flow_y=+v_body_x/h`.
+
+В `deltar_rotation_shadow.csv` добавлены:
+`stabilised_shadow_valid,stabilised_shadow_flow_x,stabilised_shadow_flow_y`.
+
+Этот контур не вызывает `sendOpticalFlow()`, не меняет `flow_send_x/y`, WORKED5, EKF или FC parameters. Его задача — проверить единицы/знаки/поведение будущего stabilised interface до любого flight A/B.
+
 ## 7. ΔR / HIGHRES: доказанные результаты
 
 Все ATTITUDE / ordinary gyro ΔR / HIGHRES ΔR варианты используют одинаковые:
