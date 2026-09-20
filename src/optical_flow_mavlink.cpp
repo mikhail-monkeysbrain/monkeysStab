@@ -773,7 +773,7 @@ struct FlowFc {
                   attitude_shadow_ofs
                     <<"seq,time_boot_ms,fc_sample_ns,recv_ns,mapped_sample_ns,"
                     <<"mapped_transport_ms,clock_map_valid,roll_rad,pitch_rad,yaw_rad,"
-                    <<"rollspeed_rad_s,pitchspeed_rad_s,yawspeed_rad_s\\n";
+                    <<"rollspeed_rad_s,pitchspeed_rad_s,yawspeed_rad_s\n";
               }
               if(attitude_shadow_ofs.is_open()){
                 const int64_t fc_sample_ns=
@@ -788,7 +788,7 @@ struct FlowFc {
                   <<fc_sample_ns<<','<<gyro.recv_ns<<','<<mapped_sample_ns<<','
                   <<mapped_transport_ms<<','<<(map_valid?1:0)<<','
                   <<q.roll<<','<<q.pitch<<','<<q.yaw<<','
-                  <<q.rollspeed<<','<<q.pitchspeed<<','<<q.yawspeed<<'\\n';
+                  <<q.rollspeed<<','<<q.pitchspeed<<','<<q.yawspeed<<'\n';
                 attitude_shadow_ofs.flush();
               }
 
