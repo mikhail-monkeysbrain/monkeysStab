@@ -2450,6 +2450,13 @@ int main(int argc,char** argv){
         double stabilised_shadow_roundtrip_vx=0.0;
         double stabilised_shadow_roundtrip_vy=0.0;
         double stabilised_shadow_roundtrip_err=0.0;
+        bool stabilised_sensor_shadow_valid=false;
+        double stabilised_sensor_shadow_flow_x=0.0;
+        double stabilised_sensor_shadow_flow_y=0.0;
+        double stabilised_sensor_shadow_v_body_x=0.0;
+        double stabilised_sensor_shadow_v_body_y=0.0;
+        double stabilised_sensor_shadow_v_body_z=0.0;
+        double stabilised_sensor_shadow_roundtrip_err=0.0;
         // PIXEL_ROTATION_SHADOW_V1: diagnostic only. Compare measured LK px1
         // with px1 predicted from px0 by HIGHRES delta-R. No range, lever arm,
         // ground-plane reconstruction, EKF, or production flow is involved.
@@ -2723,6 +2730,31 @@ int main(int argc,char** argv){
                   std::isfinite(stabilised_shadow_roundtrip_err) &&
                   std::hypot(stabilised_shadow_flow_x,
                              stabilised_shadow_flow_y)<4.0;
+
+                // SENSOR-centric Stabilised candidate: retain the optical
+                // centre lever-arm displacement so EKF FLOW_POS can model it.
+                const cv::Vec3d sensor_v_local=
+                  metric_highres_corr_gyro_step.delta_camera_local_m*
+                  (1.0/metric_highres_corr_gyro_step.dt);
+                const cv::Vec3d sensor_v_body=corr_R0.t()*sensor_v_local;
+                stabilised_sensor_shadow_v_body_x=sensor_v_body[0];
+                stabilised_sensor_shadow_v_body_y=sensor_v_body[1];
+                stabilised_sensor_shadow_v_body_z=sensor_v_body[2];
+                stabilised_sensor_shadow_flow_x=-sensor_v_body[1]/h0;
+                stabilised_sensor_shadow_flow_y= sensor_v_body[0]/h0;
+                const double sensor_back_vx=
+                  stabilised_sensor_shadow_flow_y*h0;
+                const double sensor_back_vy=
+                 -stabilised_sensor_shadow_flow_x*h0;
+                stabilised_sensor_shadow_roundtrip_err=std::hypot(
+                  sensor_back_vx-sensor_v_body[0],
+                  sensor_back_vy-sensor_v_body[1]);
+                stabilised_sensor_shadow_valid=
+                  std::isfinite(stabilised_sensor_shadow_flow_x) &&
+                  std::isfinite(stabilised_sensor_shadow_flow_y) &&
+                  std::isfinite(stabilised_sensor_shadow_roundtrip_err) &&
+                  std::hypot(stabilised_sensor_shadow_flow_x,
+                             stabilised_sensor_shadow_flow_y)<4.0;
               }
             }
           }
@@ -3510,6 +3542,9 @@ int main(int argc,char** argv){
               <<"stabilised_shadow_v_local_n,stabilised_shadow_v_local_e,stabilised_shadow_v_local_d,"
               <<"stabilised_shadow_v_body_x,stabilised_shadow_v_body_y,stabilised_shadow_v_body_z,"
               <<"stabilised_shadow_roundtrip_vx,stabilised_shadow_roundtrip_vy,stabilised_shadow_roundtrip_err,"
+              <<"stabilised_sensor_shadow_valid,stabilised_sensor_shadow_flow_x,stabilised_sensor_shadow_flow_y,"
+              <<"stabilised_sensor_shadow_v_body_x,stabilised_sensor_shadow_v_body_y,stabilised_sensor_shadow_v_body_z,"
+              <<"stabilised_sensor_shadow_roundtrip_err,"
               <<"pairs,used,residual_median_m,gyro_residual_median_m,highres_residual_median_m,"
               <<"pixel_rot_valid,pixel_rot_points,pixel_rot_median_px,pixel_rot_p95_px,"
               <<"pixel_rot_du_median_px,pixel_rot_dv_median_px,"
@@ -3617,6 +3652,13 @@ int main(int argc,char** argv){
             <<stabilised_shadow_roundtrip_vx<<','
             <<stabilised_shadow_roundtrip_vy<<','
             <<stabilised_shadow_roundtrip_err<<','
+            <<(stabilised_sensor_shadow_valid?1:0)<<','
+            <<stabilised_sensor_shadow_flow_x<<','
+            <<stabilised_sensor_shadow_flow_y<<','
+            <<stabilised_sensor_shadow_v_body_x<<','
+            <<stabilised_sensor_shadow_v_body_y<<','
+            <<stabilised_sensor_shadow_v_body_z<<','
+            <<stabilised_sensor_shadow_roundtrip_err<<','
             <<s.metric_prev_points.size()<<','
             <<metric_step.points<<','
             <<metric_step.residual_median_m<<','
