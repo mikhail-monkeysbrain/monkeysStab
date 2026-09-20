@@ -47,6 +47,8 @@ _statustext_proc=None
 _statustext_thread=None
 _zero={"x":None,"y":None,"z":None}
 _raw_zero={"n":None,"e":None}
+_imu_zero={"n":None,"e":None,"d":None}
+_fused_zero={"n":None,"e":None}
 _journal=deque(maxlen=500)
 _messages=deque(maxlen=500)
 _ws_clients=set()
@@ -182,7 +184,7 @@ def ws_broadcast(obj):
             for sock in dead:_ws_clients.discard(sock)
 
 def live_payload(raw):
-    global _live_latest,_live_last_wall,_last_rc_zero_seq
+    global _live_latest,_live_last_wall,_last_rc_zero_seq,_imu_zero,_fused_zero
     try:
         x=float(raw.get("x",0.0));y=float(raw.get("y",0.0));z=float(raw.get("z",0.0))
     except Exception:
@@ -194,6 +196,14 @@ def live_payload(raw):
         raw_e=float(raw_e) if raw_e is not None else None
     except Exception:
         raw_n=raw_e=None
+    def _opt_float(key):
+        try:
+            v=raw.get(key)
+            return float(v) if v is not None else None
+        except Exception:
+            return None
+    imu_n=_opt_float("imu_dr_n_mm"); imu_e=_opt_float("imu_dr_e_mm"); imu_d=_opt_float("imu_dr_d_mm")
+    fused_n=_opt_float("fused_v1_n_mm"); fused_e=_opt_float("fused_v1_e_mm")
 
     rc_zero_event=False
     try:
@@ -209,6 +219,11 @@ def live_payload(raw):
             _zero["x"],_zero["y"],_zero["z"]=x,y,z
             if raw_n is not None and raw_e is not None:
                 _raw_zero["n"],_raw_zero["e"]=raw_n,raw_e
+            if imu_n is not None: _imu_zero["n"]=imu_n
+            if imu_e is not None: _imu_zero["e"]=imu_e
+            if imu_d is not None: _imu_zero["d"]=imu_d
+            if fused_n is not None: _fused_zero["n"]=fused_n
+            if fused_e is not None: _fused_zero["e"]=fused_e
             rc_zero_event=True
             log_event("INFO",f"HOME/0 с пульта: RC6={raw.get('rc6_us',0)} RC8={raw.get('rc8_us',0)} RC10={raw.get('rc10_us',0)} seq={rc_seq}")
 
@@ -217,9 +232,21 @@ def live_payload(raw):
         zx,zy,zz=_zero["x"],_zero["y"],_zero["z"]
         if raw_n is not None and raw_e is not None and _raw_zero["n"] is None:
             _raw_zero["n"],_raw_zero["e"]=raw_n,raw_e
+        if imu_n is not None and _imu_zero["n"] is None: _imu_zero["n"]=imu_n
+        if imu_e is not None and _imu_zero["e"] is None: _imu_zero["e"]=imu_e
+        if imu_d is not None and _imu_zero["d"] is None: _imu_zero["d"]=imu_d
+        if fused_n is not None and _fused_zero["n"] is None: _fused_zero["n"]=fused_n
+        if fused_e is not None and _fused_zero["e"] is None: _fused_zero["e"]=fused_e
         rzn,rze=_raw_zero["n"],_raw_zero["e"]
+        izn,ize,izd=_imu_zero["n"],_imu_zero["e"],_imu_zero["d"]
+        fzn,fze=_fused_zero["n"],_fused_zero["e"]
     raw_rel_n=(raw_n-rzn) if raw_n is not None and rzn is not None else None
     raw_rel_e=(raw_e-rze) if raw_e is not None and rze is not None else None
+    imu_rel_n=(imu_n-izn) if imu_n is not None and izn is not None else None
+    imu_rel_e=(imu_e-ize) if imu_e is not None and ize is not None else None
+    imu_rel_d=(imu_d-izd) if imu_d is not None and izd is not None else None
+    fused_rel_n=(fused_n-fzn) if fused_n is not None and fzn is not None else None
+    fused_rel_e=(fused_e-fze) if fused_e is not None and fze is not None else None
     ekf_rel_x=x-zx
     ekf_rel_y=y-zy
     out={
@@ -247,9 +274,9 @@ def live_payload(raw):
         "raw_of_drift_mm":math.hypot(raw_rel_n,raw_rel_e)*1000.0 if raw_rel_n is not None and raw_rel_e is not None else None,
         "raw_of_vn":raw.get("raw_of_vn"),
         "raw_of_ve":raw.get("raw_of_ve"),
-        "imu_dr_n_mm":raw.get("imu_dr_n_mm"),
-        "imu_dr_e_mm":raw.get("imu_dr_e_mm"),
-        "imu_dr_d_mm":raw.get("imu_dr_d_mm"),
+        "imu_dr_n_mm":imu_rel_n,
+        "imu_dr_e_mm":imu_rel_e,
+        "imu_dr_d_mm":imu_rel_d,
         "imu_dr_vn":raw.get("imu_dr_vn"),
         "imu_dr_ve":raw.get("imu_dr_ve"),
         "imu_dr_vd":raw.get("imu_dr_vd"),
@@ -273,8 +300,8 @@ def live_payload(raw):
         "fused_v1_stop_constraints":raw.get("fused_v1_stop_constraints",0),
         "fused_v1_stationary":bool(raw.get("fused_v1_stationary",False)),
         "fused_v1_stop_confirm":raw.get("fused_v1_stop_confirm",0),
-        "fused_v1_n_mm":raw.get("fused_v1_n_mm"),
-        "fused_v1_e_mm":raw.get("fused_v1_e_mm"),
+        "fused_v1_n_mm":fused_rel_n,
+        "fused_v1_e_mm":fused_rel_e,
         "fused_v1_vn":raw.get("fused_v1_vn"),
         "fused_v1_ve":raw.get("fused_v1_ve"),
         "rc_zero_event":rc_zero_event,
@@ -872,7 +899,7 @@ def telemetry():
     return latest
 
 def set_zero():
-    global _live_latest
+    global _live_latest,_imu_zero,_fused_zero
     with _lock:
         if not _live_latest:
             raise RuntimeError("Нет live-телеметрии WebSocket")
@@ -888,10 +915,20 @@ def set_zero():
             # Current cumulative raw values = previous zero + current relative values.
             _raw_zero["n"]=(_raw_zero["n"] or 0.0)+float(rn)/1000.0
             _raw_zero["e"]=(_raw_zero["e"] or 0.0)+float(re)/1000.0
+        # IMU/FUSED telemetry is already in millimetres. Advance each baseline
+        # by the currently displayed relative value, exactly like EKF/RAW OF.
+        for key,axis in (("imu_dr_n_mm","n"),("imu_dr_e_mm","e"),("imu_dr_d_mm","d")):
+            v=cur.get(key)
+            if v is not None: _imu_zero[axis]=(_imu_zero[axis] or 0.0)+float(v)
+        for key,axis in (("fused_v1_n_mm","n"),("fused_v1_e_mm","e")):
+            v=cur.get(key)
+            if v is not None: _fused_zero[axis]=(_fused_zero[axis] or 0.0)+float(v)
         cur["x_mm"]=cur["y_mm"]=cur["z_mm"]=0.0
         cur["ekf_drift_mm"]=0.0
         if rn is not None and re is not None:
             cur["raw_of_n_mm"]=0.0;cur["raw_of_e_mm"]=0.0;cur["raw_of_drift_mm"]=0.0
+        cur["imu_dr_n_mm"]=cur["imu_dr_e_mm"]=cur["imu_dr_d_mm"]=0.0
+        cur["fused_v1_n_mm"]=cur["fused_v1_e_mm"]=0.0
         _live_latest=cur
     ws_broadcast({"type":"zero"})
 
@@ -1315,7 +1352,7 @@ button{cursor:pointer}
 const $=id=>document.getElementById(id);
 let latest=null,fcLatest=null,lastChartPaint=0;
 let telemetryWs=null,wsReconnectTimer=null,wsHistory=[],wsTrail=[],wsT0=null;
-let motionTrails={cam:[],imu:[],fused:[],ekf:[]},motionZero={imu:null,fused:null};
+let motionTrails={cam:[],imu:[],fused:[],ekf:[]};
 const MOTION_MAX_POINTS=900;
 const WS_MAX_POINTS=300;
 let viewMode='iso',viewYaw=.75,viewPitch=.65,viewDist=6.4;
@@ -1507,20 +1544,14 @@ function showFc(j){
 async function refreshFc(){try{showFc(await api('/api/fc'))}catch(e){$('linkDot').classList.add('baddot');$('linkText').textContent='НЕТ';$('fcDotBig').classList.add('baddot');$('fcState').textContent='НЕТ СВЯЗИ';$('fcMode').textContent='—'}}
 
 function resetMotionCompare(){
- motionTrails={cam:[],imu:[],fused:[],ekf:[]};motionZero={imu:null,fused:null};
+ motionTrails={cam:[],imu:[],fused:[],ekf:[]};
  drawMotionCompare();
 }
 function motionPoint(t,key){
  if(key==='cam' && t.raw_of_n_mm!=null && t.raw_of_e_mm!=null)return {n:Number(t.raw_of_n_mm),e:Number(t.raw_of_e_mm)};
  if(key==='ekf')return {n:Number(t.x_mm||0),e:Number(t.y_mm||0)};
- if(key==='imu' && t.imu_dr_n_mm!=null && t.imu_dr_e_mm!=null){
-   let n=Number(t.imu_dr_n_mm),e=Number(t.imu_dr_e_mm);
-   if(!motionZero.imu)motionZero.imu={n,e};return {n:n-motionZero.imu.n,e:e-motionZero.imu.e};
- }
- if(key==='fused' && t.fused_v1_n_mm!=null && t.fused_v1_e_mm!=null){
-   let n=Number(t.fused_v1_n_mm),e=Number(t.fused_v1_e_mm);
-   if(!motionZero.fused)motionZero.fused={n,e};return {n:n-motionZero.fused.n,e:e-motionZero.fused.e};
- }
+ if(key==='imu' && t.imu_dr_n_mm!=null && t.imu_dr_e_mm!=null)return {n:Number(t.imu_dr_n_mm),e:Number(t.imu_dr_e_mm)};
+ if(key==='fused' && t.fused_v1_n_mm!=null && t.fused_v1_e_mm!=null)return {n:Number(t.fused_v1_n_mm),e:Number(t.fused_v1_e_mm)};
  return null;
 }
 function pushMotionCompare(t){

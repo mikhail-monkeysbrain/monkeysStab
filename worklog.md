@@ -218,3 +218,15 @@ unavailable because the current WORKED5 optical-flow path does not independently
 estimate vertical displacement. FUSED V1 currently exposes N/E only, so its Z is
 also shown as unavailable rather than fabricating a value. No estimator/runtime
 publisher behavior changed; UI only. Frozen branch untouched.
+
+
+## 2026-09-20 — HOME resets IMU DR and FUSED display origins
+
+Fixed the Web HOME/zero semantics. Previously /api/zero only advanced FC EKF and
+RAW OF baselines; IMU DR and FUSED V1 kept their runtime cumulative coordinates,
+so the new explicit rows did not reset. Added server-side IMU N/E/D and FUSED
+N/E display baselines. HOME now zeroes FC EKF, CAM/WORKED5, IMU DR and FUSED V1
+together, and RC HOME applies the same baselines. The comparison canvas now uses
+the server-relative IMU/FUSED coordinates directly instead of adding a second
+browser-local zero. This changes presentation/reference origins only; estimator
+states and MAVLink output are untouched. Frozen branch untouched.
