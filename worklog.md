@@ -252,3 +252,24 @@ N/E/D velocity, active flag, stop samples and activation count. It is deliberate
 kept separate from pure IMU DR so a yaw test can distinguish "raw inertial DR
 keeps false velocity" from "camera-gated ZUPT fails to arrest it". No estimator,
 threshold, ZUPT, FUSED, MAVLink or frozen behavior changed.
+
+
+## 2026-09-20 — IMU DR body-frame accelerometer bias shadow fix
+
+Yaw testing exposed a persistent horizontal acceleration residual after the
+airframe stopped at a new yaw. Auditing src/imu_dead_reckoning.hpp found that
+startup accelerometer bias was accumulated in NED and then subtracted as a fixed
+NED vector forever. That makes a body-fixed sensor bias incorrect after yaw.
+
+Changed the test branch IMU DR calibration to estimate accelerometer bias in
+BODY coordinates: during stationary startup, subtract the ideal body-frame
+specific-force vector derived from roll/pitch, average the remaining body-fixed
+residual, then subtract that body bias from every HIGHRES_IMU acceleration sample
+before bodyToNed(). Gravity removal remains in bodyToNed() and the existing
+thresholds/ZUPT/integration are unchanged.
+
+This intentionally changes only the experimental IMU DR/FUSED diagnostic path.
+WORKED5 production optical flow, MAVLink optical-flow output and frozen branch
+remain untouched. Next validation is stationary -> HOME -> ~90 deg yaw around
+the IMU centre -> stationary, checking whether post-yaw ACC N/E returns near
+zero and whether IMU+CAM ZUPT endpoint error shrinks.

@@ -9,7 +9,9 @@ struct State {
   bool calibrated=false;
   bool calibrating=true;
   int bias_samples=0;
-  double bias_n=0,bias_e=0,bias_d=0;
+  // Accelerometer bias must stay in the sensor/body frame.  A bias stored
+  // in NED becomes yaw-dependent after the airframe rotates.
+  double bias_bx=0,bias_by=0,bias_bz=0;
   double acc_n=0,acc_e=0,acc_d=0;
   double vel_n=0,vel_e=0,vel_d=0;
   double pos_n=0,pos_e=0,pos_d=0;
@@ -33,16 +35,34 @@ inline void bodyToNed(double ax,double ay,double az,double roll,double pitch,dou
 inline void update(State& s,double ax,double ay,double az,double gx,double gy,double gz,
                    double roll,double pitch,double yaw,uint64_t time_usec,
                    bool external_zupt_allow=true){
-  double n,e,d; bodyToNed(ax,ay,az,roll,pitch,yaw,n,e,d);
+  // Calibrate the accelerometer residual in BODY coordinates.  During the
+  // stationary startup calibration the ideal specific-force vector in body is
+  // R_ned_to_body * [0,0,-g] for the HIGHRES_IMU convention used below.
+  // Subtracting that ideal vector leaves a body-fixed sensor bias, which then
+  // rotates correctly with the airframe on every subsequent sample.
   if(s.calibrating){
-    s.bias_n+=n; s.bias_e+=e; s.bias_d+=d; ++s.bias_samples;
-    if(s.bias_samples>=50){s.bias_n/=s.bias_samples;s.bias_e/=s.bias_samples;s.bias_d/=s.bias_samples;s.calibrating=false;s.calibrated=true;s.last_time_usec=time_usec;}
+    double ideal_ax,ideal_ay,ideal_az;
+    const double cr=std::cos(roll),sr=std::sin(roll);
+    const double cp=std::cos(pitch),sp=std::sin(pitch);
+    ideal_ax= 9.80665*sp;
+    ideal_ay=-9.80665*cp*sr;
+    ideal_az=-9.80665*cp*cr;
+    s.bias_bx+=ax-ideal_ax;
+    s.bias_by+=ay-ideal_ay;
+    s.bias_bz+=az-ideal_az;
+    ++s.bias_samples;
+    if(s.bias_samples>=50){
+      s.bias_bx/=s.bias_samples; s.bias_by/=s.bias_samples; s.bias_bz/=s.bias_samples;
+      s.calibrating=false; s.calibrated=true; s.last_time_usec=time_usec;
+    }
     return;
   }
   if(!s.calibrated||!s.last_time_usec||time_usec<=s.last_time_usec){s.last_time_usec=time_usec;return;}
   const double dt=(time_usec-s.last_time_usec)*1e-6; s.last_time_usec=time_usec;
   if(!(dt>0&&dt<0.1))return;
-  s.acc_n=n-s.bias_n; s.acc_e=e-s.bias_e; s.acc_d=d-s.bias_d;
+  double n,e,d;
+  bodyToNed(ax-s.bias_bx,ay-s.bias_by,az-s.bias_bz,roll,pitch,yaw,n,e,d);
+  s.acc_n=n; s.acc_e=e; s.acc_d=d;
   const double amag=std::sqrt(s.acc_n*s.acc_n+s.acc_e*s.acc_e+s.acc_d*s.acc_d);
   const double gmag=std::sqrt(gx*gx+gy*gy+gz*gz);
   const bool acc_ok=amag<0.12;
