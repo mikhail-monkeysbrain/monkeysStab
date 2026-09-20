@@ -316,12 +316,69 @@ struct FlowFc {
   FlowFcRc rc{};
   std::deque<FlowFcGyro> attitude_history; // ATTITUDE, currently keyed by RPi receive time
   std::deque<FlowFcRawGyro> highres_gyro_history; // independent HIGHRES_IMU gyro stream
-  // HIGHRES_CLOCK_MAP_V1: causal lower-envelope mapping from FC measurement
-  // time to the RPi CLOCK_MONOTONIC domain used by V4L2 camera timestamps.
-  // recv_ns = fc_time_ns + transport_latency + clock_offset, therefore the
-  // minimum observed (recv_ns-fc_time_ns) is the least-latency clock anchor.
-  int64_t highres_clock_offset_ns=0;
+  // HIGHRES_CLOCK_MAP_V2: affine FC->RPi clock map fitted to one-second
+  // lower-envelope receive offsets.  FC and RPi clocks measurably run at
+  // different rates, so a constant offset is not sufficient.
   bool highres_clock_valid=false;
+  int64_t highres_clock_fc0_ns=0;
+  int64_t highres_clock_bin=-1;
+  int64_t highres_clock_bin_min_offset_ns=0;
+  uint64_t highres_clock_fit_n=0;
+  long double highres_clock_sum_t=0.0L;
+  long double highres_clock_sum_o=0.0L;
+  long double highres_clock_sum_tt=0.0L;
+  long double highres_clock_sum_to=0.0L;
+  double highres_clock_offset0_ns=0.0;
+  double highres_clock_drift_ns_per_s=0.0;
+
+  void updateHighresClockMap(int64_t fc_ns,int64_t recv_ns){
+    const int64_t off=recv_ns-fc_ns;
+    if(!highres_clock_valid){
+      highres_clock_valid=true;
+      highres_clock_fc0_ns=fc_ns;
+      highres_clock_bin=0;
+      highres_clock_bin_min_offset_ns=off;
+      highres_clock_offset0_ns=static_cast<double>(off);
+      return;
+    }
+    const double t_s=(fc_ns-highres_clock_fc0_ns)*1e-9;
+    const int64_t bin=static_cast<int64_t>(std::floor(std::max(0.0,t_s)));
+    if(bin==highres_clock_bin){
+      highres_clock_bin_min_offset_ns=std::min(highres_clock_bin_min_offset_ns,off);
+      return;
+    }
+    if(bin>highres_clock_bin){
+      const long double tb=static_cast<long double>(highres_clock_bin)+0.5L;
+      const long double ob=static_cast<long double>(highres_clock_bin_min_offset_ns);
+      ++highres_clock_fit_n;
+      highres_clock_sum_t+=tb;
+      highres_clock_sum_o+=ob;
+      highres_clock_sum_tt+=tb*tb;
+      highres_clock_sum_to+=tb*ob;
+      if(highres_clock_fit_n>=3){
+        const long double n=static_cast<long double>(highres_clock_fit_n);
+        const long double den=n*highres_clock_sum_tt-highres_clock_sum_t*highres_clock_sum_t;
+        if(std::abs(den)>1e-9L){
+          const long double m=(n*highres_clock_sum_to-highres_clock_sum_t*highres_clock_sum_o)/den;
+          const long double c=(highres_clock_sum_o-m*highres_clock_sum_t)/n;
+          highres_clock_drift_ns_per_s=static_cast<double>(m);
+          highres_clock_offset0_ns=static_cast<double>(c);
+        }
+      } else {
+        highres_clock_offset0_ns=std::min(
+          highres_clock_offset0_ns,static_cast<double>(highres_clock_bin_min_offset_ns));
+      }
+      highres_clock_bin=bin;
+      highres_clock_bin_min_offset_ns=off;
+    }
+  }
+
+  int64_t mapHighresFcToMono(int64_t fc_ns) const {
+    if(!highres_clock_valid) return fc_ns;
+    const double t_s=(fc_ns-highres_clock_fc0_ns)*1e-9;
+    const double off=highres_clock_offset0_ns+highres_clock_drift_ns_per_s*t_s;
+    return fc_ns+static_cast<int64_t>(std::llround(off));
+  }
   std::ofstream highres_gyro_shadow_ofs;
   uint64_t local_count=0;
   uint64_t ekf_count=0;
@@ -707,11 +764,7 @@ struct FlowFc {
               // This does not use ATTITUDE.rollspeed/pitchspeed/yawspeed and
               // does not feed any production estimator or MAVLink output.
               const int64_t fc_sample_ns=static_cast<int64_t>(q.time_usec)*1000LL;
-              const int64_t clock_candidate_ns=imu.recv_ns-fc_sample_ns;
-              if(!highres_clock_valid || clock_candidate_ns<highres_clock_offset_ns){
-                highres_clock_offset_ns=clock_candidate_ns;
-                highres_clock_valid=true;
-              }
+              updateHighresClockMap(fc_sample_ns,imu.recv_ns);
               highres_gyro_history.push_back(
                 {q.xgyro,q.ygyro,q.zgyro,q.time_usec,imu.recv_ns,true});
               while(highres_gyro_history.size()>2 &&
@@ -2373,11 +2426,10 @@ int main(int argc,char** argv){
             hgh.resize(fc.highres_gyro_history.size());
             for(size_t i=0;i<fc.highres_gyro_history.size();++i){
               const auto& g=fc.highres_gyro_history[i];
-              // HIGHRES_CLOCK_MAP_V1: use FC measurement time, mapped once into
-              // the camera CLOCK_MONOTONIC domain by the causal lower envelope.
-              // This removes variable MAVLink receive latency from inter-frame ΔR.
+              // HIGHRES_CLOCK_MAP_V2: affine FC measurement time -> camera
+              // CLOCK_MONOTONIC, using the causal one-second lower-envelope fit.
               const int64_t mapped_ns=fc.highres_clock_valid
-                ? static_cast<int64_t>(g.fc_time_usec)*1000LL+fc.highres_clock_offset_ns
+                ? fc.mapHighresFcToMono(static_cast<int64_t>(g.fc_time_usec)*1000LL)
                 : g.recv_ns;
               hgh[i]={g.x,g.y,g.z,mapped_ns,g.valid};
             }
@@ -2427,7 +2479,8 @@ int main(int argc,char** argv){
           // HIGHRES_DELTAR_SHADOW_V2: same geometry and same absolute R0,
           // but inter-frame delta-R comes from independent HIGHRES_IMU gyro.
           // FC time_usec is mapped to camera CLOCK_MONOTONIC by the causal
-          // lower-envelope clock anchor above; receive-time jitter is excluded.
+          // affine lower-envelope clock fit above; receive-time jitter and
+          // measured FC/RPi clock-rate drift are excluded.
           metric_highres_gyro_delta=metric_shadow::integrateBodyRates(
             hgh,prev_ts,ts,30.0);
           if(a0.valid && metric_highres_gyro_delta.valid){

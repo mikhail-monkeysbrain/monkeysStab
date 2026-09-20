@@ -313,3 +313,28 @@ FUSED paths, camera calibration, lever geometry and the frozen branch are
 unchanged. Next validation is the same stationary -> ~90 deg yaw -> stationary
 maneuver and comparison of HIGHRES CAMERA/LEVER/IMU residual against the
 20260920_111236 baseline.
+
+
+## 2026-09-20 — HIGHRES_DELTAR affine clock-map V3
+
+The 20260920_113534 raw HIGHRES log disproved the constant-offset assumption.
+Across 11,521 samples / 115.20 s of FC time, recv_ns-fc_time_ns increased by
+240.815 ms. Offline least-squares gives RPi/FC clock-rate ratio about
+1.00205266 (+2052.7 ppm); a one-second lower-envelope fit gives about
++2.0549 ms/s. With V2's fixed minimum offset, mapped HIGHRES time therefore
+fell more than 30 ms behind after only about 7.74 s, explaining why the
+rotation shadow lost valid HIGHRES brackets before the yaw maneuver.
+
+Changed only the diagnostic HIGHRES clock mapper:
+- replace constant min(recv-fc) with a causal affine map;
+- collect the minimum recv-fc offset inside each completed one-second FC-time bin;
+- fit offset(t)=c+m*t incrementally over completed lower-envelope bins;
+- map buffered HIGHRES measurement timestamps with that affine relation;
+- keep the first seconds on the causal constant-offset fallback until three
+  completed bins exist.
+
+No gyro scale, camera calibration, lever geometry, WORKED5, OPTICAL_FLOW,
+IMU DR/FUSED production behavior or frozen branch is changed. Next validation
+is the same one-way yaw test; first acceptance criterion is that HIGHRES remains
+valid through the maneuver, then residual is compared with the pre-map ~38.8 mm
+baseline.
