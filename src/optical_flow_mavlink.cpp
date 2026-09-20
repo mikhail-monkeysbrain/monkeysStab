@@ -2432,6 +2432,14 @@ int main(int argc,char** argv){
         metric_shadow::Step metric_step;
         metric_shadow::Step metric_gyro_step;
         metric_shadow::Step metric_highres_gyro_step;
+        metric_shadow::Step metric_highres_corr_gyro_step;
+        // STABILISED_FLOW_SHADOW_V1: AP FLOW_OPTIONS=Stabilised candidate.
+        // This is the body-FRD angular translation flow reconstructed from the
+        // corrected metric IMU displacement. It is LOGGING ONLY and is never
+        // sent to the flight controller.
+        bool stabilised_shadow_valid=false;
+        double stabilised_shadow_flow_x=0.0;
+        double stabilised_shadow_flow_y=0.0;
         // PIXEL_ROTATION_SHADOW_V1: diagnostic only. Compare measured LK px1
         // with px1 predicted from px0 by HIGHRES delta-R. No range, lever arm,
         // ground-plane reconstruction, EKF, or production flow is involved.
@@ -2655,6 +2663,41 @@ int main(int argc,char** argv){
             const cv::Matx33d corr_R1=corr_R0*metric_highres_corr_gyro_delta.delta_R;
             metric_highres_corr_gyro_step=metric_shadow::estimateWithRotations(
               mi,corr_R0,corr_R1);
+          }
+
+          // Convert the already rotation- and lever-arm-compensated FC/IMU
+          // displacement back to AP body-FRD angular flow. For a downward
+          // camera: flow_x ~= -v_body_y/h, flow_y ~= +v_body_x/h.
+          // R0^T converts local velocity to body0 FRD. Use the same camera
+          // height geometry as the metric estimator so this shadow has a
+          // well-defined contract for a future FLOW_OPTIONS=Stabilised A/B.
+          if(metric_highres_corr_gyro_step.valid && a0.valid &&
+             mi.range0_valid && mi.body_R_camera_valid){
+            const cv::Matx33d corr_R0=metric_shadow::bodyToLocal(
+              a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
+            cv::Vec3d lidar_ray_body=mi.range_ray_body_frd;
+            const double lrnorm=cv::norm(lidar_ray_body);
+            if(lrnorm>0.5 && std::isfinite(lrnorm)){
+              lidar_ray_body*=1.0/lrnorm;
+              const cv::Vec3d down(0,0,1);
+              const double h0=down.dot(corr_R0*(
+                mi.range_pos_body_frd-mi.camera_pos_body_frd+
+                mi.range0_m*lidar_ray_body));
+              if(h0>0.03 && std::isfinite(h0) &&
+                 metric_highres_corr_gyro_step.dt>0.0){
+                const cv::Vec3d v_local=
+                  metric_highres_corr_gyro_step.delta_local_m*
+                  (1.0/metric_highres_corr_gyro_step.dt);
+                const cv::Vec3d v_body=corr_R0.t()*v_local;
+                stabilised_shadow_flow_x=-v_body[1]/h0;
+                stabilised_shadow_flow_y= v_body[0]/h0;
+                stabilised_shadow_valid=
+                  std::isfinite(stabilised_shadow_flow_x) &&
+                  std::isfinite(stabilised_shadow_flow_y) &&
+                  std::hypot(stabilised_shadow_flow_x,
+                             stabilised_shadow_flow_y)<4.0;
+              }
+            }
           }
 
           // PIXEL_ROTATION_SHADOW_V1. OpenCV undistorted normalized rays are
@@ -3435,6 +3478,7 @@ int main(int argc,char** argv){
               <<"highres_corr_camera_dN_m,highres_corr_camera_dE_m,"
               <<"highres_corr_lever_dN_m,highres_corr_lever_dE_m,"
               <<"highres_corr_imu_dN_m,highres_corr_imu_dE_m,highres_corr_residual_median_m,"
+              <<"stabilised_shadow_valid,stabilised_shadow_flow_x,stabilised_shadow_flow_y,"
               <<"pairs,used,residual_median_m,gyro_residual_median_m,highres_residual_median_m,"
               <<"pixel_rot_valid,pixel_rot_points,pixel_rot_median_px,pixel_rot_p95_px,"
               <<"pixel_rot_du_median_px,pixel_rot_dv_median_px,"
@@ -3529,6 +3573,9 @@ int main(int argc,char** argv){
             <<metric_highres_corr_gyro_step.delta_local_m[0]<<','
             <<metric_highres_corr_gyro_step.delta_local_m[1]<<','
             <<metric_highres_corr_gyro_step.residual_median_m<<','
+            <<(stabilised_shadow_valid?1:0)<<','
+            <<stabilised_shadow_flow_x<<','
+            <<stabilised_shadow_flow_y<<','
             <<s.metric_prev_points.size()<<','
             <<metric_step.points<<','
             <<metric_step.residual_median_m<<','
