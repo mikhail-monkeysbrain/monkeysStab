@@ -2474,7 +2474,6 @@ int main(int argc,char** argv){
         metric_shadow::BodyRateIntegration metric_gyro_delta{};
         metric_shadow::BodyRateIntegration metric_highres_gyro_delta{};
         metric_shadow::BodyRateIntegration metric_highres_corr_gyro_delta{};
-        metric_shadow::Step metric_highres_corr_gyro_step{};
         // HIGHRES_PHASE_SWEEP_V1: diagnostic-only camera/gyro phase sweep.
         // Offsets shift the HIGHRES integration window in RPi CLOCK_MONOTONIC.
         // Production WORKED5 / OPTICAL_FLOW paths are untouched.
