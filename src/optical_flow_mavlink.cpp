@@ -3203,9 +3203,9 @@ int main(int argc,char** argv){
             <<",\"imu_dr_calibrated\":"<<(fc.imu_dr_state.calibrated?"true":"false")
             <<",\"imu_dr_calibrating\":"<<(fc.imu_dr_state.calibrating?"true":"false")
             <<",\"imu_dr_bias_samples\":"<<fc.imu_dr_state.bias_samples
-            <<",\"imu_dr_bias_n\":"<<jsonNumber(fc.imu_dr_state.bias_n)
-            <<",\"imu_dr_bias_e\":"<<jsonNumber(fc.imu_dr_state.bias_e)
-            <<",\"imu_dr_bias_d\":"<<jsonNumber(fc.imu_dr_state.bias_d)
+            <<",\"imu_dr_bias_bx\":"<<jsonNumber(fc.imu_dr_state.bias_bx)
+            <<",\"imu_dr_bias_by\":"<<jsonNumber(fc.imu_dr_state.bias_by)
+            <<",\"imu_dr_bias_bz\":"<<jsonNumber(fc.imu_dr_state.bias_bz)
             <<",\"imu_dr_n_mm\":"<<jsonNumber(fc.imu_dr_state.pos_n*1000.0)
             <<",\"imu_dr_e_mm\":"<<jsonNumber(fc.imu_dr_state.pos_e*1000.0)
             <<",\"imu_dr_d_mm\":"<<jsonNumber(fc.imu_dr_state.pos_d*1000.0)

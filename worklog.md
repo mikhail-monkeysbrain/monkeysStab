@@ -273,3 +273,13 @@ WORKED5 production optical flow, MAVLink optical-flow output and frozen branch
 remain untouched. Next validation is stationary -> HOME -> ~90 deg yaw around
 the IMU centre -> stationary, checking whether post-yaw ACC N/E returns near
 zero and whether IMU+CAM ZUPT endpoint error shrinks.
+
+
+## 2026-09-20 — build fix after BODY-frame IMU bias migration
+
+Fixed the telemetry JSON publisher after the IMU DR bias state was renamed from
+NED bias_n/e/d to BODY bias_bx/by/bz. The previous test commit correctly changed
+the estimator state but left three diagnostic serialization references to the
+removed members, causing smoke_build.sh to fail. Telemetry now exports
+imu_dr_bias_bx/by/bz. No estimator math or thresholds changed in this follow-up.
+Frozen branch remains untouched.
