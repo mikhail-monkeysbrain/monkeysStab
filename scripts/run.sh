@@ -76,6 +76,11 @@ elif (( FREE_MB < 1024 )); then
 fi
 
 bash "$ROOT/scripts/audit_geometry.sh"
+if [[ "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "1" || "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "true" || "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "yes" ]]; then
+  export MONKEYS_FLOW_OPTIONS_EXPECTED=1
+else
+  export MONKEYS_FLOW_OPTIONS_EXPECTED=0
+fi
 bash "$ROOT/scripts/audit_fc_params.sh"
 
 [[ -e "$CAMERA" ]] || { echo "ОШИБКА: камера не найдена: $CAMERA" >&2; exit 2; }
