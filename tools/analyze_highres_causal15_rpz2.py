@@ -210,7 +210,9 @@ def main():
         print(f"deltaR_error_deg median={pct(diffs,50):.6f} p95={pct(diffs,95):.6f} max={max(diffs):.6f}")
     from collections import Counter
     print("causal_invalid_reasons="+str(dict(Counter(x[8] for x in rows if x[4]==0))))
-    print("===== W5 MOVEMENT BY CAUSAL COVERAGE =====")\n    if sum(len(v) for v in buckets.values())==0:\n        print("w5_movement_status=UNAVAILABLE columns="+",".join(sorted(missing_w5_columns)))
+    print("===== W5 MOVEMENT BY CAUSAL COVERAGE =====")
+    if sum(len(v) for v in buckets.values())==0:
+        print("w5_movement_status=UNAVAILABLE columns="+",".join(sorted(missing_w5_columns)))
     total=np.array([0.0,0.0]); cumulative=np.array([0.0,0.0])
     for name in ("causal15","causal20_only","causal25_only","over25"):
         arr=buckets[name]
