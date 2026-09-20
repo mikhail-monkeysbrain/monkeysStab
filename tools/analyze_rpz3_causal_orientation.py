@@ -64,17 +64,57 @@ def main():
         att=[(iv(r,"recv_ns"),iv(r,"mapped_sample_ns"),fv(r,"roll_rad"),fv(r,"pitch_rad"),fv(r,"yaw_rad"))
              for r in csv.DictReader(f) if iv(r,"clock_map_valid")==1 and iv(r,"mapped_sample_ns")>0]
     with open(a.highres_csv,newline="") as f:
-        hr=[]
+        raw_hr=[]
         for r in csv.DictReader(f):
             vals=(r.get("corr_gx_rad_s"),r.get("corr_gy_rad_s"),r.get("corr_gz_rad_s"))
-            try:w=np.array([float(x) for x in vals],float)
-            except:continue
-            # Existing runtime logger has already written mapped_sample_ns when available.
-            mt=iv(r,"mapped_sample_ns")
-            if not mt:
-                # Some HIGHRES log revisions call it mapped_fc_ns.
-                mt=iv(r,"mapped_fc_ns")
-            if mt>0 and np.all(np.isfinite(w)):hr.append((iv(r,"recv_ns"),mt,w))
+            try:
+                if any(v is None or not str(v).strip() for v in vals): continue
+                w=np.array([float(x) for x in vals],float)
+            except (TypeError,ValueError):
+                continue
+            fc=iv(r,"fc_time_usec")*1000
+            recv=iv(r,"recv_ns")
+            if fc>0 and recv>0 and np.all(np.isfinite(w)):
+                raw_hr.append((recv,fc,w))
+    raw_hr.sort(key=lambda x:x[0])
+
+    # Same lower-envelope affine FC->RPi mapper used by the validated RPZ2
+    # causal replay: one minimum receive offset per FC second, OLS after bins.
+    class ClockMap:
+        def __init__(self):
+            self.valid=False; self.fc0=0; self.bin=-1; self.bin_min=0
+            self.n=0; self.st=self.so=self.stt=self.sto=0.0
+            self.off0=0.0; self.drift=0.0
+        def update(self,fc_ns,recv_ns):
+            off=recv_ns-fc_ns
+            if not self.valid:
+                self.valid=True; self.fc0=fc_ns; self.bin=0
+                self.bin_min=off; self.off0=float(off); return
+            tt=(fc_ns-self.fc0)*1e-9
+            b=int(math.floor(max(0.0,tt)))
+            if b==self.bin:
+                self.bin_min=min(self.bin_min,off); return
+            if b>self.bin:
+                tb=float(self.bin)+0.5; ob=float(self.bin_min)
+                self.n+=1; self.st+=tb; self.so+=ob
+                self.stt+=tb*tb; self.sto+=tb*ob
+                if self.n>=3:
+                    den=self.n*self.stt-self.st*self.st
+                    if abs(den)>1e-9:
+                        self.drift=(self.n*self.sto-self.st*self.so)/den
+                        self.off0=(self.so-self.drift*self.st)/self.n
+                else:
+                    self.off0=min(self.off0,float(self.bin_min))
+                self.bin=b; self.bin_min=off
+        def map(self,fc_ns):
+            tt=(fc_ns-self.fc0)*1e-9
+            return fc_ns+int(round(self.off0+self.drift*tt))
+
+    mapper=ClockMap()
+    hr=[]
+    for recv,fc,w in raw_hr:
+        mapper.update(fc,recv)
+        hr.append((recv,mapper.map(fc),w))
     att.sort();hr.sort()
     arecv=[x[0] for x in att]; hrecv=[x[0] for x in hr]
     targets=[]
@@ -83,7 +123,7 @@ def main():
         if a.start_s<=ts<=a.end_s and iv(r,"worked5_valid")==1 and iv(r,"stabilised_publish_ready")==0:
             dq=iv(r,"camera_dequeue_ns") or iv(r,"mono_ns"); targets.append((r,dq,iv(r,"mono_ns")))
     print(f"targets={len(targets)} attitude={len(att)} highres={len(hr)}")
-    if not hr:raise SystemExit("HIGHRES mapped timestamp column not found; inspect header before changing code.")
+    if not hr:raise SystemExit("No valid HIGHRES rows after fc_time_usec mapping.")
     limits=(15,20,25,30,35,40)
     for lim in limits:
         errs=[];ok=0;no_oracle=0;no_hr=0
