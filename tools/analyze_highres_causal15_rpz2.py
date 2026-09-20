@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+# Offline regression for HIGHRES_CAUSAL15_SHADOW_V1.
+# Replays the runtime causal FC->RPi clock map and limits HIGHRES availability
+# to samples whose recv_ns is not newer than the camera dequeue timestamp.
+
+import argparse, csv, math
+from collections import deque
+import numpy as np
+
+def exp_so3(v):
+    a=float(np.linalg.norm(v))
+    if a < 1e-12:
+        return np.eye(3)
+    k=v/a
+    K=np.array([[0,-k[2],k[1]],[k[2],0,-k[0]],[-k[1],k[0],0]],float)
+    return np.eye(3)+math.sin(a)*K+(1-math.cos(a))*(K@K)
+
+def rot_dist_deg(a,b):
+    d=a.T@b
+    c=max(-1.0,min(1.0,(float(np.trace(d))-1.0)*0.5))
+    return math.degrees(math.acos(c))
+
+class ClockMap:
+    def __init__(self):
+        self.valid=False; self.fc0=0; self.bin=-1; self.bin_min=0
+        self.n=0; self.st=self.so=self.stt=self.sto=0.0
+        self.off0=0.0; self.drift=0.0
+    def update(self,fc_ns,recv_ns):
+        off=recv_ns-fc_ns
+        if not self.valid:
+            self.valid=True; self.fc0=fc_ns; self.bin=0
+            self.bin_min=off; self.off0=float(off); return
+        t=(fc_ns-self.fc0)*1e-9
+        b=int(math.floor(max(0.0,t)))
+        if b==self.bin:
+            self.bin_min=min(self.bin_min,off); return
+        if b>self.bin:
+            tb=float(self.bin)+0.5; ob=float(self.bin_min)
+            self.n+=1; self.st+=tb; self.so+=ob; self.stt+=tb*tb; self.sto+=tb*ob
+            if self.n>=3:
+                den=self.n*self.stt-self.st*self.st
+                if abs(den)>1e-9:
+                    self.drift=(self.n*self.sto-self.st*self.so)/den
+                    self.off0=(self.so-self.drift*self.st)/self.n
+            else:
+                self.off0=min(self.off0,float(self.bin_min))
+            self.bin=b; self.bin_min=off
+    def map(self,fc_ns):
+        t=(fc_ns-self.fc0)*1e-9
+        return fc_ns+int(round(self.off0+self.drift*t))
+
+def integrate_strict(samples,t0,t1,max_gap_ms=30.0):
+    if len(samples)<2: return None
+    def interp(t):
+        hi=next((i for i,x in enumerate(samples) if x[0]>=t),None)
+        if hi is None or hi==0: return None
+        lo=hi-1; a=samples[lo]; b=samples[hi]
+        gap=(b[0]-a[0])*1e-6
+        if gap>max_gap_ms or b[0]<=a[0]: return None
+        u=(t-a[0])/(b[0]-a[0])
+        w=(1-u)*a[1]+u*b[1]
+        return w,gap
+    e0=interp(t0); e1=interp(t1)
+    if e0 is None or e1 is None: return None
+    knots=[(t0,e0[0])]
+    knots += [(t,w) for t,w in samples if t0<t<t1]
+    knots.append((t1,e1[0]))
+    R=np.eye(3); angle=0.0
+    for (ta,wa),(tb,wb) in zip(knots,knots[1:]):
+        dt=(tb-ta)*1e-9
+        wm=(wa+wb)*0.5
+        rv=wm*dt; R=R@exp_so3(rv); angle+=float(np.linalg.norm(rv))
+    return R,math.degrees(angle),len(knots)-1,max(e0[1],e1[1])
+
+def integrate_hold(samples,t0,t1,max_hold_ms=15.0):
+    before=[x for x in samples if x[0]<=t0]
+    if not before: return None
+    rate_t,rate=before[-1]
+    start=(t0-rate_t)*1e-6
+    if start<0 or start>max_hold_ms: return None
+    R=np.eye(3); angle=0.0; seg=0; seg_start=t0
+    for t,w in samples:
+        if t<=t0 or t>=t1: continue
+        dt=(t-seg_start)*1e-9
+        if dt<=0 or dt>=0.1: return None
+        rv=rate*dt; R=R@exp_so3(rv); angle+=float(np.linalg.norm(rv)); seg+=1
+        rate_t=t; rate=w; seg_start=t
+    end=(t1-rate_t)*1e-6
+    if end<0 or end>max_hold_ms: return None
+    dt=(t1-seg_start)*1e-9
+    if dt>0:
+        rv=rate*dt; R=R@exp_so3(rv); angle+=float(np.linalg.norm(rv)); seg+=1
+    return R,math.degrees(angle),seg,max(start,end)
+
+def read_csv(path):
+    with open(path,newline='') as f: return list(csv.DictReader(f))
+
+def pct(v,p):
+    if not v:return float('nan')
+    a=np.asarray(v,float)
+    return float(np.percentile(a,p))
+
+def main():
+    ap=argparse.ArgumentParser()
+    ap.add_argument("main_csv"); ap.add_argument("deltar_csv"); ap.add_argument("highres_csv")
+    ap.add_argument("--start-ns",type=int,required=True); ap.add_argument("--end-ns",type=int,required=True)
+    ap.add_argument("--hold-ms",type=float,default=15.0)
+    a=ap.parse_args()
+    main_rows=read_csv(a.main_csv); dr=read_csv(a.deltar_csv); hr=read_csv(a.highres_csv)
+    # optical_flow_mavlink.csv first columns are now,ts,v4l2_ts,dq_mono,...
+    by_frame={int(r["frame"]):r for r in main_rows if r.get("frame","").strip()}
+    targets=[]
+    for r in dr:
+        t0=int(r["t0_ns"]); t1=int(r["t1_ns"])
+        if not(a.start_ns<=t1<=a.end_ns): continue
+        if int(r.get("w5_valid","0"))!=1: continue
+        if int(r.get("stabilised_unified_shadow_valid","0"))!=0: continue
+        targets.append(r)
+    raw=[]
+    for r in hr:
+        if not r.get("fc_time_usec","").strip(): continue
+        fc=int(r["fc_time_usec"])*1000; recv=int(r["recv_ns"])
+        w=np.array([float(r["corr_gx_rad_s"]),float(r["corr_gy_rad_s"]),float(r["corr_gz_rad_s"])])
+        raw.append((recv,fc,w))
+    raw.sort(key=lambda x:x[0])
+    mapper=ClockMap(); hist=deque(); hi=0
+    recovered=0; strict_rt=0; diffs=[]; holds=[]; rows=[]
+    for r in sorted(targets,key=lambda x:int(x["t1_ns"])):
+        frame=int(r["frame"]); t0=int(r["t0_ns"]); t1=int(r["t1_ns"])
+        m=by_frame.get(frame)
+        if m is None: continue
+        dq=int(m.get("selected_dq_mono_ns") or m.get("dq_mono_ns") or list(m.values())[3])
+        while hi<len(raw) and raw[hi][0]<=dq:
+            recv,fc,w=raw[hi]; mapper.update(fc,recv)
+            hist.append((fc,w)); hi+=1
+        while hist and mapper.map(hist[0][0])<t0-100_000_000: hist.popleft()
+        mapped=[(mapper.map(fc),w) for fc,w in hist]
+        mapped.sort(key=lambda x:x[0])
+        st=integrate_strict(mapped,t0,t1)
+        ca=integrate_hold(mapped,t0,t1,a.hold_ms)
+        if st: strict_rt+=1
+        if ca:
+            recovered+=1; holds.append(ca[3])
+        # Oracle strict uses future samples, but the same causal map state.
+        oracle_raw=[]
+        j=hi
+        while j<len(raw) and raw[j][0]<=dq+50_000_000:
+            oracle_raw.append((mapper.map(raw[j][1]),raw[j][2])); j+=1
+        oracle=integrate_strict(mapped+oracle_raw,t0,t1)
+        diff=float('nan')
+        if ca and oracle:
+            diff=rot_dist_deg(oracle[0],ca[0]); diffs.append(diff)
+        rows.append((frame,t0,t1,0 if st is None else 1,0 if ca is None else 1,
+                     -1 if ca is None else ca[3],diff))
+    print(f"targets={len(targets)} evaluated={len(rows)}")
+    print(f"strict_realtime_valid={strict_rt}")
+    print(f"causal{a.hold_ms:g}_valid={recovered}/{len(rows)}")
+    if holds:
+        print(f"hold_ms median={pct(holds,50):.3f} p95={pct(holds,95):.3f} max={max(holds):.3f}")
+    if diffs:
+        print(f"deltaR_error_deg median={pct(diffs,50):.6f} p95={pct(diffs,95):.6f} max={max(diffs):.6f}")
+    print("frame,t0_ns,t1_ns,strict_rt,causal,hold_ms,oracle_diff_deg")
+    for x in rows: print(",".join(str(v) for v in x))
+
+if __name__=="__main__": main()
