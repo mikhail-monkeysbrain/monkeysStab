@@ -428,3 +428,33 @@ V2, основной yaw, common-valid:
 Если pixel-domain rotation residual мал и несистематичен, искать проблему после image rotation model (ground-plane/lever/metric conversion). Если residual систематичен по направлению/положению кадра — искать camera model/extrinsics/distortion/timing/feature behavior.
 
 Сначала проверить, сохраняются ли необходимые per-feature correspondences в существующих логах; если нет — добавить только shadow logger.
+
+
+### 6.13 Единый SENSOR-centric Stabilised fallback — coverage PASS (2026-09-20)
+
+Контрольный прогон: `20260920_153029_OPTICAL_FLOW`, commit `a010662`.
+
+Факты:
+- всего интервалов: 1796;
+- `deltar_valid`: 1643;
+- corrected HIGHRES SENSOR-centric: 1302;
+- unified SENSOR-centric: 1661;
+- источник 1 `HIGHRES_CORR`: 1302;
+- источник 2 `ATTITUDE_RATE`: 359;
+- HIGHRES / deltar-valid: 79.25%;
+- среди `deltar_valid` нет ни одного интервала без unified-кандидата;
+- round-trip median: 7.61876e-20;
+- round-trip max: 1.01501e-17.
+
+Важно: `UNIFIED / metric = 101.10%` не является coverage >100%. Знаменатель
+`deltar_valid` относится к ATTITUDE endpoint metric path, тогда как unified fallback
+может быть валиден на части интервалов, где этот отдельный path невалиден. Правильный
+критерий покрытия production-кандидата в этом контроле: `uncovered metric rows = 0`.
+
+Вердикт: fallback устранил потерю интервалов corrected HIGHRES относительно всех
+`deltar_valid` интервалов в данном контроле. Семантика обоих источников остаётся
+SENSOR-centric; production/WORKED5 и `FLOW_OPTIONS` не изменены.
+
+Следующий блокер перед реальным Stabilised A/B: измерить/учесть end-to-end задержку
+публикации OPTICAL_FLOW, потому что MAV backend ArduPilot датирует измерение временем
+получения сообщения, а не camera timestamp.
