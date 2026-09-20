@@ -267,6 +267,21 @@ Commit `b398df3` расширяет только diagnostic shadow. Production p
 
 Также исправлена единица в 6.7: `highres_corr_residual_median_m` ранее был ошибочно подписан как px; корректная единица после ×1000 — mm.
 
+## 6.11. Stabilised flow round-trip — PASS — 2026-09-20
+
+Run: `20260920_144422_OPTICAL_FLOW`.
+
+- rows: 6238;
+- `stabilised_shadow_valid`: 5047;
+- `stabilised_shadow_roundtrip_err` median: 0;
+- max: `2.86098e-17`.
+
+Примеры последних valid кадров при `h≈0.195–0.205 m` восстанавливают `v_body[x,y]` из stabilised `flow_x/y` до машинной точности.
+
+Вердикт: внутренняя цепочка единиц и знаков shadow-контракта
+`flow_x=-v_body_y/h`, `flow_y=+v_body_x/h`
+алгебраически согласована. Это закрывает только внутренний round-trip; соответствие внешней знаковой конвенции ArduPilot остаётся отдельной проверкой. Production publisher и `FLOW_OPTIONS` не изменены.
+
 ## 7. ΔR / HIGHRES: доказанные результаты
 
 Все ATTITUDE / ordinary gyro ΔR / HIGHRES ΔR варианты используют одинаковые:
