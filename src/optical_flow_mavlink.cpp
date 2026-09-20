@@ -382,6 +382,10 @@ struct FlowFc {
     return fc_ns+static_cast<int64_t>(std::llround(off));
   }
   std::ofstream highres_gyro_shadow_ofs;
+  // ATTITUDE_CAUSAL_LOG_V1: raw FC ATTITUDE measurement/receive timing.
+  // Shadow-only. Used to validate causal absolute-orientation anchoring.
+  std::ofstream attitude_shadow_ofs;
+  uint64_t attitude_shadow_seq=0;
   uint64_t local_count=0;
   uint64_t ekf_count=0;
   uint64_t gyro_count=0;
@@ -755,6 +759,39 @@ struct FlowFc {
               // time with a live frame whose transport latency is not known.
               gyro.sample_ns=gyro.recv_ns;
               gyro.valid=true; ++gyro_count;
+
+              // ATTITUDE_CAUSAL_LOG_V1. ATTITUDE.time_boot_ms is the FC
+              // measurement timestamp; recv_ns is when this process actually
+              // received the MAVLink packet. Map the FC timestamp through the
+              // same affine HIGHRES clock model when it is available. This is
+              // diagnostic only and does not change attitude_history semantics.
+              if(!attitude_shadow_ofs.is_open()){
+                attitude_shadow_ofs.open(
+                  "/home/vio/Desktop/monkeysStab/attitude_shadow_latest.csv",
+                  std::ios::out|std::ios::trunc);
+                if(attitude_shadow_ofs.is_open())
+                  attitude_shadow_ofs
+                    <<"seq,time_boot_ms,fc_sample_ns,recv_ns,mapped_sample_ns,"
+                    <<"mapped_transport_ms,clock_map_valid,roll_rad,pitch_rad,yaw_rad,"
+                    <<"rollspeed_rad_s,pitchspeed_rad_s,yawspeed_rad_s\\n";
+              }
+              if(attitude_shadow_ofs.is_open()){
+                const int64_t fc_sample_ns=
+                  static_cast<int64_t>(q.time_boot_ms)*1000000LL;
+                const bool map_valid=highres_clock_valid;
+                const int64_t mapped_sample_ns=
+                  map_valid?mapHighresFcToMono(fc_sample_ns):0;
+                const double mapped_transport_ms=
+                  map_valid?(gyro.recv_ns-mapped_sample_ns)*1e-6:-1.0;
+                attitude_shadow_ofs
+                  <<(++attitude_shadow_seq)<<','<<q.time_boot_ms<<','
+                  <<fc_sample_ns<<','<<gyro.recv_ns<<','<<mapped_sample_ns<<','
+                  <<mapped_transport_ms<<','<<(map_valid?1:0)<<','
+                  <<q.roll<<','<<q.pitch<<','<<q.yaw<<','
+                  <<q.rollspeed<<','<<q.pitchspeed<<','<<q.yawspeed<<'\\n';
+                attitude_shadow_ofs.flush();
+              }
+
               attitude_history.push_back(gyro);
               while(attitude_history.size()>2 &&
                     gyro.sample_ns-attitude_history.front().sample_ns>3000000000LL)
