@@ -204,6 +204,7 @@ def live_payload(raw):
             return None
     imu_n=_opt_float("imu_dr_n_mm"); imu_e=_opt_float("imu_dr_e_mm"); imu_d=_opt_float("imu_dr_d_mm")
     fused_n=_opt_float("fused_v1_n_mm"); fused_e=_opt_float("fused_v1_e_mm")
+    camvc_n=_opt_float("imu_camvc_n_mm"); camvc_e=_opt_float("imu_camvc_e_mm"); camvc_d=_opt_float("imu_camvc_d_mm")
 
     rc_zero_event=False
     try:
@@ -302,6 +303,15 @@ def live_payload(raw):
         "imu_zupt_shadow_accepts":raw.get("imu_zupt_shadow_accepts",0),
         "imu_zupt_shadow_blocks":raw.get("imu_zupt_shadow_blocks",0),
         "imu_cam_seq":raw.get("imu_cam_seq",0),
+        "imu_camvc_active":bool(raw.get("imu_camvc_active",False)),
+        "imu_camvc_stop_samples":raw.get("imu_camvc_stop_samples",0),
+        "imu_camvc_activations":raw.get("imu_camvc_activations",0),
+        "imu_camvc_n_mm":camvc_n,
+        "imu_camvc_e_mm":camvc_e,
+        "imu_camvc_d_mm":camvc_d,
+        "imu_camvc_vn":raw.get("imu_camvc_vn"),
+        "imu_camvc_ve":raw.get("imu_camvc_ve"),
+        "imu_camvc_vd":raw.get("imu_camvc_vd"),
         "fused_v1_visual_updates":raw.get("fused_v1_visual_updates",0),
         "fused_v1_imu_predictions":raw.get("fused_v1_imu_predictions",0),
         "fused_v1_stop_constraints":raw.get("fused_v1_stop_constraints",0),
@@ -1163,6 +1173,14 @@ button{cursor:pointer}
   </div>
 
   <div class="metrics">
+   <div class="metric"><span>X · IMU+CAM ZUPT</span><b id="camvcX">—</b></div>
+   <div class="metric"><span>Y · IMU+CAM ZUPT</span><b id="camvcY">—</b></div>
+   <div class="metric"><span>Z · IMU+CAM ZUPT</span><b id="camvcZ">—</b></div>
+   <div class="metric"><span>V N/E/D</span><b id="camvcVel" style="font-size:12px">—</b></div>
+   <div class="metric"><span>ZUPT state</span><b id="camvcState">—</b></div>
+  </div>
+
+  <div class="metrics">
    <div class="metric"><span>X · CAM</span><b id="camX">—</b></div>
    <div class="metric"><span>Y · CAM</span><b id="camY">—</b></div>
    <div class="metric"><span>Z · CAM</span><b id="camZ">—</b></div>
@@ -1613,7 +1631,7 @@ function updateHud(t){
  if(!t.available){
    $('footerRuntime').textContent=t.running?'запускается…':'остановлен';
    $('mx').textContent='—';$('my').textContent='—';$('mz').textContent='—';$('mr').textContent='—';$('mq').textContent='—';
-   ['imuX','imuY','imuZ','imuStationary','imuAcc','imuVel','imuDt','imuAmag','imuGmag','imuStatSamples','imuAccRejects','imuGyroRejects','imuCamStat','camX','camY','camZ','fusedX','fusedY','fusedZ','fusedState'].forEach(id=>{if($(id))$(id).textContent='—'});
+   ['imuX','imuY','imuZ','imuStationary','imuAcc','imuVel','imuDt','imuAmag','imuGmag','imuStatSamples','imuAccRejects','imuGyroRejects','imuCamStat','camvcX','camvcY','camvcZ','camvcVel','camvcState','camX','camY','camZ','fusedX','fusedY','fusedZ','fusedState'].forEach(id=>{if($(id))$(id).textContent='—'});
    $('frame').textContent='—';$('inl').textContent='—';$('ekf').textContent='—';
    ['ekfNE','ekfDrift','ekfVel','rawNE','rawDrift','rawVel'].forEach(id=>{if($(id))$(id).textContent='—'});
    $('sceneXYZ').textContent=t.running?'Ожидание WebSocket телеметрии…':'Runtime остановлен — live данные отсутствуют';
@@ -1640,6 +1658,11 @@ function updateHud(t){
  if($('imuAccRejects'))$('imuAccRejects').textContent=t.imu_dr_acc_rejects??'—';
  if($('imuGyroRejects'))$('imuGyroRejects').textContent=t.imu_dr_gyro_rejects??'—';
  if($('imuCamStat'))$('imuCamStat').textContent=t.imu_cam_stationary?'ДА':'НЕТ';
+ if($('camvcX'))$('camvcX').textContent=fmt(t.imu_camvc_n_mm,0)+' мм';
+ if($('camvcY'))$('camvcY').textContent=fmt(t.imu_camvc_e_mm,0)+' мм';
+ if($('camvcZ'))$('camvcZ').textContent=fmt(t.imu_camvc_d_mm,0)+' мм';
+ if($('camvcVel'))$('camvcVel').textContent=fmt(t.imu_camvc_vn,3)+' / '+fmt(t.imu_camvc_ve,3)+' / '+fmt(t.imu_camvc_vd,3);
+ if($('camvcState'))$('camvcState').textContent=t.imu_camvc_active?'ACTIVE':'INACTIVE';
  if($('camX'))$('camX').textContent=fmt(t.raw_of_n_mm,0)+' мм';
  if($('camY'))$('camY').textContent=fmt(t.raw_of_e_mm,0)+' мм';
  if($('camZ'))$('camZ').textContent='—';

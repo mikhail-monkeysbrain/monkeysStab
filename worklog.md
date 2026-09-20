@@ -241,3 +241,14 @@ velocity, acceleration magnitude, gyro magnitude, gate booleans, reject counters
 stationary sample count and dt; web_service previously discarded part of these
 fields. It now forwards and displays them together with camera-stationary state.
 No thresholds, estimator state, ZUPT logic, MAVLink output or frozen code changed.
+
+
+## 2026-09-20 — expose existing camera-gated IMU ZUPT state
+
+After yaw tests showed the pure IMU DR retaining false velocity after physical
+stop, added a separate read-only "IMU+CAM ZUPT" row to the flight UI. This uses
+the already-existing imu_camvc_state diagnostics from the runtime: N/E/D,
+N/E/D velocity, active flag, stop samples and activation count. It is deliberately
+kept separate from pure IMU DR so a yaw test can distinguish "raw inertial DR
+keeps false velocity" from "camera-gated ZUPT fails to arrest it". No estimator,
+threshold, ZUPT, FUSED, MAVLink or frozen behavior changed.
