@@ -196,3 +196,14 @@ triple-quoted HTML contained escaped JavaScript template-literal delimiters
 JavaScript parse error. The page shell loaded but the canvas/legend stayed
 blank. Live polling logic and estimator data are otherwise unchanged.
 No production estimator or frozen branch changes.
+
+
+## 2026-09-20 — rewrite flight UI movement comparison
+
+Reworked the current Web UI instead of restoring historical commits. Added a
+reliable Canvas2D realtime top-down comparison fed by the existing WebSocket:
+CAM/WORKED5 (raw_of N/E), IMU DR, FUSED V1 and FC EKF ("ФАКТ"). Each source
+gets its own trail, endpoint and live N/E/|XY| readout with automatic mm scale.
+IMU and FUSED are locally zeroed at UI start/HOME so all four trajectories share
+a visual origin. Existing WebGL scene, controls, camera preview and runtime are
+kept. No estimator, MAVLink publisher, ΔR logic, or frozen branch changes.

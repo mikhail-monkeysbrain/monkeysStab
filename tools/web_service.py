@@ -987,6 +987,14 @@ button{cursor:pointer}
 .miniBtn{border:1px solid #294c65;background:#0c1c29;color:#dbe8f0;padding:8px 11px;border-radius:5px}
 .telemetryStrip{position:absolute;right:14px;bottom:12px;background:#081521cc;border:1px solid #24445a;border-radius:6px;padding:8px 11px;font-size:12px;color:#a9c0d0;z-index:4}
 .metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px}
+.compareCard{margin-top:10px;padding:12px}
+.compareHead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px}
+.compareHead h3{margin:0}.compareHint{font-size:11px;color:var(--muted)}
+#motionCompare{display:block;width:100%;height:430px;background:#06111a;border:1px solid #17364b;border-radius:7px}
+.compareLegend{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:8px}
+.compareItem{background:#081722;border:1px solid #17364b;border-radius:6px;padding:8px}
+.compareItem span{display:block;font-size:11px;color:#8da9bd}.compareItem b{font-size:15px}.compareDot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+@media(max-width:850px){.compareLegend{grid-template-columns:1fr 1fr}#motionCompare{height:340px}}
 .metric{background:#09151f;border:1px solid #163147;border-radius:7px;padding:9px}.metric span{font-size:11px;color:#7fa1ba}.metric b{display:block;font-size:18px;margin-top:2px}
 .gaugeBox{padding:10px 12px}.gLine{display:grid;grid-template-columns:58px 1fr 52px;gap:7px;align-items:center;margin:12px 0;font-size:12px}.gLine strong{text-align:right}
 .bar{height:7px;background:#19364a;border-radius:10px;position:relative}.bar:after{content:"";position:absolute;left:50%;top:-5px;height:17px;width:2px;background:#5f7f95}.needle{position:absolute;top:-4px;width:5px;height:15px;border-radius:2px;background:#18e278;box-shadow:0 0 8px currentColor;transform:translateX(-50%)}
@@ -1087,6 +1095,20 @@ button{cursor:pointer}
    <div class="metric"><span>Z</span><b id="mz">—</b></div>
    <div class="metric"><span>TF-Luna</span><b id="mr">—</b></div>
    <div class="metric"><span>Flow quality</span><b id="mq">—</b></div>
+  </div>
+
+  <div class="card compareCard">
+   <div class="compareHead">
+    <h3>Перемещение — CAM / IMU / FUSED / ФАКТ</h3>
+    <span class="compareHint">вид сверху · N ↑ · E → · realtime</span>
+   </div>
+   <canvas id="motionCompare"></canvas>
+   <div class="compareLegend">
+    <div class="compareItem"><span><i class="compareDot" style="background:#15d2ff"></i>CAM / WORKED5</span><b id="cmpCam">—</b></div>
+    <div class="compareItem"><span><i class="compareDot" style="background:#ffc928"></i>IMU DR</span><b id="cmpImu">—</b></div>
+    <div class="compareItem"><span><i class="compareDot" style="background:#c98bff"></i>FUSED V1</span><b id="cmpFused">—</b></div>
+    <div class="compareItem"><span><i class="compareDot" style="background:#0bd777"></i>ФАКТ / FC EKF</span><b id="cmpEkf">—</b></div>
+   </div>
   </div>
 
   <div class="card" style="margin-top:10px">
@@ -1272,6 +1294,8 @@ button{cursor:pointer}
 const $=id=>document.getElementById(id);
 let latest=null,fcLatest=null,lastChartPaint=0;
 let telemetryWs=null,wsReconnectTimer=null,wsHistory=[],wsTrail=[],wsT0=null;
+let motionTrails={cam:[],imu:[],fused:[],ekf:[]},motionZero={imu:null,fused:null};
+const MOTION_MAX_POINTS=900;
 const WS_MAX_POINTS=300;
 let viewMode='iso',viewYaw=.75,viewPitch=.65,viewDist=6.4;
 let drag=false,lastX=0,lastY=0;
@@ -1450,7 +1474,7 @@ async function start(){
 async function stop(){try{await api('/api/stop',{method:'POST'});setTimeout(refreshRuntimeStatus,150);}catch(e){alert(e.message)}}
 async function zero(){try{
  await api('/api/zero',{method:'POST'});
- wsHistory=[];wsTrail=[];wsT0=null;
+ wsHistory=[];wsTrail=[];wsT0=null;resetMotionCompare();
 }catch(e){alert(e.message)}}
 async function armFc(){if(!confirm('ARM: разрешить запуск моторов?'))return;try{showFc(await api('/api/fc/arm',{method:'POST'}))}catch(e){alert(e.message)}}
 async function disarmFc(){if(!confirm('DISARM: отключить моторы?'))return;try{showFc(await api('/api/fc/disarm',{method:'POST'}))}catch(e){alert(e.message)}}
@@ -1461,6 +1485,55 @@ function showFc(j){
 }
 async function refreshFc(){try{showFc(await api('/api/fc'))}catch(e){$('linkDot').classList.add('baddot');$('linkText').textContent='НЕТ';$('fcDotBig').classList.add('baddot');$('fcState').textContent='НЕТ СВЯЗИ';$('fcMode').textContent='—'}}
 
+function resetMotionCompare(){
+ motionTrails={cam:[],imu:[],fused:[],ekf:[]};motionZero={imu:null,fused:null};
+ drawMotionCompare();
+}
+function motionPoint(t,key){
+ if(key==='cam' && t.raw_of_n_mm!=null && t.raw_of_e_mm!=null)return {n:Number(t.raw_of_n_mm),e:Number(t.raw_of_e_mm)};
+ if(key==='ekf')return {n:Number(t.x_mm||0),e:Number(t.y_mm||0)};
+ if(key==='imu' && t.imu_dr_n_mm!=null && t.imu_dr_e_mm!=null){
+   let n=Number(t.imu_dr_n_mm),e=Number(t.imu_dr_e_mm);
+   if(!motionZero.imu)motionZero.imu={n,e};return {n:n-motionZero.imu.n,e:e-motionZero.imu.e};
+ }
+ if(key==='fused' && t.fused_v1_n_mm!=null && t.fused_v1_e_mm!=null){
+   let n=Number(t.fused_v1_n_mm),e=Number(t.fused_v1_e_mm);
+   if(!motionZero.fused)motionZero.fused={n,e};return {n:n-motionZero.fused.n,e:e-motionZero.fused.e};
+ }
+ return null;
+}
+function pushMotionCompare(t){
+ for(const k of ['cam','imu','fused','ekf']){
+   const p=motionPoint(t,k);if(!p||!Number.isFinite(p.n)||!Number.isFinite(p.e))continue;
+   motionTrails[k].push(p);if(motionTrails[k].length>MOTION_MAX_POINTS)motionTrails[k].splice(0,motionTrails[k].length-MOTION_MAX_POINTS);
+ }
+ drawMotionCompare();
+}
+function drawMotionCompare(){
+ const c=$('motionCompare');if(!c)return;const d=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;
+ c.width=Math.max(2,Math.floor(w*d));c.height=Math.max(2,Math.floor(h*d));const x=c.getContext('2d');x.setTransform(d,0,0,d,0,0);
+ x.fillStyle='#06111a';x.fillRect(0,0,w,h);
+ let maxAbs=100;
+ for(const tr of Object.values(motionTrails))for(const p of tr)maxAbs=Math.max(maxAbs,Math.abs(p.n),Math.abs(p.e));
+ const half=Math.max(100,Math.ceil(maxAbs/100)*100),pad=34,scale=Math.min((w-2*pad)/(2*half),(h-2*pad)/(2*half)),cx=w/2,cy=h/2;
+ x.font='11px system-ui';x.textAlign='left';x.textBaseline='middle';
+ const step=half<=500?100:(half<=1500?250:500);
+ x.lineWidth=1;
+ for(let q=-half;q<=half+1e-6;q+=step){
+   x.strokeStyle='#153247';x.beginPath();x.moveTo(cx+q*scale,pad);x.lineTo(cx+q*scale,h-pad);x.stroke();
+   x.beginPath();x.moveTo(pad,cy-q*scale);x.lineTo(w-pad,cy-q*scale);x.stroke();
+ }
+ x.strokeStyle='#55768e';x.lineWidth=1.5;x.beginPath();x.moveTo(pad,cy);x.lineTo(w-pad,cy);x.stroke();x.beginPath();x.moveTo(cx,pad);x.lineTo(cx,h-pad);x.stroke();
+ x.fillStyle='#8da9bd';x.fillText('N',cx+6,pad+7);x.fillText('E',w-pad-12,cy-10);x.fillText('±'+half+' мм',8,14);
+ const cfg={cam:['#15d2ff','CAM'],imu:['#ffc928','IMU'],fused:['#c98bff','FUSED'],ekf:['#0bd777','ФАКТ']};
+ for(const [k,[col]] of Object.entries(cfg)){
+   const tr=motionTrails[k];if(!tr.length)continue;x.strokeStyle=col;x.lineWidth=2.4;x.beginPath();
+   tr.forEach((p,i)=>{const px=cx+p.e*scale,py=cy-p.n*scale;i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke();
+   const p=tr[tr.length-1],px=cx+p.e*scale,py=cy-p.n*scale;x.fillStyle=col;x.beginPath();x.arc(px,py,5,0,Math.PI*2);x.fill();
+ }
+ function label(id,k){const tr=motionTrails[k],el=$(id);if(!el)return;if(!tr.length){el.textContent='—';return}const p=tr[tr.length-1];el.textContent='N '+fmt(p.n,1)+' · E '+fmt(p.e,1)+' · |XY| '+fmt(Math.hypot(p.n,p.e),1)+' мм'}
+ label('cmpCam','cam');label('cmpImu','imu');label('cmpFused','fused');label('cmpEkf','ekf');
+}
 function updateHud(t){
  latest=t;window.latest=t;$('runState').textContent=t.running?'Работает':'Остановлен';
  if(!t.available){
@@ -1578,7 +1651,7 @@ function resetView(){viewMode='iso';viewYaw=.75;viewPitch=.65;viewDist=6.4;rende
 
 function ingestWsTelemetry(t){
  if(t.type==='zero'){
-   wsHistory=[];wsTrail=[];wsT0=null;
+   wsHistory=[];wsTrail=[];wsT0=null;resetMotionCompare();
    return;
  }
  if(t.type==='runtime'){
@@ -1590,7 +1663,7 @@ function ingestWsTelemetry(t){
  }
  if(t.type!=='telemetry')return;
  if(t.rc_zero_event){
-   wsHistory=[];wsTrail=[];wsT0=null;
+   wsHistory=[];wsTrail=[];wsT0=null;resetMotionCompare();
  }
  const mono=Number(t.mono_ns||0);
  if(wsT0===null && mono>0)wsT0=mono;
@@ -1610,6 +1683,7 @@ function ingestWsTelemetry(t){
  t.trail=wsTrail;
  t.available=true;
  t.running=true;
+ pushMotionCompare(t);
  updateHud(t);
 }
 function connectTelemetryWs(){
@@ -1662,7 +1736,7 @@ async function refreshVoPreview(){
 }
 loadConfig();initGL();connectTelemetryWs();refreshRuntimeStatus();refreshMessages();refreshFc();refreshJournal();refreshRunRecordStatus();refreshVoPreview();
 setInterval(refreshRuntimeStatus,1000);setInterval(refreshMessages,1800);setInterval(refreshFc,1800);setInterval(refreshJournal,3000);setInterval(refreshRunRecordStatus,1500);setInterval(refreshVoPreview,200);
-window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';if(vm==='light'&&latest)drawLightScene(latest);else renderScene();if(latest)drawHistory(latest.history||[])});
+window.addEventListener('resize',()=>{let vm=window.visualizationMode||'simple';if(vm==='light'&&latest)drawLightScene(latest);else renderScene();if(latest)drawHistory(latest.history||[]);drawMotionCompare()});
 </script>
 </body>
 </html>'''
