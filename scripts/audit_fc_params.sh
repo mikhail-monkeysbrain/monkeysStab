@@ -6,6 +6,7 @@ BAUD="${MONKEYS_FC_BAUD:-460800}"
 SYSID="${MONKEYS_FC_SYSID:-1}"
 COMPID="${MONKEYS_FC_COMPID:-1}"
 PROFILE="${MONKEYS_FC_PROFILE:-$ROOT/config/fc_profile.json}"
+FLOW_OPTIONS_EXPECTED="${MONKEYS_FLOW_OPTIONS_EXPECTED:-0}"
 
 if [[ -z "${MAVLINK_ROOT:-}" ]]; then
   for d in "$ROOT/third_party/mavlink" /usr/local/include/mavlink/v2.0 /usr/include/mavlink/v2.0; do
@@ -39,7 +40,7 @@ echo
 echo "$OUT"
 echo
 
-python3 - "$OUT" "$PROFILE" <<'PY'
+python3 - "$OUT" "$PROFILE" "$FLOW_OPTIONS_EXPECTED" <<'PY'
 import json,math,sys
 vals={}
 for line in sys.argv[1].splitlines():
@@ -49,6 +50,7 @@ for line in sys.argv[1].splitlines():
     except ValueError: pass
 with open(sys.argv[2],"r",encoding="utf-8") as f:
     expected=json.load(f)["params"]
+expected["FLOW_OPTIONS"]=float(sys.argv[3])
 
 fail=False
 for k,e in expected.items():
