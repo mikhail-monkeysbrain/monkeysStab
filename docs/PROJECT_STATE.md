@@ -282,6 +282,20 @@ Run: `20260920_144422_OPTICAL_FLOW`.
 `flow_x=-v_body_y/h`, `flow_y=+v_body_x/h`
 алгебраически согласована. Это закрывает только внутренний round-trip; соответствие внешней знаковой конвенции ArduPilot остаётся отдельной проверкой. Production publisher и `FLOW_OPTIONS` не изменены.
 
+## 6.12. ArduPilot Stabilised / FLOW_POS contract — 2026-09-20
+
+Аудит актуального ArduPilot master уточнил внешний контракт.
+
+1. `AP_OpticalFlow_MAV` при `Option::Stabilised` зануляет только передаваемые в EKF X/Y body rates; packet `flow_rate_x/y` остаётся angular optical flow.
+2. EKF `writeOptFlowMeas()` преобразует `flowRadXY=-rawFlowRates`, а Z body rate всегда восстанавливает из nav IMU, потому что optical-flow interface передаёт только X/Y gyro.
+3. `FuseOptFlow()` моделирует скорость focal point как
+   `relVelSensor = body_velocity + bodyRadXYZ × posOffsetBody`.
+   Следовательно при Stabilised сохраняется yaw lever-arm term через `bodyRadXYZ.z × FLOW_POS`.
+4. Текущий RPi stabilised shadow уже выдаёт FC/IMU-centric translation: полный camera lever arm вычтен до формирования flow. Если одновременно оставить ненулевой camera `FLOW_POS`, EKF повторно добавит как минимум yaw lever-arm term. Контракты несовместимы.
+5. Для полного RPi full-rotation + full-lever compensation чистый EKF контракт требует effective optical-flow position offset = 0. Альтернативно RPi должен вернуть sensor/focal-point semantics вместо IMU-centric semantics.
+
+Решение для дальнейшего A/B: не менять production сейчас. Сначала добавить shadow-кандидат sensor-centric Stabilised flow, сохраняющий camera focal-point displacement после rotation compensation, но ДО вычитания lever arm. Он должен быть совместим с реальным camera FLOW_POS в EKF. Сравнить его с IMU-centric вариантом офлайн/в shadow. Никаких специальных ручных прогонов для этого не требуется.
+
 ## 7. ΔR / HIGHRES: доказанные результаты
 
 Все ATTITUDE / ordinary gyro ΔR / HIGHRES ΔR варианты используют одинаковые:
