@@ -213,7 +213,8 @@ struct FlowFcGyro {
   double x=0,y=0,z=0;          // body FRD roll/pitch/yaw rates, rad/s
   int64_t recv_ns=0;
   uint32_t time_boot_ms=0;
-  int64_t sample_ns=0; // FC sample time mapped into RPi CLOCK_MONOTONIC
+  int64_t sample_ns=0; // legacy ATTITUDE history key: RPi receive time
+  int64_t mapped_sample_ns=0; // FC time_boot_ms mapped by HIGHRES clock model
   bool valid=false;
 };
 
@@ -758,6 +759,10 @@ struct FlowFc {
               // and MAVLink receive.  This deliberately avoids mixing FC boot
               // time with a live frame whose transport latency is not known.
               gyro.sample_ns=gyro.recv_ns;
+              const int64_t attitude_fc_sample_ns=
+                static_cast<int64_t>(q.time_boot_ms)*1000000LL;
+              gyro.mapped_sample_ns=highres_clock_valid
+                ? mapHighresFcToMono(attitude_fc_sample_ns) : 0;
               gyro.valid=true; ++gyro_count;
 
               // ATTITUDE_CAUSAL_LOG_V1. ATTITUDE.time_boot_ms is the FC
@@ -776,11 +781,9 @@ struct FlowFc {
                     <<"rollspeed_rad_s,pitchspeed_rad_s,yawspeed_rad_s\n";
               }
               if(attitude_shadow_ofs.is_open()){
-                const int64_t fc_sample_ns=
-                  static_cast<int64_t>(q.time_boot_ms)*1000000LL;
-                const bool map_valid=highres_clock_valid;
-                const int64_t mapped_sample_ns=
-                  map_valid?mapHighresFcToMono(fc_sample_ns):0;
+                const int64_t fc_sample_ns=attitude_fc_sample_ns;
+                const bool map_valid=gyro.mapped_sample_ns>0;
+                const int64_t mapped_sample_ns=gyro.mapped_sample_ns;
                 const double mapped_transport_ms=
                   map_valid?(gyro.recv_ns-mapped_sample_ns)*1e-6:-1.0;
                 attitude_shadow_ofs
@@ -2604,6 +2607,8 @@ int main(int argc,char** argv){
           ++metric_shadow_interval_id;
 
           std::deque<metric_shadow::TimedAttitude> ah;
+          FlowFcGyro causal_att_anchor{};
+          bool causal_att_anchor_valid=false;
           std::deque<metric_shadow::TimedBodyRate> gh;
           std::deque<metric_shadow::TimedBodyRate> hgh;
           std::deque<metric_shadow::TimedBodyRate> hgh_corr;
@@ -2619,6 +2624,16 @@ int main(int argc,char** argv){
               const auto& g=fc.attitude_history[i];
               ah[i]={g.roll,g.pitch,g.yaw,g.sample_ns,g.valid};
               gh[i]={g.x,g.y,g.z,g.sample_ns,g.valid};
+              // Strict causal absolute anchor: packet was already received by
+              // camera dequeue and its mapped FC sample is not newer than t1.
+              if(g.valid && g.recv_ns<=selected_dq_mono_ns &&
+                 g.mapped_sample_ns>0 && g.mapped_sample_ns<=ts){
+                if(!causal_att_anchor_valid ||
+                   g.mapped_sample_ns>causal_att_anchor.mapped_sample_ns){
+                  causal_att_anchor=g;
+                  causal_att_anchor_valid=true;
+                }
+              }
             }
             hgh.resize(fc.highres_gyro_history.size());
             hgh_corr.resize(fc.highres_gyro_history.size());
@@ -2774,6 +2789,67 @@ int main(int argc,char** argv){
             const cv::Matx33d corr_R1=corr_R0*metric_highres_corr_gyro_delta.delta_R;
             metric_highres_corr_gyro_step=metric_shadow::estimateWithRotations(
               mi,corr_R0,corr_R1);
+          }
+
+          // CAUSAL_METRIC35_SHADOW_V1: full SENSOR-centric metric replay
+          // using only information available by camera dequeue. Absolute R1
+          // comes from the latest received ATTITUDE anchor propagated with
+          // corrected HIGHRES; R0 is recovered from the same causal inter-frame
+          // delta-R. Shadow only: never feeds Variant-B publication.
+          static std::ofstream causal_metric35_csv;
+          static bool causal_metric35_header=false;
+          metric_shadow::Step causal_metric35_step{};
+          bool causal_metric35_ready=false;
+          double causal_metric35_anchor_recv_age_ms=-1.0;
+          double causal_metric35_anchor_sample_age_ms=-1.0;
+          double causal_metric35_deltar_hold_ms=-1.0;
+          if(causal_att_anchor_valid){
+            causal_metric35_anchor_recv_age_ms=
+              (selected_dq_mono_ns-causal_att_anchor.recv_ns)*1e-6;
+            causal_metric35_anchor_sample_age_ms=
+              (ts-causal_att_anchor.mapped_sample_ns)*1e-6;
+            if(causal_metric35_anchor_recv_age_ms>=0.0 &&
+               causal_metric35_anchor_recv_age_ms<=35.0 &&
+               causal_metric35_anchor_sample_age_ms>=0.0){
+              const auto anchor_to_t1=
+                metric_shadow::integrateBodyRatesCausalHold(
+                  hgh_corr,causal_att_anchor.mapped_sample_ns,ts,25.0);
+              const auto d01=metric_shadow::integrateBodyRatesCausalHold(
+                hgh_corr,prev_ts,ts,25.0);
+              causal_metric35_deltar_hold_ms=d01.max_bracket_gap_ms;
+              if(anchor_to_t1.valid && d01.valid){
+                const cv::Matx33d Ra=metric_shadow::bodyToLocal(
+                  causal_att_anchor.roll,causal_att_anchor.pitch,causal_att_anchor.yaw);
+                const cv::Matx33d R1c=Ra*anchor_to_t1.delta_R;
+                const cv::Matx33d R0c=R1c*d01.delta_R.t();
+                causal_metric35_step=
+                  metric_shadow::estimateWithRotations(mi,R0c,R1c);
+                causal_metric35_ready=causal_metric35_step.valid;
+              }
+            }
+          }
+          if(!causal_metric35_csv.is_open()){
+            const std::filesystem::path production_csv_path(csvpath);
+            causal_metric35_csv.open(
+              production_csv_path.parent_path()/"causal_metric35_shadow.csv",
+              std::ios::out|std::ios::trunc);
+          }
+          if(causal_metric35_csv.is_open()){
+            if(!causal_metric35_header){
+              causal_metric35_csv
+                <<"frame,t0_ns,t1_ns,ready,anchor_recv_age_ms,anchor_sample_age_ms,"
+                <<"deltar_hold_ms,camera_dN_m,camera_dE_m,residual_median_m\n";
+              causal_metric35_header=true;
+            }
+            causal_metric35_csv
+              <<frame<<','<<prev_ts<<','<<ts<<','<<(causal_metric35_ready?1:0)<<','
+              <<causal_metric35_anchor_recv_age_ms<<','
+              <<causal_metric35_anchor_sample_age_ms<<','
+              <<causal_metric35_deltar_hold_ms<<','
+              <<causal_metric35_step.delta_camera_local_m[0]<<','
+              <<causal_metric35_step.delta_camera_local_m[1]<<','
+              <<causal_metric35_step.residual_median_m<<'\n';
+            causal_metric35_csv.flush();
           }
 
           // HIGHRES_CAUSAL15_SHADOW_V1: evaluate the same corrected HIGHRES
