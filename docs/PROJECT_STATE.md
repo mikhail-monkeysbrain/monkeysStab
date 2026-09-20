@@ -492,3 +492,21 @@ Production CSV уже содержит `camera_ts_ns`, `camera_dequeue_ns`,
 нулю. Это следует учитывать при интерпретации будущего Stabilised A/B, но
 текущие данные не показывают latency как блокер для перехода к контролируемому
 A/B.
+
+
+### 6.15 Явный publish-mode: контроль A — PASS (2026-09-20)
+
+После добавления флага `--stabilised-unified-publish` выполнен обычный запуск
+без этого флага: `20260920_153611_OPTICAL_FLOW`, 3698 строк.
+
+Результат:
+- `stabilised_publish_mode=0`: 3698/3698;
+- `stabilised_publish_ready=1`: 3698/3698;
+- unified shadow source: HIGHRES_CORR 2518, ATTITUDE_RATE 839, none 341;
+- `flow_sent=1`: 3697/3698;
+- unexpected B-mode rows: 0;
+- not-ready rows: 0.
+
+Вердикт: MODE A CONTROL PASS. Добавление экспериментального Variant B не
+переключает и не изменяет publish-контракт обычного запуска. Shadow может
+продолжать вычислять unified source 1/2/0 независимо от publish mode.
