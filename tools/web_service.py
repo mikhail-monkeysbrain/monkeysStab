@@ -284,6 +284,13 @@ def live_payload(raw):
         "imu_dr_acc_n":raw.get("imu_dr_acc_n"),
         "imu_dr_acc_e":raw.get("imu_dr_acc_e"),
         "imu_dr_acc_d":raw.get("imu_dr_acc_d"),
+        "imu_dr_amag":raw.get("imu_dr_amag"),
+        "imu_dr_gmag":raw.get("imu_dr_gmag"),
+        "imu_dr_acc_ok":bool(raw.get("imu_dr_acc_ok",False)),
+        "imu_dr_gyro_ok":bool(raw.get("imu_dr_gyro_ok",False)),
+        "imu_dr_acc_rejects":raw.get("imu_dr_acc_rejects",0),
+        "imu_dr_gyro_rejects":raw.get("imu_dr_gyro_rejects",0),
+        "imu_dr_stationary_samples":raw.get("imu_dr_stationary_samples",0),
         "imu_dr_dt":raw.get("imu_dr_dt"),
         "imu_cam_vn":raw.get("imu_cam_vn"),
         "imu_cam_ve":raw.get("imu_cam_ve"),
@@ -1140,6 +1147,21 @@ button{cursor:pointer}
    <div class="metric"><span>Источник</span><b>HIGHRES IMU</b></div>
    <div class="metric"><span>Stationary</span><b id="imuStationary">—</b></div>
   </div>
+  <div class="card" style="margin-top:8px">
+   <h3>IMU DR — диагностика покоя / интегрирования</h3>
+   <div class="kv" style="grid-template-columns:150px 1fr 150px 1fr 150px 1fr">
+    <span>ACC N / E / D</span><span id="imuAcc">—</span>
+    <span>VEL N / E / D</span><span id="imuVel">—</span>
+    <span>dt</span><span id="imuDt">—</span>
+    <span>|a| / ACC gate</span><span id="imuAmag">—</span>
+    <span>|gyro| / GYRO gate</span><span id="imuGmag">—</span>
+    <span>stationary samples</span><span id="imuStatSamples">—</span>
+    <span>ACC rejects</span><span id="imuAccRejects">—</span>
+    <span>GYRO rejects</span><span id="imuGyroRejects">—</span>
+    <span>CAM stationary</span><span id="imuCamStat">—</span>
+   </div>
+  </div>
+
   <div class="metrics">
    <div class="metric"><span>X · CAM</span><b id="camX">—</b></div>
    <div class="metric"><span>Y · CAM</span><b id="camY">—</b></div>
@@ -1591,7 +1613,7 @@ function updateHud(t){
  if(!t.available){
    $('footerRuntime').textContent=t.running?'запускается…':'остановлен';
    $('mx').textContent='—';$('my').textContent='—';$('mz').textContent='—';$('mr').textContent='—';$('mq').textContent='—';
-   ['imuX','imuY','imuZ','imuStationary','camX','camY','camZ','fusedX','fusedY','fusedZ','fusedState'].forEach(id=>{if($(id))$(id).textContent='—'});
+   ['imuX','imuY','imuZ','imuStationary','imuAcc','imuVel','imuDt','imuAmag','imuGmag','imuStatSamples','imuAccRejects','imuGyroRejects','imuCamStat','camX','camY','camZ','fusedX','fusedY','fusedZ','fusedState'].forEach(id=>{if($(id))$(id).textContent='—'});
    $('frame').textContent='—';$('inl').textContent='—';$('ekf').textContent='—';
    ['ekfNE','ekfDrift','ekfVel','rawNE','rawDrift','rawVel'].forEach(id=>{if($(id))$(id).textContent='—'});
    $('sceneXYZ').textContent=t.running?'Ожидание WebSocket телеметрии…':'Runtime остановлен — live данные отсутствуют';
@@ -1609,6 +1631,15 @@ function updateHud(t){
  if($('imuY'))$('imuY').textContent=fmt(t.imu_dr_e_mm,0)+' мм';
  if($('imuZ'))$('imuZ').textContent=fmt(t.imu_dr_d_mm,0)+' мм';
  if($('imuStationary'))$('imuStationary').textContent=t.imu_dr_stationary?'ДА':'НЕТ';
+ if($('imuAcc'))$('imuAcc').textContent=fmt(t.imu_dr_acc_n,4)+' / '+fmt(t.imu_dr_acc_e,4)+' / '+fmt(t.imu_dr_acc_d,4)+' м/с²';
+ if($('imuVel'))$('imuVel').textContent=fmt(t.imu_dr_vn,3)+' / '+fmt(t.imu_dr_ve,3)+' / '+fmt(t.imu_dr_vd,3)+' м/с';
+ if($('imuDt'))$('imuDt').textContent=fmt((t.imu_dr_dt||0)*1000,2)+' мс';
+ if($('imuAmag'))$('imuAmag').textContent=fmt(t.imu_dr_amag,4)+' · '+(t.imu_dr_acc_ok?'OK':'REJECT');
+ if($('imuGmag'))$('imuGmag').textContent=fmt(t.imu_dr_gmag,5)+' · '+(t.imu_dr_gyro_ok?'OK':'REJECT');
+ if($('imuStatSamples'))$('imuStatSamples').textContent=t.imu_dr_stationary_samples??'—';
+ if($('imuAccRejects'))$('imuAccRejects').textContent=t.imu_dr_acc_rejects??'—';
+ if($('imuGyroRejects'))$('imuGyroRejects').textContent=t.imu_dr_gyro_rejects??'—';
+ if($('imuCamStat'))$('imuCamStat').textContent=t.imu_cam_stationary?'ДА':'НЕТ';
  if($('camX'))$('camX').textContent=fmt(t.raw_of_n_mm,0)+' мм';
  if($('camY'))$('camY').textContent=fmt(t.raw_of_e_mm,0)+' мм';
  if($('camZ'))$('camZ').textContent='—';

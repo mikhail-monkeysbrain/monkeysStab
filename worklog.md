@@ -230,3 +230,14 @@ together, and RC HOME applies the same baselines. The comparison canvas now uses
 the server-relative IMU/FUSED coordinates directly instead of adding a second
 browser-local zero. This changes presentation/reference origins only; estimator
 states and MAVLink output are untouched. Frozen branch untouched.
+
+
+## 2026-09-20 — live IMU DR stationary-gate diagnostics
+
+Added a read-only IMU DR diagnostic panel to the current flight Web UI after
+observing metre-scale IMU-only drift while the airframe was physically static.
+The existing runtime already publishes residual local acceleration, integrated
+velocity, acceleration magnitude, gyro magnitude, gate booleans, reject counters,
+stationary sample count and dt; web_service previously discarded part of these
+fields. It now forwards and displays them together with camera-stationary state.
+No thresholds, estimator state, ZUPT logic, MAVLink output or frozen code changed.
