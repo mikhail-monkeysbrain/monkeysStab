@@ -179,4 +179,76 @@ inline BodyRateIntegration integrateBodyRates(const std::deque<TimedBodyRate>& h
   return out;
 }
 
+
+// Causal HIGHRES integration for realtime camera intervals. Unlike
+// integrateBodyRates(), this never requires a sample newer than t1. The rate
+// known at each instant is held until the next already-available sample. The
+// first held sample must be no older than max_hold_ms at t0; the final held
+// sample must be no older than max_hold_ms at t1. This keeps the extrapolation
+// explicitly bounded instead of silently treating missing IMU coverage as zero.
+inline BodyRateIntegration integrateBodyRatesCausalHold(
+    const std::deque<TimedBodyRate>& h,
+    int64_t t0_ns,int64_t t1_ns,
+    double max_hold_ms=15.0){
+  BodyRateIntegration out;
+  if(h.empty() || t0_ns<=0 || t1_ns<=t0_ns) return out;
+
+  auto first_after_t0=std::upper_bound(h.begin(),h.end(),t0_ns,
+    [](int64_t t,const TimedBodyRate& a){ return t<a.sample_ns; });
+  if(first_after_t0==h.begin()) return out;
+  auto cur=std::prev(first_after_t0);
+  if(!cur->valid || cur->sample_ns<=0) return out;
+
+  const double start_hold_ms=(t0_ns-cur->sample_ns)*1e-6;
+  if(!(start_hold_ms>=0.0 && start_hold_ms<=max_hold_ms)) return out;
+
+  cv::Matx33d dR=cv::Matx33d::eye();
+  double angle_sum=0.0;
+  double max_seen_hold_ms=start_hold_ms;
+  int segs=0;
+  int64_t seg_start=t0_ns;
+  TimedBodyRate rate=*cur;
+
+  for(auto it=first_after_t0; it!=h.end() && it->sample_ns<t1_ns; ++it){
+    if(!it->valid || it->sample_ns<=seg_start) continue;
+    const double dt=(it->sample_ns-seg_start)*1e-9;
+    if(!(dt>0.0 && dt<0.1)) return out;
+    const cv::Vec3d rv(rate.x*dt,rate.y*dt,rate.z*dt);
+    dR=dR*expSO3(rv);
+    angle_sum+=cv::norm(rv);
+    ++segs;
+    rate=*it;
+    seg_start=it->sample_ns;
+  }
+
+  const double end_hold_ms=(t1_ns-rate.sample_ns)*1e-6;
+  max_seen_hold_ms=std::max(max_seen_hold_ms,end_hold_ms);
+  if(!(end_hold_ms>=0.0 && end_hold_ms<=max_hold_ms)) return out;
+
+  const double tail_dt=(t1_ns-seg_start)*1e-9;
+  if(tail_dt>0.0){
+    if(!(tail_dt<0.1)) return out;
+    const cv::Vec3d rv(rate.x*tail_dt,rate.y*tail_dt,rate.z*tail_dt);
+    dR=dR*expSO3(rv);
+    angle_sum+=cv::norm(rv);
+    ++segs;
+  }
+
+  out.delta_R=dR;
+  out.valid=segs>0;
+  // For this causal variant the field records maximum endpoint hold age,
+  // not a two-sided bracket gap.
+  out.max_bracket_gap_ms=max_seen_hold_ms;
+  out.integrated_angle_deg=angle_sum*180.0/3.14159265358979323846;
+  out.segments=segs;
+  return out;
+}
+
+inline double rotationDistanceDeg(const cv::Matx33d& a,const cv::Matx33d& b){
+  const cv::Matx33d d=a.t()*b;
+  double c=(d(0,0)+d(1,1)+d(2,2)-1.0)*0.5;
+  c=std::max(-1.0,std::min(1.0,c));
+  return std::acos(c)*180.0/3.14159265358979323846;
+}
+
 } // namespace metric_shadow
