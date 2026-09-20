@@ -2556,6 +2556,10 @@ int main(int argc,char** argv){
         static std::deque<HighresPhasePending> highres_phase_pending;
         static std::ofstream highres_phase_csv;
         static bool highres_phase_header=false;
+        // HIGHRES_CAUSAL15_SHADOW_V1: diagnostic-only bounded causal hold.
+        // Never feeds Variant B publication until its coverage/error is audited.
+        static std::ofstream highres_causal15_csv;
+        static bool highres_causal15_header=false;
         double metric_att_gap0_ms=-1.0,metric_att_gap1_ms=-1.0;
         double metric_range_gap0_ms=-1.0,metric_range_gap1_ms=-1.0;
         if(!prev.empty() && prev_ts>0 && ts>prev_ts){
@@ -2733,6 +2737,73 @@ int main(int argc,char** argv){
             const cv::Matx33d corr_R1=corr_R0*metric_highres_corr_gyro_delta.delta_R;
             metric_highres_corr_gyro_step=metric_shadow::estimateWithRotations(
               mi,corr_R0,corr_R1);
+          }
+
+          // HIGHRES_CAUSAL15_SHADOW_V1: evaluate the same corrected HIGHRES
+          // stream without requiring a future sample beyond the current camera
+          // endpoint. Missing endpoint coverage is held for at most 15 ms.
+          // This is shadow-only: production A, WORKED5 and Variant-B publish
+          // selection remain unchanged.
+          const auto metric_highres_causal15_delta=
+            metric_shadow::integrateBodyRatesCausalHold(
+              hgh_corr,prev_ts,ts,15.0);
+          metric_shadow::Step metric_highres_causal15_step{};
+          if(a0.valid && metric_highres_causal15_delta.valid){
+            const cv::Matx33d causal_R0=metric_shadow::bodyToLocal(
+              a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
+            const cv::Matx33d causal_R1=
+              causal_R0*metric_highres_causal15_delta.delta_R;
+            metric_highres_causal15_step=metric_shadow::estimateWithRotations(
+              mi,causal_R0,causal_R1);
+          }
+
+          if(!highres_causal15_csv.is_open()){
+            const std::filesystem::path production_csv_path(csvpath);
+            highres_causal15_csv.open(
+              production_csv_path.parent_path()/"highres_causal15_shadow.csv",
+              std::ios::out|std::ios::trunc);
+          }
+          if(highres_causal15_csv.is_open() && !highres_causal15_header){
+            highres_causal15_csv
+              <<"frame,t0_ns,t1_ns,strict_valid,causal15_valid,"
+              <<"causal15_max_hold_ms,strict_segments,causal15_segments,"
+              <<"strict_angle_deg,causal15_angle_deg,deltaR_diff_deg,"
+              <<"strict_sensor_dN_m,strict_sensor_dE_m,"
+              <<"causal15_sensor_dN_m,causal15_sensor_dE_m,"
+              <<"sensor_delta_diff_m\n";
+            highres_causal15_header=true;
+          }
+          if(highres_causal15_csv.is_open()){
+            double dr_diff_deg=-1.0;
+            if(metric_highres_corr_gyro_delta.valid &&
+               metric_highres_causal15_delta.valid){
+              dr_diff_deg=metric_shadow::rotationDistanceDeg(
+                metric_highres_corr_gyro_delta.delta_R,
+                metric_highres_causal15_delta.delta_R);
+            }
+            double sensor_delta_diff_m=-1.0;
+            if(metric_highres_corr_gyro_step.valid &&
+               metric_highres_causal15_step.valid){
+              const cv::Vec3d dd=
+                metric_highres_causal15_step.delta_camera_local_m-
+                metric_highres_corr_gyro_step.delta_camera_local_m;
+              sensor_delta_diff_m=cv::norm(dd);
+            }
+            highres_causal15_csv
+              <<frame<<','<<prev_ts<<','<<ts
+              <<','<<(metric_highres_corr_gyro_delta.valid?1:0)
+              <<','<<(metric_highres_causal15_delta.valid?1:0)
+              <<','<<metric_highres_causal15_delta.max_bracket_gap_ms
+              <<','<<metric_highres_corr_gyro_delta.segments
+              <<','<<metric_highres_causal15_delta.segments
+              <<','<<metric_highres_corr_gyro_delta.integrated_angle_deg
+              <<','<<metric_highres_causal15_delta.integrated_angle_deg
+              <<','<<dr_diff_deg
+              <<','<<metric_highres_corr_gyro_step.delta_camera_local_m[0]
+              <<','<<metric_highres_corr_gyro_step.delta_camera_local_m[1]
+              <<','<<metric_highres_causal15_step.delta_camera_local_m[0]
+              <<','<<metric_highres_causal15_step.delta_camera_local_m[1]
+              <<','<<sensor_delta_diff_m<<'\n';
           }
 
           // Convert the already rotation- and lever-arm-compensated FC/IMU
