@@ -142,6 +142,21 @@ Bench closure ранее:
 - roll +5° sweep считается только sensitivity result, не calibration result;
 - clock-rate mismatch и исправление FC→RPi affine mapping остаются независимо доказанными.
 
+## 6.5. HIGHRES vs ATTITUDE gyro source — 2026-09-20
+
+Код проекта подтверждает: ordinary gyro shadow берёт `rollspeed/pitchspeed/yawspeed` из MAVLink ATTITUDE, а HIGHRES shadow берёт `xgyro/ygyro/zgyro` непосредственно из HIGHRES_IMU.
+
+Проверка ArduPilot source показывает принципиальное различие источников:
+- HIGHRES_IMU формируется из `AP::ins().get_gyro()`;
+- ATTITUDE rates формируются из `AP::ahrs().get_gyro()`;
+- `AP_AHRS::get_gyro()` документирован как smoothed gyro corrected for drift;
+- AHRS MAVLink message передаёт `omegaI = ahrs.get_gyro_drift()`;
+- ArduPilot `get_gyro_latest()` явно вычисляет `AP::ins().get_gyro(primary) + get_gyro_drift()`.
+
+Следовательно, обнаруженный static HIGHRES X offset нельзя трактовать как ошибку clock/extrinsic: наиболее прямой кандидат — отсутствие AHRS/EKF drift correction в HIGHRES_IMU относительно ATTITUDE rates. Знак correction должен проверяться данными, не предполагаться.
+
+В shadow-код добавлен захват MAVLink AHRS omegaIx/Iy/Iz и логирование рядом с raw HIGHRES, включая диагностическое `raw + omegaI`. Production/WORKED5 не меняются. Специальный физический прогон ради этого не требуется; данные будут собраны при следующем естественном запуске системы.
+
 ## 7. ΔR / HIGHRES: доказанные результаты
 
 Все ATTITUDE / ordinary gyro ΔR / HIGHRES ΔR варианты используют одинаковые:
