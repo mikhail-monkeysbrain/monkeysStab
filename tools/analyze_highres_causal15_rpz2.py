@@ -120,7 +120,18 @@ def main():
     for r in hr:
         if not r.get("fc_time_usec","").strip(): continue
         fc=int(r["fc_time_usec"])*1000; recv=int(r["recv_ns"])
-        w=np.array([float(r["corr_gx_rad_s"]),float(r["corr_gy_rad_s"]),float(r["corr_gz_rad_s"])])
+        vals=[r.get("corr_gx_rad_s"),r.get("corr_gy_rad_s"),r.get("corr_gz_rad_s")]
+        # The live HIGHRES logger can leave a truncated/incomplete final row
+        # when the process is still running or the file is copied mid-write.
+        # Such a row is not a valid gyro sample and must not abort the replay.
+        try:
+            if any(v is None or not str(v).strip() for v in vals):
+                continue
+            w=np.array([float(v) for v in vals])
+        except (TypeError,ValueError):
+            continue
+        if not np.all(np.isfinite(w)):
+            continue
         raw.append((recv,fc,w))
     raw.sort(key=lambda x:x[0])
     mapper=ClockMap(); hist=deque(); hi=0
