@@ -2299,6 +2299,29 @@ int main(int argc,char** argv){
       ++fps_decoded; ++w5w_decoded;
       ++frame;
 
+      // RPZ2 diagnostic snapshots: the console experiment creates a marker,
+      // and the production camera loop saves the next decoded frame.
+      for(const auto& snap : std::array<std::pair<const char*,const char*>,2>{{
+            {"/tmp/monkeys_rpz2_capture_first","rpz2_first.jpg"},
+            {"/tmp/monkeys_rpz2_capture_last","rpz2_last.jpg"}}}){
+        std::error_code ec;
+        if(std::filesystem::exists(snap.first,ec)){
+          const std::filesystem::path production_csv_path(csvpath);
+          const auto jpg_path=production_csv_path.parent_path()/snap.second;
+          if(cv::imwrite(jpg_path.string(),gray)){
+            const auto meta_path=production_csv_path.parent_path()/"rpz2_frames.csv";
+            const bool new_meta=!std::filesystem::exists(meta_path);
+            std::ofstream meta(meta_path,std::ios::out|std::ios::app);
+            if(new_meta) meta<<"label,frame,mono_ns,file\n";
+            const char* label=(std::string(snap.second)=="rpz2_first.jpg")?"FIRST":"LAST";
+            meta<<label<<','<<frame<<','<<ts<<','<<snap.second<<'\n';
+            std::cerr<<"RPZ2 SNAPSHOT: "<<jpg_path<<" frame="<<frame
+                     <<" mono_ns="<<ts<<"\n";
+          }
+          std::filesystem::remove(snap.first,ec);
+        }
+      }
+
       // Preserve only successfully decoded selected MJPEG frames. frame now
       // exactly matches the production CSV frame counter.
       lkfc_ring.push_back(LkForensicFrame{frame,ts,selected_v4l2_ts_ns,
