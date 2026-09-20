@@ -316,6 +316,12 @@ struct FlowFc {
   FlowFcRc rc{};
   std::deque<FlowFcGyro> attitude_history; // ATTITUDE, currently keyed by RPi receive time
   std::deque<FlowFcRawGyro> highres_gyro_history; // independent HIGHRES_IMU gyro stream
+  // HIGHRES_CLOCK_MAP_V1: causal lower-envelope mapping from FC measurement
+  // time to the RPi CLOCK_MONOTONIC domain used by V4L2 camera timestamps.
+  // recv_ns = fc_time_ns + transport_latency + clock_offset, therefore the
+  // minimum observed (recv_ns-fc_time_ns) is the least-latency clock anchor.
+  int64_t highres_clock_offset_ns=0;
+  bool highres_clock_valid=false;
   std::ofstream highres_gyro_shadow_ofs;
   uint64_t local_count=0;
   uint64_t ekf_count=0;
@@ -700,6 +706,12 @@ struct FlowFc {
               // HIGHRES_GYRO_SHADOW_V1: independent raw gyro capture.
               // This does not use ATTITUDE.rollspeed/pitchspeed/yawspeed and
               // does not feed any production estimator or MAVLink output.
+              const int64_t fc_sample_ns=static_cast<int64_t>(q.time_usec)*1000LL;
+              const int64_t clock_candidate_ns=imu.recv_ns-fc_sample_ns;
+              if(!highres_clock_valid || clock_candidate_ns<highres_clock_offset_ns){
+                highres_clock_offset_ns=clock_candidate_ns;
+                highres_clock_valid=true;
+              }
               highres_gyro_history.push_back(
                 {q.xgyro,q.ygyro,q.zgyro,q.time_usec,imu.recv_ns,true});
               while(highres_gyro_history.size()>2 &&
@@ -2361,9 +2373,13 @@ int main(int argc,char** argv){
             hgh.resize(fc.highres_gyro_history.size());
             for(size_t i=0;i<fc.highres_gyro_history.size();++i){
               const auto& g=fc.highres_gyro_history[i];
-              // First online A/B uses the same RPi receive-time domain as the
-              // camera. FC time_usec remains logged separately for timing audit.
-              hgh[i]={g.x,g.y,g.z,g.recv_ns,g.valid};
+              // HIGHRES_CLOCK_MAP_V1: use FC measurement time, mapped once into
+              // the camera CLOCK_MONOTONIC domain by the causal lower envelope.
+              // This removes variable MAVLink receive latency from inter-frame ΔR.
+              const int64_t mapped_ns=fc.highres_clock_valid
+                ? static_cast<int64_t>(g.fc_time_usec)*1000LL+fc.highres_clock_offset_ns
+                : g.recv_ns;
+              hgh[i]={g.x,g.y,g.z,mapped_ns,g.valid};
             }
           }
           const auto a0=metric_shadow::interpolateAttitude(ah,prev_ts,30.0);
@@ -2408,10 +2424,10 @@ int main(int argc,char** argv){
               mi,gyro_R0,gyro_R1);
           }
 
-          // HIGHRES_DELTAR_SHADOW_V1: same geometry and same absolute R0,
+          // HIGHRES_DELTAR_SHADOW_V2: same geometry and same absolute R0,
           // but inter-frame delta-R comes from independent HIGHRES_IMU gyro.
-          // Receive timestamps are used deliberately for this first A/B so no
-          // unverified FC->RPi clock mapping is introduced.
+          // FC time_usec is mapped to camera CLOCK_MONOTONIC by the causal
+          // lower-envelope clock anchor above; receive-time jitter is excluded.
           metric_highres_gyro_delta=metric_shadow::integrateBodyRates(
             hgh,prev_ts,ts,30.0);
           if(a0.valid && metric_highres_gyro_delta.valid){

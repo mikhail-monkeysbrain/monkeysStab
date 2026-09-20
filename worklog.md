@@ -283,3 +283,33 @@ the estimator state but left three diagnostic serialization references to the
 removed members, causing smoke_build.sh to fail. Telemetry now exports
 imu_dr_bias_bx/by/bz. No estimator math or thresholds changed in this follow-up.
 Frozen branch remains untouched.
+
+
+## 2026-09-20 — HIGHRES_DELTAR clock-map V2
+
+Analysis of the 20260920_111236 yaw run showed that full HIGHRES ΔR + lever
+reduced false horizontal translation from about 112 mm (WORKED5) to about
+39 mm on the clean yaw interval, but CAMERA and LEVER still disagreed
+frame-by-frame. The previous HIGHRES shadow keyed gyro samples by Raspberry Pi
+MAVLink receive time even though HIGHRES_IMU already carries FC measurement
+time_usec.
+
+Changed only the diagnostic HIGHRES ΔR shadow:
+- maintain a causal lower-envelope clock anchor
+  offset = min(recv_ns - FC_time_usec*1000);
+- map every buffered HIGHRES sample from FC measurement time into the same
+  CLOCK_MONOTONIC domain as the camera timestamps;
+- integrate ΔR over the exact camera interval using mapped measurement time,
+  rather than variable MAVLink receive time;
+- fall back to receive time only before the first clock anchor exists.
+
+The lower envelope is deliberately one-way/causal: it does not use future
+samples and does not tune a gyro scale or lever-arm coefficient. Over these
+short bench runs clock-rate drift is left untouched; this test isolates receive
+latency/jitter first.
+
+Isolation remains strict: WORKED5, OPTICAL_FLOW sent to ArduPilot, IMU DR,
+FUSED paths, camera calibration, lever geometry and the frozen branch are
+unchanged. Next validation is the same stationary -> ~90 deg yaw -> stationary
+maneuver and comparison of HIGHRES CAMERA/LEVER/IMU residual against the
+20260920_111236 baseline.
