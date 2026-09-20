@@ -1090,11 +1090,32 @@ button{cursor:pointer}
   </div>
 
   <div class="metrics">
-   <div class="metric"><span>X</span><b id="mx">—</b></div>
-   <div class="metric"><span>Y</span><b id="my">—</b></div>
-   <div class="metric"><span>Z</span><b id="mz">—</b></div>
+   <div class="metric"><span>X · FC EKF</span><b id="mx">—</b></div>
+   <div class="metric"><span>Y · FC EKF</span><b id="my">—</b></div>
+   <div class="metric"><span>Z · FC EKF</span><b id="mz">—</b></div>
    <div class="metric"><span>TF-Luna</span><b id="mr">—</b></div>
    <div class="metric"><span>Flow quality</span><b id="mq">—</b></div>
+  </div>
+  <div class="metrics">
+   <div class="metric"><span>X · IMU DR</span><b id="imuX">—</b></div>
+   <div class="metric"><span>Y · IMU DR</span><b id="imuY">—</b></div>
+   <div class="metric"><span>Z · IMU DR</span><b id="imuZ">—</b></div>
+   <div class="metric"><span>Источник</span><b>HIGHRES IMU</b></div>
+   <div class="metric"><span>Stationary</span><b id="imuStationary">—</b></div>
+  </div>
+  <div class="metrics">
+   <div class="metric"><span>X · CAM</span><b id="camX">—</b></div>
+   <div class="metric"><span>Y · CAM</span><b id="camY">—</b></div>
+   <div class="metric"><span>Z · CAM</span><b id="camZ">—</b></div>
+   <div class="metric"><span>Источник</span><b>WORKED5</b></div>
+   <div class="metric"><span>Примечание</span><b style="font-size:12px">Z камерой не оценивается</b></div>
+  </div>
+  <div class="metrics">
+   <div class="metric"><span>X · ОБЩЕЕ</span><b id="fusedX">—</b></div>
+   <div class="metric"><span>Y · ОБЩЕЕ</span><b id="fusedY">—</b></div>
+   <div class="metric"><span>Z · ОБЩЕЕ</span><b id="fusedZ">—</b></div>
+   <div class="metric"><span>Источник</span><b>FUSED V1</b></div>
+   <div class="metric"><span>Состояние</span><b id="fusedState">—</b></div>
   </div>
 
   <div class="card compareCard">
@@ -1539,6 +1560,7 @@ function updateHud(t){
  if(!t.available){
    $('footerRuntime').textContent=t.running?'запускается…':'остановлен';
    $('mx').textContent='—';$('my').textContent='—';$('mz').textContent='—';$('mr').textContent='—';$('mq').textContent='—';
+   ['imuX','imuY','imuZ','imuStationary','camX','camY','camZ','fusedX','fusedY','fusedZ','fusedState'].forEach(id=>{if($(id))$(id).textContent='—'});
    $('frame').textContent='—';$('inl').textContent='—';$('ekf').textContent='—';
    ['ekfNE','ekfDrift','ekfVel','rawNE','rawDrift','rawVel'].forEach(id=>{if($(id))$(id).textContent='—'});
    $('sceneXYZ').textContent=t.running?'Ожидание WebSocket телеметрии…':'Runtime остановлен — live данные отсутствуют';
@@ -1552,6 +1574,17 @@ function updateHud(t){
  }
  $('runState').textContent=t.running?'Работает':'Остановлен';$('footerRuntime').textContent=t.running?'работает':'остановлен';$('footerRuntime').style.color=t.running?'#15d876':'#8aa5b8';
  $('mx').textContent=fmt(t.x_mm,0)+' мм';$('my').textContent=fmt(t.y_mm,0)+' мм';$('mz').textContent=fmt(t.z_mm,0)+' мм';$('mr').textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';$('mq').textContent=t.quality??'—';
+ if($('imuX'))$('imuX').textContent=fmt(t.imu_dr_n_mm,0)+' мм';
+ if($('imuY'))$('imuY').textContent=fmt(t.imu_dr_e_mm,0)+' мм';
+ if($('imuZ'))$('imuZ').textContent=fmt(t.imu_dr_d_mm,0)+' мм';
+ if($('imuStationary'))$('imuStationary').textContent=t.imu_dr_stationary?'ДА':'НЕТ';
+ if($('camX'))$('camX').textContent=fmt(t.raw_of_n_mm,0)+' мм';
+ if($('camY'))$('camY').textContent=fmt(t.raw_of_e_mm,0)+' мм';
+ if($('camZ'))$('camZ').textContent='—';
+ if($('fusedX'))$('fusedX').textContent=fmt(t.fused_v1_n_mm,0)+' мм';
+ if($('fusedY'))$('fusedY').textContent=fmt(t.fused_v1_e_mm,0)+' мм';
+ if($('fusedZ'))$('fusedZ').textContent='—';
+ if($('fusedState'))$('fusedState').textContent=t.fused_v1_stationary?'STATIONARY':'MOTION';
  $('roll').textContent=fmt(t.roll_deg,1)+'°';$('pitch').textContent=fmt(t.pitch_deg,1)+'°';$('yaw').textContent=fmt(t.yaw_deg,1)+'°';
  $('inl').textContent=(t.inliers??'—')+'/'+(t.tracked??'—');$('frame').textContent=t.frame??'—';$('ekf').textContent=t.ekf_valid?'VALID':'NO DATA';
  if($('ekfNE'))$('ekfNE').textContent=fmt(t.x_mm,1)+' / '+fmt(t.y_mm,1)+' мм';

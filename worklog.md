@@ -207,3 +207,14 @@ gets its own trail, endpoint and live N/E/|XY| readout with automatic mm scale.
 IMU and FUSED are locally zeroed at UI start/HOME so all four trajectories share
 a visual origin. Existing WebGL scene, controls, camera preview and runtime are
 kept. No estimator, MAVLink publisher, ΔR logic, or frozen branch changes.
+
+
+## 2026-09-20 — explicit XYZ source rows in flight HUD
+
+Added three explicit XYZ rows below the existing FC EKF row: IMU DR, CAM/WORKED5
+and FUSED V1. Existing top XYZ labels now explicitly say FC EKF. IMU DR exposes
+N/E/D as X/Y/Z for the diagnostic HUD. CAM uses WORKED5 raw N/E; Z is shown as
+unavailable because the current WORKED5 optical-flow path does not independently
+estimate vertical displacement. FUSED V1 currently exposes N/E only, so its Z is
+also shown as unavailable rather than fabricating a value. No estimator/runtime
+publisher behavior changed; UI only. Frozen branch untouched.
