@@ -2,6 +2,7 @@
 import csv
 import pathlib
 import time
+import os
 
 EVENTS=[]
 
