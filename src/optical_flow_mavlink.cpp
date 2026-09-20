@@ -2463,6 +2463,14 @@ int main(int argc,char** argv){
         double stabilised_lever_pred_vx=0.0;
         double stabilised_lever_pred_vy=0.0;
         double stabilised_lever_err_mps=0.0;
+        // Unified SENSOR-centric Stabilised candidate. Prefer corrected
+        // HIGHRES delta-R; fall back to ATTITUDE/AHRS body rates while keeping
+        // identical stabilised-flow semantics. Shadow only.
+        bool stabilised_unified_shadow_valid=false;
+        int stabilised_unified_shadow_source=0; // 0=none, 1=HIGHRES_CORR, 2=ATTITUDE_RATE
+        double stabilised_unified_shadow_flow_x=0.0;
+        double stabilised_unified_shadow_flow_y=0.0;
+        double stabilised_unified_shadow_roundtrip_err=0.0;
         // PIXEL_ROTATION_SHADOW_V1: diagnostic only. Compare measured LK px1
         // with px1 predicted from px0 by HIGHRES delta-R. No range, lever arm,
         // ground-plane reconstruction, EKF, or production flow is involved.
@@ -2783,6 +2791,56 @@ int main(int argc,char** argv){
                   stabilised_shadow_valid &&
                   stabilised_sensor_shadow_valid &&
                   std::isfinite(stabilised_lever_err_mps);
+
+                // Preferred unified path: corrected HIGHRES SENSOR-centric.
+                if(stabilised_sensor_shadow_valid){
+                  stabilised_unified_shadow_valid=true;
+                  stabilised_unified_shadow_source=1;
+                  stabilised_unified_shadow_flow_x=stabilised_sensor_shadow_flow_x;
+                  stabilised_unified_shadow_flow_y=stabilised_sensor_shadow_flow_y;
+                  stabilised_unified_shadow_roundtrip_err=
+                    stabilised_sensor_shadow_roundtrip_err;
+                }
+              }
+            }
+          }
+
+          // STABILISED_UNIFIED_SHADOW_V1 fallback. ATTITUDE roll/pitch/yaw
+          // rates come from AP::ahrs().get_gyro(), i.e. the same corrected
+          // AHRS angular-rate domain that already backs the ordinary delta-R
+          // shadow. Keep SENSOR-centric semantics so FLOW_POS remains coherent.
+          if(!stabilised_unified_shadow_valid &&
+             metric_gyro_step.valid && a0.valid &&
+             mi.range0_valid && mi.body_R_camera_valid &&
+             metric_gyro_step.dt>0.0){
+            const cv::Matx33d fb_R0=metric_shadow::bodyToLocal(
+              a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
+            cv::Vec3d lidar_ray_body=mi.range_ray_body_frd;
+            const double lrnorm=cv::norm(lidar_ray_body);
+            if(lrnorm>0.5 && std::isfinite(lrnorm)){
+              lidar_ray_body*=1.0/lrnorm;
+              const cv::Vec3d down(0,0,1);
+              const double h0=down.dot(fb_R0*(
+                mi.range_pos_body_frd-mi.camera_pos_body_frd+
+                mi.range0_m*lidar_ray_body));
+              if(h0>0.03 && std::isfinite(h0)){
+                const cv::Vec3d sensor_v_local=
+                  metric_gyro_step.delta_camera_local_m*(1.0/metric_gyro_step.dt);
+                const cv::Vec3d sensor_v_body=fb_R0.t()*sensor_v_local;
+                const double fx=-sensor_v_body[1]/h0;
+                const double fy= sensor_v_body[0]/h0;
+                const double back_vx=fy*h0;
+                const double back_vy=-fx*h0;
+                const double rt_err=std::hypot(
+                  back_vx-sensor_v_body[0],back_vy-sensor_v_body[1]);
+                if(std::isfinite(fx) && std::isfinite(fy) &&
+                   std::isfinite(rt_err) && std::hypot(fx,fy)<4.0){
+                  stabilised_unified_shadow_valid=true;
+                  stabilised_unified_shadow_source=2;
+                  stabilised_unified_shadow_flow_x=fx;
+                  stabilised_unified_shadow_flow_y=fy;
+                  stabilised_unified_shadow_roundtrip_err=rt_err;
+                }
               }
             }
           }
@@ -3575,6 +3633,9 @@ int main(int argc,char** argv){
               <<"stabilised_sensor_shadow_roundtrip_err,"
               <<"stabilised_lever_audit_valid,stabilised_lever_observed_vx,stabilised_lever_observed_vy,"
               <<"stabilised_lever_pred_vx,stabilised_lever_pred_vy,stabilised_lever_err_mps,"
+              <<"stabilised_unified_shadow_valid,stabilised_unified_shadow_source,"
+              <<"stabilised_unified_shadow_flow_x,stabilised_unified_shadow_flow_y,"
+              <<"stabilised_unified_shadow_roundtrip_err,"
               <<"pairs,used,residual_median_m,gyro_residual_median_m,highres_residual_median_m,"
               <<"pixel_rot_valid,pixel_rot_points,pixel_rot_median_px,pixel_rot_p95_px,"
               <<"pixel_rot_du_median_px,pixel_rot_dv_median_px,"
@@ -3695,6 +3756,11 @@ int main(int argc,char** argv){
             <<stabilised_lever_pred_vx<<','
             <<stabilised_lever_pred_vy<<','
             <<stabilised_lever_err_mps<<','
+            <<(stabilised_unified_shadow_valid?1:0)<<','
+            <<stabilised_unified_shadow_source<<','
+            <<stabilised_unified_shadow_flow_x<<','
+            <<stabilised_unified_shadow_flow_y<<','
+            <<stabilised_unified_shadow_roundtrip_err<<','
             <<s.metric_prev_points.size()<<','
             <<metric_step.points<<','
             <<metric_step.residual_median_m<<','
