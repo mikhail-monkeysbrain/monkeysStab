@@ -138,7 +138,7 @@ def main():
     raw.sort(key=lambda x:x[0])
     mapper=ClockMap(); hist=deque(); hi=0
     recovered=0; strict_rt=0; diffs=[]; holds=[]; rows=[]
-    buckets={"causal15":[],"causal20_only":[],"causal25_only":[],"over25":[]}
+    buckets={"causal15":[],"causal20_only":[],"causal25_only":[],"over25":[]}\n    missing_w5_columns=set()
     for r in sorted(targets,key=lambda x:int(x["t1_ns"])):
         frame=int(r["frame"]); t0=int(r["t0_ns"]); t1=int(r["t1_ns"])
         m=by_frame.get(frame)
@@ -151,6 +151,40 @@ def main():
         mapped=[(mapper.map(fc),w) for fc,w in hist]
         mapped.sort(key=lambda x:x[0])
         st=integrate_strict(mapped,t0,t1)
+        c15,_,_,_=integrate_hold(mapped,t0,t1,15.0)
+        c20,_,_,_=integrate_hold(mapped,t0,t1,20.0)
+        c25,_,_,_=integrate_hold(mapped,t0,t1,25.0)
+        def pick(keys):
+            for k in keys:
+                v=r.get(k)
+                if v is not None and str(v).strip():
+                    return float(v)
+            return None
+        # Deltar logs may not carry per-frame W5 dN/dE. Prefer them when
+        # present; otherwise derive the W5 step from consecutive accumulated
+        # positions in optical_flow_mavlink.csv using frame-1 -> frame.
+        wn=pick(("w5_dN_m","worked5_dN_m","w5_dn_m","worked5_dn_m"))
+        we=pick(("w5_dE_m","worked5_dE_m","w5_de_m","worked5_de_m"))
+        if wn is None or we is None:
+            prevm=by_frame.get(frame-1)
+            nkeys=("worked5_n_m","w5_n_m","worked5_n","w5_n")
+            ekeys=("worked5_e_m","w5_e_m","worked5_e","w5_e")
+            def pickrow(row,keys):
+                if row is None: return None
+                for k in keys:
+                    v=row.get(k)
+                    if v is not None and str(v).strip():
+                        return float(v)
+                return None
+            n1,e1=pickrow(m,nkeys),pickrow(m,ekeys)
+            n0,e0=pickrow(prevm,nkeys),pickrow(prevm,ekeys)
+            if None not in (n1,e1,n0,e0):
+                wn,we=n1-n0,e1-e0
+            else:
+                missing_w5_columns.update(k for k in (*nkeys,*ekeys) if k not in m)
+        if wn is not None and we is not None:
+            key="causal15" if c15 else ("causal20_only" if c20 else ("causal25_only" if c25 else "over25"))
+            buckets[key].append((wn,we))
         ca,ca_reason,start_hold,end_hold=integrate_hold(mapped,t0,t1,a.hold_ms)
         if st: strict_rt+=1
         if ca:
@@ -175,7 +209,7 @@ def main():
         print(f"deltaR_error_deg median={pct(diffs,50):.6f} p95={pct(diffs,95):.6f} max={max(diffs):.6f}")
     from collections import Counter
     print("causal_invalid_reasons="+str(dict(Counter(x[8] for x in rows if x[4]==0))))
-    print("===== W5 MOVEMENT BY CAUSAL COVERAGE =====")
+    print("===== W5 MOVEMENT BY CAUSAL COVERAGE =====")\n    if sum(len(v) for v in buckets.values())==0:\n        print("w5_movement_status=UNAVAILABLE columns="+",".join(sorted(missing_w5_columns)))
     total=np.array([0.0,0.0]); cumulative=np.array([0.0,0.0])
     for name in ("causal15","causal20_only","causal25_only","over25"):
         arr=buckets[name]
