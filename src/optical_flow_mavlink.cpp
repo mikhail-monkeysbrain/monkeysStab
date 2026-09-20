@@ -2612,12 +2612,17 @@ int main(int argc,char** argv){
           std::deque<metric_shadow::TimedBodyRate> gh;
           std::deque<metric_shadow::TimedBodyRate> hgh;
           std::deque<metric_shadow::TimedBodyRate> hgh_corr;
+          // Strict camera-dequeue-causal HIGHRES stream for CAUSAL_METRIC35.
+          // Keep the existing hgh/hgh_corr snapshots unchanged because legacy
+          // diagnostics intentionally use the complete history available later.
+          std::deque<metric_shadow::TimedBodyRate> hgh_corr_causal;
           {
             std::lock_guard<std::mutex> lock(fc.mu);
             ah.clear();
             gh.clear();
             hgh.clear();
             hgh_corr.clear();
+            hgh_corr_causal.clear();
             ah.resize(fc.attitude_history.size());
             gh.resize(fc.attitude_history.size());
             for(size_t i=0;i<fc.attitude_history.size();++i){
@@ -2647,6 +2652,13 @@ int main(int argc,char** argv){
               hgh[i]={g.x,g.y,g.z,mapped_ns,g.valid};
               hgh_corr[i]={g.x+g.drift_x,g.y+g.drift_y,g.z+g.drift_z,
                            mapped_ns,g.valid && g.drift_valid};
+              // CAUSAL_METRIC35 may only consume IMU packets that had already
+              // reached the RPi when this camera frame was dequeued.
+              if(g.recv_ns<=selected_dq_mono_ns){
+                hgh_corr_causal.push_back(
+                  {g.x+g.drift_x,g.y+g.drift_y,g.z+g.drift_z,
+                   mapped_ns,g.valid && g.drift_valid});
+              }
             }
           }
           // HIGHRES_PHASE_SWEEP_V2 delayed evaluation. A +10 ms test
@@ -2813,9 +2825,9 @@ int main(int argc,char** argv){
                causal_metric35_anchor_sample_age_ms>=0.0){
               const auto anchor_to_t1=
                 metric_shadow::integrateBodyRatesCausalHold(
-                  hgh_corr,causal_att_anchor.mapped_sample_ns,ts,25.0);
+                  hgh_corr_causal,causal_att_anchor.mapped_sample_ns,ts,25.0);
               const auto d01=metric_shadow::integrateBodyRatesCausalHold(
-                hgh_corr,prev_ts,ts,25.0);
+                hgh_corr_causal,prev_ts,ts,25.0);
               causal_metric35_deltar_hold_ms=d01.max_bracket_gap_ms;
               if(anchor_to_t1.valid && d01.valid){
                 const cv::Matx33d Ra=metric_shadow::bodyToLocal(
