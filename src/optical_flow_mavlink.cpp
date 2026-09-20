@@ -1708,6 +1708,7 @@ int main(int argc,char** argv){
   bool blind4_cli=false;
   bool rotation_gui=false;
   bool return_manual_target=false;
+  bool stabilised_unified_publish=false;
   std::string dataset_dir;
   std::string dataset_surface;
   double dataset_duration_sec=0.0;
@@ -1734,6 +1735,7 @@ int main(int argc,char** argv){
     else if(a=="--blind4-cli") blind4_cli=true;
     else if(a=="--rotation-gui") rotation_gui=true;
     else if(a=="--return-manual-target") return_manual_target=true;
+    else if(a=="--stabilised-unified-publish") stabilised_unified_publish=true;
     else if(a=="--dataset-dir" && i+1<argc) dataset_dir=argv[++i];
     else if(a=="--dataset-surface" && i+1<argc) dataset_surface=argv[++i];
     else if(a=="--dataset-duration-sec" && i+1<argc) dataset_duration_sec=std::stod(argv[++i]);
@@ -1762,6 +1764,11 @@ int main(int argc,char** argv){
       g_obs_shadow_enabled=false;
     }
   }
+  if(stabilised_unified_publish){
+    std::cerr<<"STABILISED UNIFIED PUBLISH: ENABLED (experimental Variant B)\n"
+             <<"REQUIRES FC FLOW_OPTIONS=1 (Stabilised). No parameter is changed automatically.\n";
+  }
+
   if(continuous_guided && (continuous_legs<2 || continuous_legs>30)){
     std::cerr<<"ОШИБКА: --continuous-legs разрешён только 2..30\n";
     return 2;
@@ -1857,7 +1864,7 @@ int main(int argc,char** argv){
     constexpr std::streamoff kCsvMaxBytes=250LL*1024LL*1024LL;
     bool csv_logging_enabled=true;
     bool csv_limit_reported=false;
-    csv<<"mono_ns,camera_ts_ns,v4l2_timestamp_ns,camera_dequeue_ns,v4l2_flags,v4l2_to_dequeue_ms,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,lever_valid,lever_production_applied,lever_flow_body_x,lever_flow_body_y,lever_pred_flow_x,lever_pred_flow_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,rc_zero_seq,worked5_valid,worked5_points,worked5_hcam_m,worked5_du_norm,worked5_dv_norm,worked5_dx_m,worked5_dy_m,worked5_dN_m,worked5_dE_m,worked5_acc_n_m,worked5_acc_e_m,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
+    csv<<"mono_ns,camera_ts_ns,v4l2_timestamp_ns,camera_dequeue_ns,v4l2_flags,v4l2_to_dequeue_ms,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,lever_valid,lever_production_applied,lever_flow_body_x,lever_flow_body_y,lever_pred_flow_x,lever_pred_flow_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,stabilised_publish_mode,stabilised_publish_ready,stabilised_publish_source,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,rc_zero_seq,worked5_valid,worked5_points,worked5_hcam_m,worked5_du_norm,worked5_dv_norm,worked5_dx_m,worked5_dy_m,worked5_dN_m,worked5_dE_m,worked5_acc_n_m,worked5_acc_e_m,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
 
     if(g_fb_shadow_max_px>0.0){
       std::cerr<<(g_obs_shadow_enabled?"A/B/C/D SHADOW: ":"A/B/C SHADOW: ")
@@ -3346,12 +3353,24 @@ int main(int argc,char** argv){
             flow_send_y = fg.y + k*(flow_send_y - fg.y);
           }
         }
+        // Experimental Variant B publish switch. Keep default WORKED5/raw
+        // path untouched unless explicitly requested. Unified candidate is
+        // SENSOR-centric for both HIGHRES_CORR and ATTITUDE_RATE fallback.
+        // If unified is unavailable, DO NOT mix raw semantics into a FC that
+        // is configured FLOW_OPTIONS=Stabilised: suppress that interval.
+        const bool stabilised_publish_ready =
+          !stabilised_unified_publish || stabilised_unified_shadow_valid;
+        if(stabilised_unified_publish && stabilised_unified_shadow_valid){
+          flow_send_x=stabilised_unified_shadow_flow_x;
+          flow_send_y=stabilised_unified_shadow_flow_y;
+        }
+
         int64_t flow_send_ns=monoNs();
         const double frame_pipeline_latency_ms =
           (ts>0) ? (flow_send_ns-ts)*1e-6 : -1.0;
         const bool flow_fresh = frame_pipeline_latency_ms>=0.0 &&
                                 frame_pipeline_latency_ms<=kMaxFlowPipelineAgeMs;
-        if(s.valid && flow_fresh && !terrain_step_guard){
+        if(s.valid && flow_fresh && !terrain_step_guard && stabilised_publish_ready){
           quality=255;
           // AP_OpticalFlow_MAV currently timestamps measurement by RECEIVE time,
           // not packet.time_usec, so low pipeline latency is mandatory.
@@ -3849,7 +3868,9 @@ int main(int argc,char** argv){
            <<(g_fb_shadow_max_px>0.0?1:0)<<','<<g_fb_shadow_max_px<<','<<s.fb_checked<<','<<s.fb_pass<<','<<s.fb_ratio<<','<<s.fb_inliers<<','<<(s.fb_shadow_valid?1:0)<<','<<s.fb_flow_body_x<<','<<s.fb_flow_body_y<<','<<s.fb_t_ms<<','
            <<(s.robust_shadow_valid?1:0)<<','<<s.robust_flow_body_x<<','<<s.robust_flow_body_y<<','<<s.robust_sigma<<','<<s.robust_mean_weight<<','<<s.robust_downweighted<<','<<s.robust_iters<<','
            <<(s.obs_shadow_valid?1:0)<<','<<s.obs_flow_body_x<<','<<s.obs_flow_body_y<<','<<s.obs_median_ratio<<','<<s.obs_mean_weight<<','<<s.obs_downweighted<<','
-           <<(int)quality<<','<<lm<<','<<lage<<','<<range_to_fc<<','<<flow_send_x<<','<<flow_send_y<<','<<(flow_sent?1:0)<<','<<(range_sent?1:0)<<','
+           <<(int)quality<<','<<lm<<','<<lage<<','<<range_to_fc<<','<<flow_send_x<<','<<flow_send_y<<','<<(flow_sent?1:0)<<','
+           <<(stabilised_unified_publish?1:0)<<','<<(stabilised_publish_ready?1:0)<<','
+           <<stabilised_unified_shadow_source<<','<<(range_sent?1:0)<<','
            <<(arm_ok?(arm_now?1:0):-1)<<','
            <<(efresh?1:0)<<','<<ep.x<<','<<ep.y<<','<<ep.z<<','<<ep.vx<<','<<ep.vy<<','<<ep.vz<<','<<eage<<','<<ec<<','
            <<(esfresh?1:0)<<','<<es.flags<<','<<esage<<','<<esc<<','
