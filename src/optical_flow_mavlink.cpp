@@ -386,6 +386,9 @@ struct FlowFc {
   uint64_t imu_count=0;
   double gyro_sum_x=0,gyro_sum_y=0,gyro_sum_z=0;
   uint64_t gyro_sum_count=0;
+  double ahrs_omega_i_x=0.0,ahrs_omega_i_y=0.0,ahrs_omega_i_z=0.0;
+  int64_t ahrs_omega_i_recv_ns=0;
+  bool ahrs_omega_i_valid=false;
   bool armed=false;
   bool heartbeat_valid=false;
   int64_t heartbeat_recv_ns=0;
@@ -692,6 +695,9 @@ struct FlowFc {
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_EKF_STATUS_REPORT,5);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_ATTITUDE,100);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_HIGHRES_IMU,100);
+      // AHRS omegaI is ArduPilot's gyro drift correction.  Capture it only
+      // for shadow diagnostics; production optical flow is unchanged.
+      requestRate(fd,sys,comp,MAVLINK_MSG_ID_AHRS,20);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_POSITION_TARGET_LOCAL_NED,20);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_ATTITUDE_TARGET,20);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_SERVO_OUTPUT_RAW,20);
@@ -753,6 +759,14 @@ struct FlowFc {
                 attitude_history.pop_front();
               gyro_sum_x+=q.rollspeed; gyro_sum_y+=q.pitchspeed; gyro_sum_z+=q.yawspeed;
               ++gyro_sum_count;
+            } else if(m.msgid==MAVLINK_MSG_ID_AHRS){
+              mavlink_ahrs_t q{}; mavlink_msg_ahrs_decode(&m,&q);
+              std::lock_guard<std::mutex> l(mu);
+              ahrs_omega_i_x=q.omegaIx;
+              ahrs_omega_i_y=q.omegaIy;
+              ahrs_omega_i_z=q.omegaIz;
+              ahrs_omega_i_recv_ns=monoNs();
+              ahrs_omega_i_valid=true;
             } else if(m.msgid==MAVLINK_MSG_ID_HIGHRES_IMU){
               mavlink_highres_imu_t q{}; mavlink_msg_highres_imu_decode(&m,&q);
               std::lock_guard<std::mutex> l(mu);
@@ -777,12 +791,25 @@ struct FlowFc {
                   std::ios::out|std::ios::trunc);
                 if(highres_gyro_shadow_ofs.is_open())
                   highres_gyro_shadow_ofs
-                    <<"seq,fc_time_usec,recv_ns,gx_rad_s,gy_rad_s,gz_rad_s\n";
+                    <<"seq,fc_time_usec,recv_ns,gx_rad_s,gy_rad_s,gz_rad_s,"
+                    <<"ahrs_omegaIx,ahrs_omegaIy,ahrs_omegaIz,ahrs_drift_age_ms,"
+                    <<"corr_gx_rad_s,corr_gy_rad_s,corr_gz_rad_s\n";
               }
               if(highres_gyro_shadow_ofs.is_open()){
                 highres_gyro_shadow_ofs
                   <<imu_count<<','<<q.time_usec<<','<<imu.recv_ns<<','
-                  <<q.xgyro<<','<<q.ygyro<<','<<q.zgyro<<'\n';
+                  <<q.xgyro<<','<<q.ygyro<<','<<q.zgyro<<',';
+                const double drift_age_ms=ahrs_omega_i_valid
+                    ? (imu.recv_ns-ahrs_omega_i_recv_ns)*1e-6 : -1.0;
+                const bool drift_fresh=ahrs_omega_i_valid && drift_age_ms>=0.0 && drift_age_ms<250.0;
+                highres_gyro_shadow_ofs
+                  <<(drift_fresh?ahrs_omega_i_x:0.0)<<','
+                  <<(drift_fresh?ahrs_omega_i_y:0.0)<<','
+                  <<(drift_fresh?ahrs_omega_i_z:0.0)<<','
+                  <<drift_age_ms<<','
+                  <<(q.xgyro+(drift_fresh?ahrs_omega_i_x:0.0))<<','
+                  <<(q.ygyro+(drift_fresh?ahrs_omega_i_y:0.0))<<','
+                  <<(q.zgyro+(drift_fresh?ahrs_omega_i_z:0.0))<<'\n';
                 highres_gyro_shadow_ofs.flush();
               }
 
