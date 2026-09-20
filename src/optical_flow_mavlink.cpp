@@ -2457,6 +2457,12 @@ int main(int argc,char** argv){
         double stabilised_sensor_shadow_v_body_y=0.0;
         double stabilised_sensor_shadow_v_body_z=0.0;
         double stabilised_sensor_shadow_roundtrip_err=0.0;
+        bool stabilised_lever_audit_valid=false;
+        double stabilised_lever_observed_vx=0.0;
+        double stabilised_lever_observed_vy=0.0;
+        double stabilised_lever_pred_vx=0.0;
+        double stabilised_lever_pred_vy=0.0;
+        double stabilised_lever_err_mps=0.0;
         // PIXEL_ROTATION_SHADOW_V1: diagnostic only. Compare measured LK px1
         // with px1 predicted from px0 by HIGHRES delta-R. No range, lever arm,
         // ground-plane reconstruction, EKF, or production flow is involved.
@@ -2755,6 +2761,28 @@ int main(int argc,char** argv){
                   std::isfinite(stabilised_sensor_shadow_roundtrip_err) &&
                   std::hypot(stabilised_sensor_shadow_flow_x,
                              stabilised_sensor_shadow_flow_y)<4.0;
+
+                // Lever-arm contract audit. SENSOR-centric minus IMU-centric
+                // must equal the exact finite-rotation focal-point velocity
+                // implied by the configured camera position. This is the
+                // finite-dt counterpart of omega x FLOW_POS.
+                const cv::Vec3d lever_v_local=
+                  metric_highres_corr_gyro_step.lever_local_m*
+                  (1.0/metric_highres_corr_gyro_step.dt);
+                const cv::Vec3d lever_v_body=corr_R0.t()*lever_v_local;
+                stabilised_lever_observed_vx=
+                  sensor_v_body[0]-v_body[0];
+                stabilised_lever_observed_vy=
+                  sensor_v_body[1]-v_body[1];
+                stabilised_lever_pred_vx=lever_v_body[0];
+                stabilised_lever_pred_vy=lever_v_body[1];
+                stabilised_lever_err_mps=std::hypot(
+                  stabilised_lever_observed_vx-stabilised_lever_pred_vx,
+                  stabilised_lever_observed_vy-stabilised_lever_pred_vy);
+                stabilised_lever_audit_valid=
+                  stabilised_shadow_valid &&
+                  stabilised_sensor_shadow_valid &&
+                  std::isfinite(stabilised_lever_err_mps);
               }
             }
           }
@@ -3545,6 +3573,8 @@ int main(int argc,char** argv){
               <<"stabilised_sensor_shadow_valid,stabilised_sensor_shadow_flow_x,stabilised_sensor_shadow_flow_y,"
               <<"stabilised_sensor_shadow_v_body_x,stabilised_sensor_shadow_v_body_y,stabilised_sensor_shadow_v_body_z,"
               <<"stabilised_sensor_shadow_roundtrip_err,"
+              <<"stabilised_lever_audit_valid,stabilised_lever_observed_vx,stabilised_lever_observed_vy,"
+              <<"stabilised_lever_pred_vx,stabilised_lever_pred_vy,stabilised_lever_err_mps,"
               <<"pairs,used,residual_median_m,gyro_residual_median_m,highres_residual_median_m,"
               <<"pixel_rot_valid,pixel_rot_points,pixel_rot_median_px,pixel_rot_p95_px,"
               <<"pixel_rot_du_median_px,pixel_rot_dv_median_px,"
@@ -3659,6 +3689,12 @@ int main(int argc,char** argv){
             <<stabilised_sensor_shadow_v_body_y<<','
             <<stabilised_sensor_shadow_v_body_z<<','
             <<stabilised_sensor_shadow_roundtrip_err<<','
+            <<(stabilised_lever_audit_valid?1:0)<<','
+            <<stabilised_lever_observed_vx<<','
+            <<stabilised_lever_observed_vy<<','
+            <<stabilised_lever_pred_vx<<','
+            <<stabilised_lever_pred_vy<<','
+            <<stabilised_lever_err_mps<<','
             <<s.metric_prev_points.size()<<','
             <<metric_step.points<<','
             <<metric_step.residual_median_m<<','
