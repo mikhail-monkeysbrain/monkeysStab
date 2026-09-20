@@ -2541,6 +2541,11 @@ int main(int argc,char** argv){
         double stabilised_unified_shadow_flow_x=0.0;
         double stabilised_unified_shadow_flow_y=0.0;
         double stabilised_unified_shadow_roundtrip_err=0.0;
+        // Strict causal35 SENSOR-centric candidate promoted to Variant B only
+        // when --stabilised-unified-publish is explicitly enabled.
+        bool causal35_publish_valid=false;
+        double causal35_publish_flow_x=0.0;
+        double causal35_publish_flow_y=0.0;
         // PIXEL_ROTATION_SHADOW_V1: diagnostic only. Compare measured LK px1
         // with px1 predicted from px0 by HIGHRES delta-R. No range, lever arm,
         // ground-plane reconstruction, EKF, or production flow is involved.
@@ -2837,6 +2842,36 @@ int main(int argc,char** argv){
                 causal_metric35_step=
                   metric_shadow::estimateWithRotations(mi,R0c,R1c);
                 causal_metric35_ready=causal_metric35_step.valid;
+
+                // Production-format Variant B candidate. Keep SENSOR-centric
+                // camera displacement; EKF FLOW_POS handles the lever arm.
+                if(causal_metric35_ready && mi.range0_valid &&
+                   mi.body_R_camera_valid && causal_metric35_step.dt>0.0){
+                  cv::Vec3d lidar_ray_body=mi.range_ray_body_frd;
+                  const double lrnorm=cv::norm(lidar_ray_body);
+                  if(lrnorm>0.5 && std::isfinite(lrnorm)){
+                    lidar_ray_body*=1.0/lrnorm;
+                    const cv::Vec3d down(0,0,1);
+                    const double h0=down.dot(R0c*(
+                      mi.range_pos_body_frd-mi.camera_pos_body_frd+
+                      mi.range0_m*lidar_ray_body));
+                    if(h0>0.03 && std::isfinite(h0)){
+                      const cv::Vec3d sensor_v_local=
+                        causal_metric35_step.delta_camera_local_m*
+                        (1.0/causal_metric35_step.dt);
+                      const cv::Vec3d sensor_v_body=R0c.t()*sensor_v_local;
+                      const double fx=-sensor_v_body[1]/h0;
+                      const double fy= sensor_v_body[0]/h0;
+                      causal35_publish_valid=
+                        std::isfinite(fx) && std::isfinite(fy) &&
+                        std::hypot(fx,fy)<4.0;
+                      if(causal35_publish_valid){
+                        causal35_publish_flow_x=fx;
+                        causal35_publish_flow_y=fy;
+                      }
+                    }
+                  }
+                }
               }
             }
           }
@@ -3582,54 +3617,9 @@ int main(int argc,char** argv){
             flow_send_y = fg.y + k*(flow_send_y - fg.y);
           }
         }
-        // Variant B production path: use the independently validated strict
-        // camera-dequeue-causal orientation reconstruction.  The candidate is
-        // SENSOR-centric, so configured FLOW_POS remains authoritative in EKF.
-        // Bounds are frozen from RPZ2/RPZ3 + independent strict-causal control:
-        // ATTITUDE receive age <=35 ms, corrected HIGHRES endpoint hold <=25 ms.
-        // Never fall back to raw/A semantics while FLOW_OPTIONS=Stabilised.
-        bool causal35_publish_valid=false;
-        double causal35_publish_flow_x=0.0;
-        double causal35_publish_flow_y=0.0;
-        if(causal_metric35_ready && causal_att_anchor_valid &&
-           mi.range0_valid && mi.body_R_camera_valid &&
-           causal_metric35_step.dt>0.0){
-          const auto anchor_to_t1_pub=
-            metric_shadow::integrateBodyRatesCausalHold(
-              hgh_corr_causal,causal_att_anchor.mapped_sample_ns,ts,25.0);
-          if(anchor_to_t1_pub.valid){
-            const cv::Matx33d Ra_pub=metric_shadow::bodyToLocal(
-              causal_att_anchor.roll,causal_att_anchor.pitch,causal_att_anchor.yaw);
-            const cv::Matx33d R1_pub=Ra_pub*anchor_to_t1_pub.delta_R;
-            const cv::Matx33d R0_pub=
-              R1_pub*metric_shadow::integrateBodyRatesCausalHold(
-                hgh_corr_causal,prev_ts,ts,25.0).delta_R.t();
-            cv::Vec3d lidar_ray_body=mi.range_ray_body_frd;
-            const double lrnorm=cv::norm(lidar_ray_body);
-            if(lrnorm>0.5 && std::isfinite(lrnorm)){
-              lidar_ray_body*=1.0/lrnorm;
-              const cv::Vec3d down(0,0,1);
-              const double h0=down.dot(R0_pub*(
-                mi.range_pos_body_frd-mi.camera_pos_body_frd+
-                mi.range0_m*lidar_ray_body));
-              if(h0>0.03 && std::isfinite(h0)){
-                const cv::Vec3d sensor_v_local=
-                  causal_metric35_step.delta_camera_local_m*
-                  (1.0/causal_metric35_step.dt);
-                const cv::Vec3d sensor_v_body=R0_pub.t()*sensor_v_local;
-                const double fx=-sensor_v_body[1]/h0;
-                const double fy= sensor_v_body[0]/h0;
-                causal35_publish_valid=
-                  std::isfinite(fx) && std::isfinite(fy) &&
-                  std::hypot(fx,fy)<4.0;
-                if(causal35_publish_valid){
-                  causal35_publish_flow_x=fx;
-                  causal35_publish_flow_y=fy;
-                }
-              }
-            }
-          }
-        }
+        // Variant B production path: strict camera-dequeue-causal35 only.
+        // If unavailable, suppress the interval rather than mixing Variant A
+        // raw semantics into FLOW_OPTIONS=Stabilised.
         const bool stabilised_publish_ready =
           !stabilised_unified_publish || causal35_publish_valid;
         if(stabilised_unified_publish && causal35_publish_valid){
