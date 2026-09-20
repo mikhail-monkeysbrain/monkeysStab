@@ -2635,7 +2635,17 @@ int main(int argc,char** argv){
           metric_shadow::Input mi;
           mi.t0_ns=prev_ts; mi.t1_ns=ts;
           mi.px0=s.metric_prev_points; mi.px1=s.metric_curr_points;
-          mi.K=calib.K; mi.D=calib.D;
+          // Variant-B metric geometry must use the same independently validated
+          // focal scale as frozen WORKED5. calib.K is already scaled by the
+          // production focal_scale (normally 0.931), so undo that scale and
+          // apply WORKED5's frozen 1.10 without changing the production A path.
+          mi.K=calib.K.clone();
+          if(focal_scale>0.0 && std::isfinite(focal_scale)){
+            const double metric_k=worked5::kFocalScale/focal_scale;
+            mi.K.at<double>(0,0)*=metric_k;
+            mi.K.at<double>(1,1)*=metric_k;
+          }
+          mi.D=calib.D;
           if(a0.valid) mi.a0=a0.attitude;
           if(a1.valid) mi.a1=a1.attitude;
           mi.range0_m=r0.distance_m; mi.range1_m=r1.distance_m;
