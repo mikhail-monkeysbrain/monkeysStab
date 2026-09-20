@@ -157,6 +157,27 @@ Bench closure ранее:
 
 В shadow-код добавлен захват MAVLink AHRS omegaIx/Iy/Iz и логирование рядом с raw HIGHRES, включая диагностическое `raw + omegaI`. Production/WORKED5 не меняются. Специальный физический прогон ради этого не требуется; данные будут собраны при следующем естественном запуске системы.
 
+## 6.6. AHRS omegaI подтверждён данными и добавлен corrected HIGHRES shadow — 2026-09-20
+
+Статический capture после commit 6445573: 1870 HIGHRES samples, AHRS omegaI доступен для 1865 (99.73%).
+
+Средние значения:
+- raw HIGHRES: gx=+0.00636251, gy=-0.00052951, gz=-0.00079928 rad/s;
+- AHRS omegaI: x=-0.00624566, y=+0.00055629, z=+0.00080563 rad/s;
+- raw+omegaI: gx=+0.00011685, gy=+0.00002678, gz=+0.00000635 rad/s.
+
+Таким образом, ранее обнаруженный статический HIGHRES offset почти полностью объясняется отсутствием AHRS drift correction в raw HIGHRES_IMU. Это существенно сильнее гипотез clock/extrinsic для поведения около нулевого вращения.
+
+Commit 3c73b70 добавляет HIGHRES_CORRECTED_SHADOW_V1:
+- тот же HIGHRES time_usec;
+- тот же affine FC->RPi clock map;
+- на каждом HIGHRES sample применяется свежий AHRS omegaI;
+- corrected поток интегрируется тем же integrateBodyRates();
+- corrected camera/lever/IMU delta и residual пишутся в deltar_rotation_shadow.csv;
+- WORKED5, production OPTICAL_FLOW и FC output не меняются.
+
+Критерий: corrected HIGHRES должен уменьшить static/low-rate накопление относительно raw HIGHRES, не ухудшая интервалы заметного вращения. Ручное движение не считается pure rotation; абсолютный XY residual не трактуется как ground-truth ошибка.
+
 ## 7. ΔR / HIGHRES: доказанные результаты
 
 Все ATTITUDE / ordinary gyro ΔR / HIGHRES ΔR варианты используют одинаковые:
