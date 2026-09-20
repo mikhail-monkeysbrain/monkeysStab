@@ -137,7 +137,7 @@ def main():
         raw.append((recv,fc,w))
     raw.sort(key=lambda x:x[0])
     mapper=ClockMap(); hist=deque(); hi=0
-    recovered=0; strict_rt=0; diffs=[]; holds=[]; rows=[]
+    recovered=0; strict_rt=0; diffs=[]; holds=[]; rows=[]\n    buckets={\"causal15\":[],\"causal20_only\":[],\"causal25_only\":[],\"over25\":[]}
     for r in sorted(targets,key=lambda x:int(x["t1_ns"])):
         frame=int(r["frame"]); t0=int(r["t0_ns"]); t1=int(r["t1_ns"])
         m=by_frame.get(frame)
@@ -173,7 +173,19 @@ def main():
     if diffs:
         print(f"deltaR_error_deg median={pct(diffs,50):.6f} p95={pct(diffs,95):.6f} max={max(diffs):.6f}")
     from collections import Counter
-    print("causal_invalid_reasons="+str(dict(Counter(x[9] for x in rows if x[4]==0))))
+    print("causal_invalid_reasons="+str(dict(Counter(x[8] for x in rows if x[4]==0))))
+    print("===== W5 MOVEMENT BY CAUSAL COVERAGE =====")
+    total=np.array([0.0,0.0]); cumulative=np.array([0.0,0.0])
+    for name in ("causal15","causal20_only","causal25_only","over25"):
+        arr=buckets[name]
+        vec=np.sum(np.asarray(arr,float),axis=0) if arr else np.array([0.0,0.0])
+        total+=vec
+        if name!="over25": cumulative+=vec
+        print(f"{name}: frames={len(arr)} dN={vec[0]*1000:.3f}mm dE={vec[1]*1000:.3f}mm vec={np.linalg.norm(vec)*1000:.3f}mm")
+        if name=="causal15": print(f"cumulative15: vec={np.linalg.norm(cumulative)*1000:.3f}mm")
+        elif name=="causal20_only": print(f"cumulative20: vec={np.linalg.norm(cumulative)*1000:.3f}mm")
+        elif name=="causal25_only": print(f"cumulative25: vec={np.linalg.norm(cumulative)*1000:.3f}mm")
+    print(f"all_targets_vector: dN={total[0]*1000:.3f}mm dE={total[1]*1000:.3f}mm vec={np.linalg.norm(total)*1000:.3f}mm")
     print("frame,t0_ns,t1_ns,strict_rt,causal,hold_ms,start_hold_ms,end_hold_ms,reason,oracle_diff_deg")
     for x in rows: print(",".join(str(v) for v in x))
 
