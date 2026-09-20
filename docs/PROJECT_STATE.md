@@ -554,3 +554,54 @@ Production A/WORKED5 не изменены.
 сначала выполнить offline replay/пересчёт существующего 155540, если
 сохранённых артефактов достаточно. Новый физический прогон до этой проверки
 не запрашивать.
+
+
+### 6.17 Variant B2 / focal-contract fix — PASS (2026-09-20)
+
+После исправления metric K в commit `9280c44` выполнен повторный Variant B прогон. Физически измеренный участок A->B: 510 мм. Ручное движение не считается чистой трансляцией; конечный физический возврат в A независимо не измерялся, поэтому start/end residual нельзя называть closure error.
+
+На одинаковых кадрах Variant B и frozen WORKED5:
+- прямой участок: Variant B ≈496.54 мм, WORKED5 ≈499.79 мм, B/W5 ≈0.9935;
+- обратный участок: Variant B ≈503.55 мм, WORKED5 ≈508.50 мм, B/W5 ≈0.9903.
+
+Предыдущий устойчивый межконтурный коэффициент ≈1.169 исчез. Это подтверждает focal-contract mismatch как причину масштабного расхождения Variant B с WORKED5. Production Mode A и frozen WORKED5 не изменялись.
+
+Вердикт: focal-contract hypothesis CONFIRMED; дополнительная подгонка focal не требуется.
+
+### 6.18 Комплексное ручное движение 164421 — yaw не является текущим blocker (2026-09-20)
+
+Run: `20260920_164421_OPTICAL_FLOW`. Variant B работал в SENSOR-centric Stabilised contract. Тест включал трансляции и два ручных поворота; ручной yaw не считается pure rotation и содержит неизвестную реальную XYZ-трансляцию, roll/pitch и jitter.
+
+Наблюдение по поворотам: большой SENSOR-centric displacement сам по себе ожидаем, потому что optical center OV9281 вынесен относительно FC/IMU. Его нельзя требовать занулить на RPi при ненулевом FLOW_POS. Данные комплексного прогона не показывают явного систематического runaway после вращений и не дают основания вводить дополнительную yaw-поправку.
+
+Важно: любые start/end XY этого ручного маршрута являются только оцененным displacement. Без независимого измерения физического конечного положения их нельзя называть closure error.
+
+Вердикт: ΔR/yaw больше не считается доказанным bench-blocker. Не менять angular extrinsic, gyro scale, phase, focal или lever geometry без нового независимого основания.
+
+### 6.19 FC preflight Variant B — PASS (2026-09-20)
+
+Фактически прочитано с MatekH743 при работающем runtime:
+- AHRS_EKF_TYPE=3, EK3_ENABLE=1;
+- FLOW_TYPE=5, FLOW_OPTIONS=1, FLOW_ORIENT_YAW=0;
+- FLOW_FXSCALER=0, FLOW_FYSCALER=0;
+- EK3_FLOW_DELAY=0, EK3_FLOW_MAX=2.5;
+- EK3_SRC1_POSXY=0, EK3_SRC1_VELXY=5 (OpticalFlow);
+- EK3_SRC1_POSZ=2 (RangeFinder), EK3_SRC1_VELZ=0;
+- EK3_SRC1_YAW=1 (Compass), COMPASS_ENABLE=1, COMPASS_USE=1;
+- RNGFND1_TYPE=10, RNGFND1_ORIENT=25, RNGFND1_MIN=0.1, RNGFND1_MAX=7;
+- VISO_TYPE=0.
+
+Отдельно непосредственно с FC подтверждена позиция optical-flow sensor:
+- FLOW_POS_X=0.0625 м;
+- FLOW_POS_Y=0;
+- FLOW_POS_Z=0.05 м.
+
+Это согласуется с SENSOR-centric Variant B: RPi передаёт движение focal point после ΔR rotation compensation, а EKF получает реальный FLOW_POS и учитывает lever-arm внутри своей sensor model. Не переводить Variant B в IMU-centric при сохранении этих FLOW_POS.
+
+RESULT: FC CONFIGURATION PREFLIGHT PASS.
+
+### 6.20 Следующий этап
+
+Bench-разработка Variant B дошла до точки, где доказанного software/configuration blocker перед моторным этапом не найдено. Следующий эксперимент — M1, влияние работающей силовой установки на уже проверенный контур, без попытки сразу оценивать полётное удержание позиции.
+
+M1 должен иметь заранее заданные критерии: проверить сохранение camera/OF coverage и latency, HIGHRES/fallback coverage, TF-Luna/range continuity и отсутствие нового систематического EKF XY runaway при неподвижном аппарате. До определения безопасного физического способа проведения motor test моторы не запускать. После M1 PASS следующий отдельный этап — короткий контролируемый отрыв/hover.
