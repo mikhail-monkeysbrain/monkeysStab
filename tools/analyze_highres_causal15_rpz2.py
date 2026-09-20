@@ -74,23 +74,25 @@ def integrate_strict(samples,t0,t1,max_gap_ms=30.0):
 
 def integrate_hold(samples,t0,t1,max_hold_ms=15.0):
     before=[x for x in samples if x[0]<=t0]
-    if not before: return None
+    if not before: return None, "no_sample_before_t0", float("nan"), float("nan")
     rate_t,rate=before[-1]
     start=(t0-rate_t)*1e-6
-    if start<0 or start>max_hold_ms: return None
+    if start<0 or start>max_hold_ms:
+        return None, "start_hold_limit", start, float("nan")
     R=np.eye(3); angle=0.0; seg=0; seg_start=t0
     for t,w in samples:
         if t<=t0 or t>=t1: continue
         dt=(t-seg_start)*1e-9
-        if dt<=0 or dt>=0.1: return None
+        if dt<=0 or dt>=0.1: return None, "bad_inner_dt", start, float("nan")
         rv=rate*dt; R=R@exp_so3(rv); angle+=float(np.linalg.norm(rv)); seg+=1
         rate_t=t; rate=w; seg_start=t
     end=(t1-rate_t)*1e-6
-    if end<0 or end>max_hold_ms: return None
+    if end<0 or end>max_hold_ms:
+        return None, "end_hold_limit", start, end
     dt=(t1-seg_start)*1e-9
     if dt>0:
         rv=rate*dt; R=R@exp_so3(rv); angle+=float(np.linalg.norm(rv)); seg+=1
-    return R,math.degrees(angle),seg,max(start,end)
+    return (R,math.degrees(angle),seg,max(start,end)), "ok", start, end
 
 def read_csv(path):
     with open(path,newline='') as f: return list(csv.DictReader(f))
@@ -148,7 +150,7 @@ def main():
         mapped=[(mapper.map(fc),w) for fc,w in hist]
         mapped.sort(key=lambda x:x[0])
         st=integrate_strict(mapped,t0,t1)
-        ca=integrate_hold(mapped,t0,t1,a.hold_ms)
+        ca,ca_reason,start_hold,end_hold=integrate_hold(mapped,t0,t1,a.hold_ms)
         if st: strict_rt+=1
         if ca:
             recovered+=1; holds.append(ca[3])
@@ -162,7 +164,7 @@ def main():
         if ca and oracle:
             diff=rot_dist_deg(oracle[0],ca[0]); diffs.append(diff)
         rows.append((frame,t0,t1,0 if st is None else 1,0 if ca is None else 1,
-                     -1 if ca is None else ca[3],diff))
+                     -1 if ca is None else ca[3],start_hold,end_hold,ca_reason,diff))
     print(f"targets={len(targets)} evaluated={len(rows)}")
     print(f"strict_realtime_valid={strict_rt}")
     print(f"causal{a.hold_ms:g}_valid={recovered}/{len(rows)}")
@@ -170,7 +172,9 @@ def main():
         print(f"hold_ms median={pct(holds,50):.3f} p95={pct(holds,95):.3f} max={max(holds):.3f}")
     if diffs:
         print(f"deltaR_error_deg median={pct(diffs,50):.6f} p95={pct(diffs,95):.6f} max={max(diffs):.6f}")
-    print("frame,t0_ns,t1_ns,strict_rt,causal,hold_ms,oracle_diff_deg")
+    from collections import Counter
+    print("causal_invalid_reasons="+str(dict(Counter(x[9] for x in rows if x[4]==0))))
+    print("frame,t0_ns,t1_ns,strict_rt,causal,hold_ms,start_hold_ms,end_hold_ms,reason,oracle_diff_deg")
     for x in rows: print(",".join(str(v) for v in x))
 
 if __name__=="__main__": main()
