@@ -193,7 +193,7 @@ Run: 20260920_135641_OPTICAL_FLOW. Сравнение выполнено тол�
 При существенном вращении correction не разрушает масштаб:
 - Δθ > 0.3°: ordinary gyro Σangle 217.463°, raw HIGHRES 217.705°, corrected HIGHRES 217.765°;
 - corrected против ordinary отличается примерно на 0.14% по суммарному углу этой выборки.
-Visual residual также не ухудшился: при Δθ > 0.3° raw HIGHRES и corrected HIGHRES дают около 0.199 px median residual.
+Visual residual также не ухудшился: при Δθ > 0.3° raw HIGHRES и corrected HIGHRES дают около 0.199 mm median residual.
 
 Интерпретация:
 - low-rate дефект raw HIGHRES локализован как отсутствие AHRS gyro drift correction;
@@ -245,6 +245,27 @@ Commit `2143d59` добавляет только diagnostic shadow для буд
 `stabilised_shadow_valid,stabilised_shadow_flow_x,stabilised_shadow_flow_y`.
 
 Этот контур не вызывает `sendOpticalFlow()`, не меняет `flow_send_x/y`, WORKED5, EKF или FC parameters. Его задача — проверить единицы/знаки/поведение будущего stabilised interface до любого flight A/B.
+
+## 6.10. Stabilised flow: внутренний аудит знаков и единиц — 2026-09-20
+
+Commit `b398df3` расширяет только diagnostic shadow. Production publisher и FC parameters не меняются.
+
+Для каждого valid stabilised interval теперь логируются:
+- точная camera height `h0`;
+- `v_local[N,E,D]` до преобразования системы координат;
+- `v_body[x,y,z]` после `R0^T`;
+- stabilised `flow_x/flow_y`;
+- обратное преобразование `flow -> body vx/vy`;
+- `stabilised_shadow_roundtrip_err`.
+
+Контракт:
+`flow_x=-v_body_y/h`, `flow_y=+v_body_x/h`.
+Обратная проверка:
+`vx=flow_y*h`, `vy=-flow_x*h`.
+
+Критерий: round-trip error должен быть только численной погрешностью. Это проверяет внутренние знаки и единицы интерфейса без предположения о чистом ручном yaw и без нового специального физического теста.
+
+Также исправлена единица в 6.7: `highres_corr_residual_median_m` ранее был ошибочно подписан как px; корректная единица после ×1000 — mm.
 
 ## 7. ΔR / HIGHRES: доказанные результаты
 
