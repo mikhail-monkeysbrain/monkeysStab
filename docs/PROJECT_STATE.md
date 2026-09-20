@@ -178,6 +178,32 @@ Commit 3c73b70 добавляет HIGHRES_CORRECTED_SHADOW_V1:
 
 Критерий: corrected HIGHRES должен уменьшить static/low-rate накопление относительно raw HIGHRES, не ухудшая интервалы заметного вращения. Ручное движение не считается pure rotation; абсолютный XY residual не трактуется как ground-truth ошибка.
 
+## 6.7. HIGHRES_CORRECTED_SHADOW подтверждён на paired runtime — 2026-09-20
+
+Run: 20260920_135641_OPTICAL_FLOW. Сравнение выполнено только на кадрах, где одновременно валидны ATTITUDE, ordinary gyro, raw HIGHRES и corrected HIGHRES.
+
+Ключевой low-rate результат при фактическом Δθ < 0.01° (1567 кадров):
+- ATTITUDE endpoints: cumulative XY 1.73 mm;
+- ordinary gyro: 1.37 mm;
+- raw HIGHRES: 22.81 mm;
+- corrected HIGHRES: 1.30 mm.
+
+Таким образом, AHRS omegaI уменьшил характерное low-rate накопление raw HIGHRES примерно в 17.6 раза и привёл его практически к ordinary gyro.
+
+При существенном вращении correction не разрушает масштаб:
+- Δθ > 0.3°: ordinary gyro Σangle 217.463°, raw HIGHRES 217.705°, corrected HIGHRES 217.765°;
+- corrected против ordinary отличается примерно на 0.14% по суммарному углу этой выборки.
+Visual residual также не ухудшился: при Δθ > 0.3° raw HIGHRES и corrected HIGHRES дают около 0.199 px median residual.
+
+Интерпретация:
+- low-rate дефект raw HIGHRES локализован как отсутствие AHRS gyro drift correction;
+- clock affine mapping сохраняется;
+- ручной bias, gyro scale, focal и extrinsic для исправления этого дефекта не нужны;
+- ручные движения стенда не считаются pure rotation, поэтому абсолютный XY residual не является ground truth.
+
+Архитектурный guardrail перед production:
+ArduPilot OPTICAL_FLOW получает raw angular image flow и сам выполняет компенсацию body rate. Поэтому нельзя напрямую заменить production flow на translation-only metric delta из corrected ΔR: это привело бы к двойной компенсации вращения. Следующий production-кандидат должен либо сохранить AP-compatible raw-flow semantics, либо явно изменить весь интерфейс компенсации. До такого A/B WORKED5 и отправляемый OPTICAL_FLOW остаются без изменений.
+
 ## 7. ΔR / HIGHRES: доказанные результаты
 
 Все ATTITUDE / ordinary gyro ΔR / HIGHRES ΔR варианты используют одинаковые:
