@@ -510,3 +510,47 @@ A/B.
 Вердикт: MODE A CONTROL PASS. Добавление экспериментального Variant B не
 переключает и не изменяет publish-контракт обычного запуска. Shadow может
 продолжать вычислять unified source 1/2/0 независимо от publish mode.
+
+
+### 6.16 Variant B / ARM 490 mm — focal-contract mismatch локализован (2026-09-20)
+
+Прогон: `20260920_155540_OPTICAL_FLOW`. Физический протокол: ручной A->B
+примерно 490 mm, пауза, ручной B->A примерно 490 mm; ARM сохранялся на всём
+измеряемом участке. Ручное движение не считается чистой трансляцией: возможны
+реальные поперечные смещения, roll/pitch/yaw и jitter.
+
+Publish-контракт:
+- 3581 строк;
+- `stabilised_publish_mode=1`: 3581/3581;
+- `stabilised_publish_ready=1`: 3204;
+- source HIGHRES_CORR: 2658;
+- source ATTITUDE_RATE fallback: 546;
+- source none / packet suppressed: 377;
+- `flow_sent=1`: 3204.
+
+На одинаковом наборе кадров прямого и обратного движения metric Variant B
+систематически крупнее frozen WORKED5 примерно на 16.6-17.0% в обоих
+направлениях. Это не похоже на случайный dropout или HIGHRES-only эффект:
+HIGHRES_CORR и fallback показывают тот же масштабный сдвиг.
+
+Кодовый аудит локализовал различие в camera intrinsics contract:
+- frozen WORKED5 явно отменяет runtime production `focal_scale` и применяет
+  `worked5::kFocalScale = 1.10`;
+- metric/DeltaR Variant B до исправления передавал `calib.K` напрямую;
+- runtime production `focal_scale` обычно 0.931;
+- отношение 1.10 / 0.931 = 1.1815, близко к наблюдаемому межконтурному
+  коэффициенту ~1.17; остаток не обязан быть точно равен отношению focal scales,
+  потому что metric path использует полноценную ray/ground-plane геометрию,
+  а WORKED5 — similarity camera-plane approximation.
+
+Это не новая подгонка по 490 mm: 1.10 уже является frozen WORKED5 constant и
+существовало до данного Variant B прогона.
+
+Исправление commit `9280c44`: только experimental metric/Variant-B input K
+теперь отменяет production focal scale и применяет frozen WORKED5 1.10.
+Production A/WORKED5 не изменены.
+
+Статус: root cause межконтурного scale mismatch локализован достаточно, чтобы
+сначала выполнить offline replay/пересчёт существующего 155540, если
+сохранённых артефактов достаточно. Новый физический прогон до этой проверки
+не запрашивать.
