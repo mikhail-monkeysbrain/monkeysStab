@@ -2541,6 +2541,47 @@ int main(int argc,char** argv){
 
           metric_step=metric_shadow::estimate(mi);
 
+          if(a0.valid){
+            HighresPhasePending pq;
+            pq.frame=frame;
+            pq.t0_ns=prev_ts;
+            pq.t1_ns=ts;
+            pq.input=mi;
+            pq.R0=metric_shadow::bodyToLocal(
+              a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
+            highres_phase_pending.push_back(std::move(pq));
+            // Bound diagnostic memory even if camera timestamps stop advancing.
+            while(highres_phase_pending.size()>16) highres_phase_pending.pop_front();
+          }
+
+          // DELTAR_GYRO_SHADOW_V1: use the same absolute R0 only as the local
+          // frame anchor, but obtain the inter-frame rotation from integrated
+          // body rates instead of the second ATTITUDE Euler endpoint.
+          metric_gyro_delta=metric_shadow::integrateBodyRates(
+            gh,prev_ts,ts,30.0);
+          if(a0.valid && metric_gyro_delta.valid){
+            const cv::Matx33d gyro_R0=metric_shadow::bodyToLocal(
+              a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
+            const cv::Matx33d gyro_R1=gyro_R0*metric_gyro_delta.delta_R;
+            metric_gyro_step=metric_shadow::estimateWithRotations(
+              mi,gyro_R0,gyro_R1);
+          }
+
+          // HIGHRES_DELTAR_SHADOW_V2: same geometry and same absolute R0,
+          // but inter-frame delta-R comes from independent HIGHRES_IMU gyro.
+          // FC time_usec is mapped to camera CLOCK_MONOTONIC by the causal
+          // affine lower-envelope clock fit above; receive-time jitter and
+          // measured FC/RPi clock-rate drift are excluded.
+          metric_highres_gyro_delta=metric_shadow::integrateBodyRates(
+            hgh,prev_ts,ts,30.0);
+          if(a0.valid && metric_highres_gyro_delta.valid){
+            const cv::Matx33d raw_R0=metric_shadow::bodyToLocal(
+              a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
+            const cv::Matx33d raw_R1=raw_R0*metric_highres_gyro_delta.delta_R;
+            metric_highres_gyro_step=metric_shadow::estimateWithRotations(
+              mi,raw_R0,raw_R1);
+          }
+
           // PIXEL_ROTATION_SHADOW_V1. OpenCV undistorted normalized rays are
           // rotated C0 -> body0 -> body1 -> C1. For a stationary world point
           // and a pure camera rotation, c1 = C_R_B * dR^T * B_R_C * c0.
@@ -2584,47 +2625,6 @@ int main(int argc,char** argv){
               std::nth_element(er.begin(),er.begin()+k95,er.end());
               pixel_rot_p95_px=er[k95];
             }
-          }
-
-          if(a0.valid){
-            HighresPhasePending pq;
-            pq.frame=frame;
-            pq.t0_ns=prev_ts;
-            pq.t1_ns=ts;
-            pq.input=mi;
-            pq.R0=metric_shadow::bodyToLocal(
-              a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
-            highres_phase_pending.push_back(std::move(pq));
-            // Bound diagnostic memory even if camera timestamps stop advancing.
-            while(highres_phase_pending.size()>16) highres_phase_pending.pop_front();
-          }
-
-          // DELTAR_GYRO_SHADOW_V1: use the same absolute R0 only as the local
-          // frame anchor, but obtain the inter-frame rotation from integrated
-          // body rates instead of the second ATTITUDE Euler endpoint.
-          metric_gyro_delta=metric_shadow::integrateBodyRates(
-            gh,prev_ts,ts,30.0);
-          if(a0.valid && metric_gyro_delta.valid){
-            const cv::Matx33d gyro_R0=metric_shadow::bodyToLocal(
-              a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
-            const cv::Matx33d gyro_R1=gyro_R0*metric_gyro_delta.delta_R;
-            metric_gyro_step=metric_shadow::estimateWithRotations(
-              mi,gyro_R0,gyro_R1);
-          }
-
-          // HIGHRES_DELTAR_SHADOW_V2: same geometry and same absolute R0,
-          // but inter-frame delta-R comes from independent HIGHRES_IMU gyro.
-          // FC time_usec is mapped to camera CLOCK_MONOTONIC by the causal
-          // affine lower-envelope clock fit above; receive-time jitter and
-          // measured FC/RPi clock-rate drift are excluded.
-          metric_highres_gyro_delta=metric_shadow::integrateBodyRates(
-            hgh,prev_ts,ts,30.0);
-          if(a0.valid && metric_highres_gyro_delta.valid){
-            const cv::Matx33d raw_R0=metric_shadow::bodyToLocal(
-              a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
-            const cv::Matx33d raw_R1=raw_R0*metric_highres_gyro_delta.delta_R;
-            metric_highres_gyro_step=metric_shadow::estimateWithRotations(
-              mi,raw_R0,raw_R1);
           }
 
           // HIGHRES_PHASE_SWEEP_V1: run the exact same ray/lever geometry at
