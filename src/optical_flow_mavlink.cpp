@@ -227,8 +227,10 @@ struct FlowFcImu {
 
 struct FlowFcRawGyro {
   double x=0,y=0,z=0;           // HIGHRES_IMU gyro, body FRD rad/s
+  double drift_x=0,drift_y=0,drift_z=0; // AHRS omegaI sampled at receive time
   uint64_t fc_time_usec=0;       // FC measurement timestamp from MAVLink
   int64_t recv_ns=0;             // RPi receive timestamp
+  bool drift_valid=false;
   bool valid=false;
 };
 
@@ -779,8 +781,16 @@ struct FlowFc {
               // does not feed any production estimator or MAVLink output.
               const int64_t fc_sample_ns=static_cast<int64_t>(q.time_usec)*1000LL;
               updateHighresClockMap(fc_sample_ns,imu.recv_ns);
+              const double drift_age_ms=ahrs_omega_i_valid
+                  ? (imu.recv_ns-ahrs_omega_i_recv_ns)*1e-6 : -1.0;
+              const bool drift_fresh=ahrs_omega_i_valid &&
+                  drift_age_ms>=0.0 && drift_age_ms<250.0;
               highres_gyro_history.push_back(
-                {q.xgyro,q.ygyro,q.zgyro,q.time_usec,imu.recv_ns,true});
+                {q.xgyro,q.ygyro,q.zgyro,
+                 drift_fresh?ahrs_omega_i_x:0.0,
+                 drift_fresh?ahrs_omega_i_y:0.0,
+                 drift_fresh?ahrs_omega_i_z:0.0,
+                 q.time_usec,imu.recv_ns,drift_fresh,true});
               while(highres_gyro_history.size()>2 &&
                     imu.recv_ns-highres_gyro_history.front().recv_ns>3000000000LL)
                 highres_gyro_history.pop_front();
@@ -799,9 +809,6 @@ struct FlowFc {
                 highres_gyro_shadow_ofs
                   <<imu_count<<','<<q.time_usec<<','<<imu.recv_ns<<','
                   <<q.xgyro<<','<<q.ygyro<<','<<q.zgyro<<',';
-                const double drift_age_ms=ahrs_omega_i_valid
-                    ? (imu.recv_ns-ahrs_omega_i_recv_ns)*1e-6 : -1.0;
-                const bool drift_fresh=ahrs_omega_i_valid && drift_age_ms>=0.0 && drift_age_ms<250.0;
                 highres_gyro_shadow_ofs
                   <<(drift_fresh?ahrs_omega_i_x:0.0)<<','
                   <<(drift_fresh?ahrs_omega_i_y:0.0)<<','
@@ -2458,6 +2465,8 @@ int main(int argc,char** argv){
         metric_shadow::AttitudeLookup metric_a0{}, metric_a1{};
         metric_shadow::BodyRateIntegration metric_gyro_delta{};
         metric_shadow::BodyRateIntegration metric_highres_gyro_delta{};
+        metric_shadow::BodyRateIntegration metric_highres_corr_gyro_delta{};
+        metric_shadow::Step metric_highres_corr_gyro_step{};
         // HIGHRES_PHASE_SWEEP_V1: diagnostic-only camera/gyro phase sweep.
         // Offsets shift the HIGHRES integration window in RPi CLOCK_MONOTONIC.
         // Production WORKED5 / OPTICAL_FLOW paths are untouched.
@@ -2488,11 +2497,13 @@ int main(int argc,char** argv){
           std::deque<metric_shadow::TimedAttitude> ah;
           std::deque<metric_shadow::TimedBodyRate> gh;
           std::deque<metric_shadow::TimedBodyRate> hgh;
+          std::deque<metric_shadow::TimedBodyRate> hgh_corr;
           {
             std::lock_guard<std::mutex> lock(fc.mu);
             ah.clear();
             gh.clear();
             hgh.clear();
+            hgh_corr.clear();
             ah.resize(fc.attitude_history.size());
             gh.resize(fc.attitude_history.size());
             for(size_t i=0;i<fc.attitude_history.size();++i){
@@ -2501,6 +2512,7 @@ int main(int argc,char** argv){
               gh[i]={g.x,g.y,g.z,g.sample_ns,g.valid};
             }
             hgh.resize(fc.highres_gyro_history.size());
+            hgh_corr.resize(fc.highres_gyro_history.size());
             for(size_t i=0;i<fc.highres_gyro_history.size();++i){
               const auto& g=fc.highres_gyro_history[i];
               // HIGHRES_CLOCK_MAP_V2: affine FC measurement time -> camera
@@ -2509,6 +2521,8 @@ int main(int argc,char** argv){
                 ? fc.mapHighresFcToMono(static_cast<int64_t>(g.fc_time_usec)*1000LL)
                 : g.recv_ns;
               hgh[i]={g.x,g.y,g.z,mapped_ns,g.valid};
+              hgh_corr[i]={g.x+g.drift_x,g.y+g.drift_y,g.z+g.drift_z,
+                           mapped_ns,g.valid && g.drift_valid};
             }
           }
           // HIGHRES_PHASE_SWEEP_V2 delayed evaluation. A +10 ms test
@@ -2628,6 +2642,19 @@ int main(int argc,char** argv){
             const cv::Matx33d raw_R1=raw_R0*metric_highres_gyro_delta.delta_R;
             metric_highres_gyro_step=metric_shadow::estimateWithRotations(
               mi,raw_R0,raw_R1);
+          }
+
+          // HIGHRES_CORRECTED_SHADOW_V1: retain HIGHRES measurement timestamps
+          // and affine FC->RPi mapping, but apply ArduPilot AHRS omegaI drift
+          // correction captured with each HIGHRES sample. Diagnostic only.
+          metric_highres_corr_gyro_delta=metric_shadow::integrateBodyRates(
+            hgh_corr,prev_ts,ts,30.0);
+          if(a0.valid && metric_highres_corr_gyro_delta.valid){
+            const cv::Matx33d corr_R0=metric_shadow::bodyToLocal(
+              a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
+            const cv::Matx33d corr_R1=corr_R0*metric_highres_corr_gyro_delta.delta_R;
+            metric_highres_corr_gyro_step=metric_shadow::estimateWithRotations(
+              mi,corr_R0,corr_R1);
           }
 
           // PIXEL_ROTATION_SHADOW_V1. OpenCV undistorted normalized rays are
@@ -3404,6 +3431,10 @@ int main(int argc,char** argv){
               <<"highres_camera_dN_m,highres_camera_dE_m,"
               <<"highres_lever_dN_m,highres_lever_dE_m,"
               <<"highres_imu_dN_m,highres_imu_dE_m,"
+              <<"highres_corr_valid,highres_corr_segments,highres_corr_bracket_gap_ms,highres_corr_angle_deg,"
+              <<"highres_corr_camera_dN_m,highres_corr_camera_dE_m,"
+              <<"highres_corr_lever_dN_m,highres_corr_lever_dE_m,"
+              <<"highres_corr_imu_dN_m,highres_corr_imu_dE_m,highres_corr_residual_median_m,"
               <<"pairs,used,residual_median_m,gyro_residual_median_m,highres_residual_median_m,"
               <<"pixel_rot_valid,pixel_rot_points,pixel_rot_median_px,pixel_rot_p95_px,"
               <<"pixel_rot_du_median_px,pixel_rot_dv_median_px,"
@@ -3487,6 +3518,17 @@ int main(int argc,char** argv){
             <<metric_highres_gyro_step.lever_local_m[1]<<','
             <<metric_highres_gyro_step.delta_local_m[0]<<','
             <<metric_highres_gyro_step.delta_local_m[1]<<','
+            <<(metric_highres_corr_gyro_step.valid?1:0)<<','
+            <<metric_highres_corr_gyro_delta.segments<<','
+            <<metric_highres_corr_gyro_delta.max_bracket_gap_ms<<','
+            <<metric_highres_corr_gyro_delta.integrated_angle_deg<<','
+            <<metric_highres_corr_gyro_step.delta_camera_local_m[0]<<','
+            <<metric_highres_corr_gyro_step.delta_camera_local_m[1]<<','
+            <<metric_highres_corr_gyro_step.lever_local_m[0]<<','
+            <<metric_highres_corr_gyro_step.lever_local_m[1]<<','
+            <<metric_highres_corr_gyro_step.delta_local_m[0]<<','
+            <<metric_highres_corr_gyro_step.delta_local_m[1]<<','
+            <<metric_highres_corr_gyro_step.residual_median_m<<','
             <<s.metric_prev_points.size()<<','
             <<metric_step.points<<','
             <<metric_step.residual_median_m<<','
