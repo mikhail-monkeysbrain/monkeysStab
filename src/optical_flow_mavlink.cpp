@@ -2398,6 +2398,15 @@ int main(int argc,char** argv){
         metric_shadow::Step metric_step;
         metric_shadow::Step metric_gyro_step;
         metric_shadow::Step metric_highres_gyro_step;
+        // PIXEL_ROTATION_SHADOW_V1: diagnostic only. Compare measured LK px1
+        // with px1 predicted from px0 by HIGHRES delta-R. No range, lever arm,
+        // ground-plane reconstruction, EKF, or production flow is involved.
+        bool pixel_rot_valid=false;
+        int pixel_rot_points=0;
+        double pixel_rot_median_px=0.0;
+        double pixel_rot_p95_px=0.0;
+        double pixel_rot_du_median_px=0.0;
+        double pixel_rot_dv_median_px=0.0;
         metric_shadow::AttitudeLookup metric_a0{}, metric_a1{};
         metric_shadow::BodyRateIntegration metric_gyro_delta{};
         metric_shadow::BodyRateIntegration metric_highres_gyro_delta{};
@@ -2531,6 +2540,51 @@ int main(int argc,char** argv){
           mi.range_pos_body_frd=cv::Vec3d(0.0855,0.0,diag_range_z_m);
 
           metric_step=metric_shadow::estimate(mi);
+
+          // PIXEL_ROTATION_SHADOW_V1. OpenCV undistorted normalized rays are
+          // rotated C0 -> body0 -> body1 -> C1. For a stationary world point
+          // and a pure camera rotation, c1 = C_R_B * dR^T * B_R_C * c0.
+          if(metric_highres_gyro_delta.valid && !mi.K.empty() &&
+             mi.px0.size()==mi.px1.size() && mi.px0.size()>=20){
+            std::vector<cv::Point2f> uq0,uq1;
+            cv::undistortPoints(mi.px0,uq0,mi.K,mi.D);
+            cv::undistortPoints(mi.px1,uq1,mi.K,mi.D);
+            const cv::Matx33d B_R_C=mi.body_R_camera_frd;
+            const cv::Matx33d C_R_B=B_R_C.t();
+            const cv::Matx33d C1_R_C0=
+              C_R_B*metric_highres_gyro_delta.delta_R.t()*B_R_C;
+            std::vector<double> er,edu,edv;
+            er.reserve(uq0.size()); edu.reserve(uq0.size()); edv.reserve(uq0.size());
+            const double fx=mi.K.at<double>(0,0), fy=mi.K.at<double>(1,1);
+            for(size_t i=0;i<uq0.size();++i){
+              const cv::Vec3d q=C1_R_C0*cv::Vec3d(uq0[i].x,uq0[i].y,1.0);
+              if(!(q[2]>0.1) || !std::isfinite(q[2])) continue;
+              const double px=q[0]/q[2], py=q[1]/q[2];
+              const double du=(static_cast<double>(uq1[i].x)-px)*fx;
+              const double dv=(static_cast<double>(uq1[i].y)-py)*fy;
+              if(!std::isfinite(du)||!std::isfinite(dv)) continue;
+              edu.push_back(du); edv.push_back(dv); er.push_back(std::hypot(du,dv));
+            }
+            if(er.size()>=20){
+              auto med=[](std::vector<double> v){
+                const size_t n=v.size(), k=n/2;
+                std::nth_element(v.begin(),v.begin()+k,v.end());
+                const double hi=v[k];
+                if(n&1) return hi;
+                std::nth_element(v.begin(),v.begin()+k-1,v.end());
+                return 0.5*(v[k-1]+hi);
+              };
+              pixel_rot_valid=true;
+              pixel_rot_points=static_cast<int>(er.size());
+              pixel_rot_median_px=med(er);
+              pixel_rot_du_median_px=med(edu);
+              pixel_rot_dv_median_px=med(edv);
+              const size_t k95=std::min(er.size()-1,
+                static_cast<size_t>(std::floor(0.95*static_cast<double>(er.size()-1))));
+              std::nth_element(er.begin(),er.begin()+k95,er.end());
+              pixel_rot_p95_px=er[k95];
+            }
+          }
 
           if(a0.valid){
             HighresPhasePending pq;
@@ -3185,7 +3239,9 @@ int main(int argc,char** argv){
               <<"highres_camera_dN_m,highres_camera_dE_m,"
               <<"highres_lever_dN_m,highres_lever_dE_m,"
               <<"highres_imu_dN_m,highres_imu_dE_m,"
-              <<"pairs,used,residual_median_m,gyro_residual_median_m,highres_residual_median_m";
+              <<"pairs,used,residual_median_m,gyro_residual_median_m,highres_residual_median_m,"
+              <<"pixel_rot_valid,pixel_rot_points,pixel_rot_median_px,pixel_rot_p95_px,"
+              <<"pixel_rot_du_median_px,pixel_rot_dv_median_px";
             for(int pi=0;pi<kHighresPhaseN;++pi){
               dr_csv<<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_valid"
                     <<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_angle_deg"
@@ -3254,7 +3310,13 @@ int main(int argc,char** argv){
             <<metric_step.points<<','
             <<metric_step.residual_median_m<<','
             <<metric_gyro_step.residual_median_m<<','
-            <<metric_highres_gyro_step.residual_median_m;
+            <<metric_highres_gyro_step.residual_median_m<<','
+            <<(pixel_rot_valid?1:0)<<','
+            <<pixel_rot_points<<','
+            <<pixel_rot_median_px<<','
+            <<pixel_rot_p95_px<<','
+            <<pixel_rot_du_median_px<<','
+            <<pixel_rot_dv_median_px;
           for(int pi=0;pi<kHighresPhaseN;++pi){
             dr_csv<<','<<(metric_highres_phase_step[pi].valid?1:0)
                   <<','<<metric_highres_phase_delta[pi].integrated_angle_deg
