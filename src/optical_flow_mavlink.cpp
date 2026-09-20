@@ -2401,6 +2401,13 @@ int main(int argc,char** argv){
         metric_shadow::AttitudeLookup metric_a0{}, metric_a1{};
         metric_shadow::BodyRateIntegration metric_gyro_delta{};
         metric_shadow::BodyRateIntegration metric_highres_gyro_delta{};
+        // HIGHRES_PHASE_SWEEP_V1: diagnostic-only camera/gyro phase sweep.
+        // Offsets shift the HIGHRES integration window in RPi CLOCK_MONOTONIC.
+        // Production WORKED5 / OPTICAL_FLOW paths are untouched.
+        constexpr int kHighresPhaseN=6;
+        constexpr int kHighresPhaseOffsetMs[kHighresPhaseN]={-5,0,3,5,7,10};
+        std::array<metric_shadow::BodyRateIntegration,kHighresPhaseN> metric_highres_phase_delta{};
+        std::array<metric_shadow::Step,kHighresPhaseN> metric_highres_phase_step{};
         bool metric_attempted=false;
         double metric_att_gap0_ms=-1.0,metric_att_gap1_ms=-1.0;
         double metric_range_gap0_ms=-1.0,metric_range_gap1_ms=-1.0;
@@ -2489,6 +2496,24 @@ int main(int argc,char** argv){
             const cv::Matx33d raw_R1=raw_R0*metric_highres_gyro_delta.delta_R;
             metric_highres_gyro_step=metric_shadow::estimateWithRotations(
               mi,raw_R0,raw_R1);
+          }
+
+          // HIGHRES_PHASE_SWEEP_V1: run the exact same ray/lever geometry at
+          // several fixed phase offsets. This is logging-only A/B/C... data.
+          if(a0.valid){
+            const cv::Matx33d phase_R0=metric_shadow::bodyToLocal(
+              a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
+            for(int pi=0;pi<kHighresPhaseN;++pi){
+              const int64_t off_ns=static_cast<int64_t>(kHighresPhaseOffsetMs[pi])*1000000LL;
+              metric_highres_phase_delta[pi]=metric_shadow::integrateBodyRates(
+                hgh,prev_ts+off_ns,ts+off_ns,30.0);
+              if(metric_highres_phase_delta[pi].valid){
+                const cv::Matx33d phase_R1=
+                  phase_R0*metric_highres_phase_delta[pi].delta_R;
+                metric_highres_phase_step[pi]=metric_shadow::estimateWithRotations(
+                  mi,phase_R0,phase_R1);
+              }
+            }
           }
 
           // Startup before the first synchronized metric interval is not a GAP.
@@ -3085,7 +3110,15 @@ int main(int argc,char** argv){
               <<"highres_camera_dN_m,highres_camera_dE_m,"
               <<"highres_lever_dN_m,highres_lever_dE_m,"
               <<"highres_imu_dN_m,highres_imu_dE_m,"
-              <<"pairs,used,residual_median_m,gyro_residual_median_m,highres_residual_median_m\n";
+              <<"pairs,used,residual_median_m,gyro_residual_median_m,highres_residual_median_m";
+            for(int pi=0;pi<kHighresPhaseN;++pi){
+              dr_csv<<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_valid"
+                    <<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_angle_deg"
+                    <<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_imu_dN_m"
+                    <<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_imu_dE_m"
+                    <<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_residual_median_m";
+            }
+            dr_csv<<"\n";
             dr_header=true;
           }
 
@@ -3146,8 +3179,15 @@ int main(int argc,char** argv){
             <<metric_step.points<<','
             <<metric_step.residual_median_m<<','
             <<metric_gyro_step.residual_median_m<<','
-            <<metric_highres_gyro_step.residual_median_m
-            <<'\n';
+            <<metric_highres_gyro_step.residual_median_m;
+          for(int pi=0;pi<kHighresPhaseN;++pi){
+            dr_csv<<','<<(metric_highres_phase_step[pi].valid?1:0)
+                  <<','<<metric_highres_phase_delta[pi].integrated_angle_deg
+                  <<','<<metric_highres_phase_step[pi].delta_local_m[0]
+                  <<','<<metric_highres_phase_step[pi].delta_local_m[1]
+                  <<','<<metric_highres_phase_step[pi].residual_median_m;
+          }
+          dr_csv<<'\n';
           dr_csv.flush();
         }
 
