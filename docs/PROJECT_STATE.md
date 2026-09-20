@@ -82,6 +82,24 @@ Bench closure ранее:
 
 Нельзя из одного этого делать вывод, что ATTITUDE физически точнее HIGHRES: возможна компенсация задержек/фильтрации другими систематическими эффектами.
 
+## 6.1. Pixel-domain yaw localization — 2026-09-20
+
+Прогон `20260920_124420_OPTICAL_FLOW` добавил прямую проверку наблюдаемого LK flow против вращения, предсказанного HIGHRES ΔR, до range/ground-plane/lever/EKF.
+
+Доказано на активном yaw:
+- в покое median pixel residual ≈ 0.107 px;
+- при |dyaw| > 0.1° median ≈ 1.718 px;
+- при |dyaw| > 0.3° median ≈ 2.329 px;
+- при |dyaw| > 0.5° median ≈ 2.886 px;
+- residual преимущественно по image-u: при |dyaw| > 0.3° median du ≈ -2.263 px, dv ≈ +0.246 px;
+- корреляция HIGHRES integrated angle с pixel residual ≈ 0.962.
+
+На основном common-valid yaw metric HIGHRES residual IMU был порядка 36 мм (N≈-18 мм, E≈+31 мм).
+
+Вывод: систематическое расхождение уже присутствует в pixel-domain. TF-Luna, ground-plane reconstruction, lever subtraction, N/E conversion и EKF не являются первым местом возникновения этой ошибки. Это не доказывает конкретную первопричину: остаются rotation convention/order, camera↔body angular extrinsic, camera model/distortion и иные причины до metric reconstruction.
+
+Следующий эксперимент: на одних и тех же LK correspondences параллельно сравнить текущий HIGHRES `ΔR^T`, альтернативный `ΔR` и endpoint rotation из ATTITUDE. Production/WORKED5 не менять.
+
 ## 7. ΔR / HIGHRES: доказанные результаты
 
 Все ATTITUDE / ordinary gyro ΔR / HIGHRES ΔR варианты используют одинаковые:
