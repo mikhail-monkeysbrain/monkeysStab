@@ -153,6 +153,9 @@ fi
 if [[ "${MONKEYS_RETURN_MANUAL_TARGET:-0}" == "1" || "${MONKEYS_RETURN_MANUAL_TARGET:-0}" == "true" || "${MONKEYS_RETURN_MANUAL_TARGET:-0}" == "yes" ]]; then
   ARGS+=(--return-manual-target)
 fi
+if [[ "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "1" || "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "true" || "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "yes" ]]; then
+  ARGS+=(--stabilised-unified-publish)
+fi
 if [[ -n "${MONKEYS_DATASET_DIR:-}" ]]; then
   ARGS+=(--dataset-dir "$MONKEYS_DATASET_DIR")
 fi
