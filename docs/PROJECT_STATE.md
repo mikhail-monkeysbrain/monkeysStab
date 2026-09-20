@@ -204,6 +204,32 @@ Visual residual также не ухудшился: при Δθ > 0.3° raw HIGH
 Архитектурный guardrail перед production:
 ArduPilot OPTICAL_FLOW получает raw angular image flow и сам выполняет компенсацию body rate. Поэтому нельзя напрямую заменить production flow на translation-only metric delta из corrected ΔR: это привело бы к двойной компенсации вращения. Следующий production-кандидат должен либо сохранить AP-compatible raw-flow semantics, либо явно изменить весь интерфейс компенсации. До такого A/B WORKED5 и отправляемый OPTICAL_FLOW остаются без изменений.
 
+## 6.8. Production interface audit: corrected ΔR нельзя просто подставить в OPTICAL_FLOW — 2026-09-20
+
+Проверен текущий publisher и актуальный ArduPilot MAV optical-flow backend.
+
+Текущий monkeysStab отправляет MAVLink OPTICAL_FLOW через float `flow_rate_x/y`. Это raw angular image-flow semantics. В ArduPilot MAV backend при обычном режиме `state.bodyRate` берётся из `AP::ahrs().get_gyro()`; далее EKF формирует motion-compensated flow как `-rawFlowRates + rawGyroRates`. При `FLOW_OPTIONS` с опцией Stabilised backend вместо этого принудительно ставит bodyRate=0.
+
+Следствия:
+- production WORKED5/current publisher уже рассчитан на то, что roll/pitch body-rate compensation выполняет ArduPilot;
+- HIGHRES_CORRECTED metric shadow уже использует camera-aligned ΔR для удаления вращения и выдаёт translation-like результат;
+- прямая отправка этого результата в существующем нестабилизированном режиме дала бы повторную компенсацию body rate;
+- corrected HIGHRES поэтому не должен заменять `flow_send_x/y` без изменения контракта с FC.
+
+Два архитектурно корректных варианта:
+A) сохранить текущий AP-compatible raw-flow контракт; corrected HIGHRES использовать только для диагностики/улучшения оценки, но в отправляемом flow должна оставаться соответствующая вращательная составляющая;
+B) полностью компенсировать вращение на RPi с camera-aligned corrected ΔR и отправлять уже stabilised flow, одновременно переводя MAV backend в `FLOW_OPTIONS=1` (Stabilised), чтобы ArduPilot не вычитал body rate второй раз.
+
+Вариант B потенциально лучше использует найденное преимущество corrected HIGHRES: точный FC measurement timestamp -> affine map в camera CLOCK_MONOTONIC -> интеграл строго на интервале кадров. Но это отдельный A/B-кандидат и требует проверки знаков, единиц, lever-arm semantics и fallback до изменения flight production.
+
+Дополнительный timing guardrail: MAV backend сейчас ставит время кадра по моменту получения сообщения (`AP_HAL::micros64()`), а не по `OPTICAL_FLOW.time_usec`; поэтому существующее ограничение pipeline latency остаётся необходимым.
+
+До завершения этого A/B:
+- WORKED5 frozen;
+- production `flow_send_x/y` не менять;
+- `FLOW_OPTIONS` автоматически не менять;
+- focal/extrinsic/gyro scale не трогать.
+
 ## 7. ΔR / HIGHRES: доказанные результаты
 
 Все ATTITUDE / ordinary gyro ΔR / HIGHRES ΔR варианты используют одинаковые:
