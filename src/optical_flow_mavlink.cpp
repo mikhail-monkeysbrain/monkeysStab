@@ -1862,8 +1862,15 @@ int main(int argc,char** argv){
     calib.fx*=focal_scale; calib.fy*=focal_scale;
     calib.K=(cv::Mat_<double>(3,3)<<calib.fx,0,calib.cx,0,calib.fy,calib.cy,0,0,1);
 
+    if(!dataset_dir.empty()){
+      std::error_code ec;
+      std::filesystem::create_directories(dataset_dir,ec);
+      if(ec) throw std::runtime_error("не удалось создать каталог датасета: "+dataset_dir+" ("+ec.message()+")");
+    }
+
     Camera cam; cam.openDev(camdev);
-    LunaReader luna; luna.start(lunadev);
+    LunaReader luna;
+    luna.start(lunadev,dataset_dir.empty()?std::string():dataset_dir+"/luna_raw.csv");
     FlowFc fc; fc.start(fcdev);
     if(!remote_log_path.empty()){
       if(fc.startRemoteLog(remote_log_path)){
