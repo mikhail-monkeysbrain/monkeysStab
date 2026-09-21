@@ -86,7 +86,7 @@ int main(int argc,char** argv){
       std::cerr<<"Использование: "<<argv[0]<<" DATASET_DIR [FOCAL_SCALE]\n";
       return 2;
     }
-    const std::string root=argv[1];
+    const std::string root=argv[1];\n    const std::string out_csv=root+"/worked5_replay.csv";
     const double focal_scale=(argc>=3)?std::stod(argv[2]):0.931;
     if(argc==8){
       g_feature_roi.x0=std::stod(argv[3]);
@@ -124,6 +124,10 @@ int main(int argc,char** argv){
     size_t ri=0, decoded=0, frontend_valid=0, w5_attempt=0, w5_valid=0;
     std::array<uint64_t,7> reason{};
     double acc_x=0.0,acc_y=0.0;
+    std::ofstream out(out_csv,std::ios::trunc);
+    if(!out) throw std::runtime_error("cannot open "+out_csv);
+    out<<"dataset_frame,camera_ts_ns,frame_mono_ns,dt_s,luna_recv_ns,luna_m,luna_age_ms,hcam_m,"
+          "frontend_valid,invalid_reason,points,worked5_valid,du_norm,dv_norm,dx_m,dy_m,acc_x_m,acc_y_m\n";
 
     for(size_t i=0;i<meta.size();++i){
       uint64_t raw_ts=0; cv::Mat gray;
