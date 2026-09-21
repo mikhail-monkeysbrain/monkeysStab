@@ -99,10 +99,21 @@ def main():
         rr=[r for r in wanted["IMU"] if int(r.get("I",-1))==inst]
         if not rr: continue
         a=median3(rr,("AccX","AccY","AccZ"))
-        base=mv(Ratt,a); base[2]+=9.80665
-        ai=mv(Rinv,a); inv=mv(Ratt,ai); inv[2]+=9.80665
+        variants = [
+            ("BASE", Ratt),
+            ("RATT_RTRIM", mm(Ratt, Rtrim)),
+            ("RATT_RTRIM_T", mm(Ratt, Rinv)),
+            ("RTRIM_RATT", mm(Rtrim, Ratt)),
+            ("RTRIM_T_RATT", mm(Rinv, Ratt)),
+        ]
         print(f"IMU{inst} median raw=[{a[0]:+.6f},{a[1]:+.6f},{a[2]:+.6f}]")
-        print(f"  BASE N/E/D=[{base[0]:+.6f},{base[1]:+.6f},{base[2]:+.6f}] |NE|={math.hypot(base[0],base[1]):.6f}")
-        print(f"  EXACT_INVTRIM_TO_ATT N/E/D=[{inv[0]:+.6f},{inv[1]:+.6f},{inv[2]:+.6f}] |NE|={math.hypot(inv[0],inv[1]):.6f}")
+        scored=[]
+        for name,R in variants:
+            ned=mv(R,a); ned[2]+=9.80665
+            ne=math.hypot(ned[0],ned[1])
+            scored.append((ne,name,ned))
+            print(f"  {name:16s} N/E/D=[{ned[0]:+.6f},{ned[1]:+.6f},{ned[2]:+.6f}] |NE|={ne:.6f}")
+        best=min(scored,key=lambda z:z[0])
+        print(f"  BEST={best[1]} |NE|={best[0]:.6f}")
 
 if __name__=="__main__": main()
