@@ -5,6 +5,15 @@ cd "$ROOT"
 EP="${MONKEYS_FC:-tcp://127.0.0.1:5760}"
 RUN_ROOT="${MONKEYS_RUN_ROOT:-$HOME/monkeysStab_runs}"
 mkdir -p "$RUN_ROOT" "$ROOT/build"
+
+# Exactly one writer may append continuous_fc.csv.  A second Web instance or
+# an orphaned logger must fail visibly instead of corrupting the CSV.
+LOCK="$RUN_ROOT/fc_blackbox.lock"
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  echo "ОШИБКА: FC blackbox уже запущен (lock: $LOCK)" >&2
+  exit 3
+fi
 OUT="${MONKEYS_FC_BLACKBOX:-$RUN_ROOT/continuous_fc.csv}"
 BIN="$ROOT/build/fc_blackbox_logger"
 SRC="$ROOT/src/fc_blackbox_logger.cpp"
