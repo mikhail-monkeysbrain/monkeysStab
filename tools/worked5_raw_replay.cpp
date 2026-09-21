@@ -152,18 +152,27 @@ int main(int argc,char** argv){
                                            prev_h_valid?prev_h:0.0,
                                            hvalid?h:0.0);
       if(s.invalid_reason>=0 && s.invalid_reason<(int)reason.size()) ++reason[s.invalid_reason];
+      worked5::Step w5{};
       if(s.valid){
         ++frontend_valid;
         if(hvalid && dt>0.0 && dt<0.2){
           ++w5_attempt;
-          auto w5=worked5::estimate(s.metric_prev_points,s.metric_curr_points,
-                                    calib.K,focal_scale,calib.D,h,dt);
+          w5=worked5::estimate(s.metric_prev_points,s.metric_curr_points,
+                               calib.K,focal_scale,calib.D,h,dt);
           if(w5.valid){
             ++w5_valid;
             acc_x+=w5.dx_m; acc_y+=w5.dy_m;
           }
         }
       }
+      const double luna_age_ms=(luna[ri].recv_ns<=(int64_t)meta[i].mono_ns)
+        ? ((int64_t)meta[i].mono_ns-luna[ri].recv_ns)*1e-6 : -1.0;
+      out<<i+1<<','<<meta[i].camera_ns<<','<<meta[i].mono_ns<<','<<dt<<','
+         <<luna[ri].recv_ns<<','<<luna[ri].m<<','<<luna_age_ms<<','<<h<<','
+         <<(s.valid?1:0)<<','<<s.invalid_reason<<','
+         <<std::min(s.metric_prev_points.size(),s.metric_curr_points.size())<<','
+         <<(w5.valid?1:0)<<','<<w5.du_norm<<','<<w5.dv_norm<<','
+         <<w5.dx_m<<','<<w5.dy_m<<','<<acc_x<<','<<acc_y<<'\n';
       prev=gray; prev_ts=(int64_t)meta[i].camera_ns;
       prev_h=h; prev_h_valid=hvalid;
     }
