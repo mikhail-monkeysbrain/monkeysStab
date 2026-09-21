@@ -45,6 +45,8 @@ _router_log_handle=None
 _router_started_here=False
 _statustext_proc=None
 _statustext_thread=None
+_fc_blackbox_proc=None
+_fc_blackbox_log_handle=None
 _zero={"x":None,"y":None,"z":None}
 _raw_zero={"n":None,"e":None}
 _imu_zero={"n":None,"e":None,"d":None}
@@ -763,6 +765,51 @@ def stop_statustext_monitor():
         except Exception:
             try:p.kill()
             except Exception:pass
+
+def start_fc_blackbox():
+    """Start FC telemetry recorder independently of the flight runtime."""
+    global _fc_blackbox_proc,_fc_blackbox_log_handle
+    if _fc_blackbox_proc is not None and _fc_blackbox_proc.poll() is None:
+        return
+    ensure_router()
+    log_path=RUN_ROOT/"fc_blackbox_runtime.log"
+    _fc_blackbox_log_handle=open_rotating_log(log_path)
+    env=os.environ.copy()
+    env["MONKEYS_FC"]=FC_ENDPOINT
+    _fc_blackbox_proc=subprocess.Popen(
+        ["bash",str(ROOT/"scripts"/"run_fc_blackbox.sh")],
+        cwd=str(ROOT),env=env,text=True,
+        stdout=_fc_blackbox_log_handle,stderr=subprocess.STDOUT,
+        start_new_session=True
+    )
+    time.sleep(0.15)
+    if _fc_blackbox_proc.poll() is not None:
+        rc=_fc_blackbox_proc.returncode
+        _fc_blackbox_proc=None
+        if _fc_blackbox_log_handle:
+            try:_fc_blackbox_log_handle.close()
+            except Exception:pass
+            _fc_blackbox_log_handle=None
+        raise RuntimeError(f"FC blackbox logger завершился при запуске (code {rc})")
+    log_event("INFO","FC blackbox logger запущен: continuous_fc.csv")
+
+def stop_fc_blackbox():
+    global _fc_blackbox_proc,_fc_blackbox_log_handle
+    p=_fc_blackbox_proc
+    _fc_blackbox_proc=None
+    if p is not None and p.poll() is None:
+        try:os.killpg(p.pid,signal.SIGTERM)
+        except ProcessLookupError:pass
+        try:p.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:os.killpg(p.pid,signal.SIGKILL)
+            except ProcessLookupError:pass
+            try:p.wait(timeout=1)
+            except Exception:pass
+    if _fc_blackbox_log_handle:
+        try:_fc_blackbox_log_handle.close()
+        except Exception:pass
+        _fc_blackbox_log_handle=None
 
 def start_runtime():
     global _proc,_log_handle,_runtime_started_wall,_active_csv
@@ -2038,6 +2085,7 @@ if __name__=="__main__":
         ensure_router()
         start_live_udp_listener()
         start_statustext_monitor()
+        start_fc_blackbox()
         log_event("INFO","Web UI запущен")
         print("MAVLink router: ГОТОВ, Mission Planner UDP 14550",flush=True)
         # Normal operating mode: starting the Web UI also starts the flight
@@ -2058,4 +2106,5 @@ if __name__=="__main__":
         if running(): stop_runtime()
         stop_statustext_monitor()
         stop_live_udp_listener()
+        stop_fc_blackbox()
         stop_router()
