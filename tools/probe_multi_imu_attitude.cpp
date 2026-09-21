@@ -26,7 +26,8 @@ static void report(const char* name,const ImuStats&s,double ar,double ap,double 
  const double k=180.0/M_PI;
  std::cout<<name<<" n="<<s.ax.n<<" raw=["<<ax<<","<<ay<<","<<az<<"] |a|="<<std::sqrt(ax*ax+ay*ay+az*az)
           <<" gravity roll/pitch=["<<rg*k<<","<<pg*k<<"] deg"
-          <<" delta_to_ATT=["<<(rg-ar)*k<<","<<(pg-ap)*k<<"] deg\n";\n double vx,vy,vz,N,E,D; rot_xyz(trx,try_,0,ax,ay,az,vx,vy,vz); rot_xyz(ar,ap,ayaw,vx,vy,vz,N,E,D); D+=9.80665;\n std::cout<<"  trim-aware vehicle raw=["<<vx<<","<<vy<<","<<vz<<"] N/E/D=["<<N<<","<<E<<","<<D<<"] |NE|="<<std::hypot(N,E)<<" m/s^2\\n";
+          <<" delta_to_ATT=["<<(rg-ar)*k<<","<<(pg-ap)*k<<"] deg\n";\n double vx,vy,vz,N,E,D; rot_xyz(trx,try_,0,ax,ay,az,vx,vy,vz); rot_xyz(ar,ap,ayaw,vx,vy,vz,N,E,D); D+=9.80665;\n std::cout<<"  trim-aware vehicle raw=["<<vx<<","<<vy<<","<<vz<<"] N/E/D=["<<N<<","<<E<<","<<D<<"] |NE|="<<std::hypot(N,E)<<" m/s^2
+";
 }
 int main(){try{
  int fd=conn();mavlink_status_t st{};mavlink_message_t m{};uint8_t b[4096],sys=0,comp=0;
@@ -51,7 +52,9 @@ int main(){try{
  close(fd);
  const double ar=roll.mean(),ap=pitch.mean(),ayaw=yaw.mean(),k=180.0/M_PI;
  std::cout<<std::fixed<<std::setprecision(5);
- std::cout<<"ATTITUDE n="<<roll.n<<" roll/pitch/yaw=["<<ar*k<<","<<ap*k<<","<<ayaw*k<<"] deg\\n";\n std::cout<<"AHRS trim used roll/pitch=["<<trimx*k<<","<<trimy*k<<"] deg\\n";
+ std::cout<<"ATTITUDE n="<<roll.n<<" roll/pitch/yaw=["<<ar*k<<","<<ap*k<<","<<ayaw*k<<"] deg
+";\n std::cout<<"AHRS trim used roll/pitch=["<<trimx*k<<","<<trimy*k<<"] deg
+";
  report("HIGHRES_IMU",hi,ar,ap,ayaw,trimx,trimy); report("SCALED_IMU1",i1,ar,ap,ayaw,trimx,trimy); report("SCALED_IMU2",i2,ar,ap,ayaw,trimx,trimy); report("SCALED_IMU3",i3,ar,ap,ayaw,trimx,trimy);
  }catch(const std::exception&e){std::cerr<<"ERROR: "<<e.what()<<"\n";return 1;}return 0;
 }
