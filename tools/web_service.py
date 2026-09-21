@@ -10,6 +10,7 @@ import struct
 import os
 import signal
 import socket
+import shutil
 import subprocess
 import threading
 import time
@@ -69,6 +70,9 @@ _run_record_handle=None
 _run_record_tmp=None
 _run_record_started_wall=0.0
 _run_record_pending=None
+_run_raw_dir=None
+_run_raw_pending=None
+RAW_DATASET_CONTROL=Path("/tmp/monkeysstab_raw_dataset_path")
 RUN_RECORD_DIR=RUN_ROOT/"recordings"
 RUN_RECORD_COLUMNS=[
     "wall_time","mono_ns","frame","valid","quality","features","tracked","inliers",
@@ -497,7 +501,7 @@ def run_record_status():
         }
 
 def start_run_record():
-    global _run_record_handle,_run_record_tmp,_run_record_started_wall,_run_record_pending
+    global _run_record_handle,_run_record_tmp,_run_record_started_wall,_run_record_pending,_run_raw_dir,_run_raw_pending
     with _lock:
         if _run_record_handle is not None:
             return {"ok":True,**run_record_status()}
@@ -506,21 +510,49 @@ def start_run_record():
         RUN_RECORD_DIR.mkdir(parents=True,exist_ok=True)
         stamp=time.strftime("%Y%m%d_%H%M%S")
         _run_record_tmp=RUN_RECORD_DIR/(".active_"+stamp+".csv")
+        _run_raw_dir=RUN_RECORD_DIR/(".active_"+stamp+"_dataset")
+        _run_raw_dir.mkdir(parents=True,exist_ok=False)
+        try:
+            commit=subprocess.run(["git","rev-parse","HEAD"],cwd=str(ROOT),text=True,capture_output=True,timeout=2).stdout.strip()
+        except Exception:
+            commit=""
+        meta={
+            "format":"monkeysStab-forensic-dataset-v1",
+            "created_wall_ns":time.time_ns(),
+            "git_commit":commit,
+            "production_csv":str(latest_run_csv() or ""),
+            "camera_calibration":"camera_calibration.yaml",
+            "mount_geometry":"mount_geometry.json",
+            "capture_gate":"web_named_run",
+        }
+        (_run_raw_dir/"session.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        shutil.copy2(ROOT/"config"/"ov9281_current_mount.yaml",_run_raw_dir/"camera_calibration.yaml")
+        shutil.copy2(GEOMETRY,_run_raw_dir/"mount_geometry.json")
+        ctl_tmp=RAW_DATASET_CONTROL.with_suffix(".tmp")
+        ctl_tmp.write_text(str(_run_raw_dir)+"\n",encoding="utf-8")
+        os.replace(ctl_tmp,RAW_DATASET_CONTROL)
+        _run_raw_pending=None
         _run_record_handle=open(_run_record_tmp,"w",encoding="utf-8",newline="",buffering=1)
         csv.writer(_run_record_handle).writerow(RUN_RECORD_COLUMNS)
         _run_record_started_wall=time.time()
-    log_event("INFO","Запись прогона начата")
+    log_event("INFO","Запись прогона + RAW dataset начата")
     return {"ok":True,**run_record_status()}
 
 def stop_run_record():
-    global _run_record_handle,_run_record_pending
+    global _run_record_handle,_run_record_pending,_run_raw_dir,_run_raw_pending
     with _lock:
         if _run_record_handle is None:
             return {"ok":True,**run_record_status()}
+        try:
+            RAW_DATASET_CONTROL.unlink()
+        except FileNotFoundError:
+            pass
         try:_run_record_handle.close()
         finally:_run_record_handle=None
         _run_record_pending=_run_record_tmp
-    log_event("INFO","Запись прогона остановлена — ожидается имя")
+        _run_raw_pending=_run_raw_dir
+        _run_raw_dir=None
+    log_event("INFO","Запись прогона + RAW dataset остановлена — ожидается имя")
     return {"ok":True,**run_record_status()}
 
 def _safe_run_name(name):
@@ -534,23 +566,30 @@ def _safe_run_name(name):
     return name[:100]
 
 def finalize_run_record(name):
-    global _run_record_pending,_run_record_tmp,_run_record_started_wall
+    global _run_record_pending,_run_record_tmp,_run_record_started_wall,_run_raw_pending
     with _lock:
         src=_run_record_pending
         if src is None or not Path(src).exists():
             raise RuntimeError("Нет остановленного прогона для сохранения")
         clean=_safe_run_name(name)
         stamp=time.strftime("%Y%m%d_%H%M%S",time.localtime(_run_record_started_wall or time.time()))
-        dst=RUN_RECORD_DIR/(stamp+"_"+clean+".csv")
+        base=stamp+"_"+clean
+        dst=RUN_RECORD_DIR/(base+".csv")
+        raw_dst=RUN_RECORD_DIR/(base+"_dataset")
         n=2
-        while dst.exists():
-            dst=RUN_RECORD_DIR/(stamp+"_"+clean+f"_{n}.csv");n+=1
+        while dst.exists() or raw_dst.exists():
+            base=stamp+"_"+clean+f"_{n}"; n+=1
+            dst=RUN_RECORD_DIR/(base+".csv")
+            raw_dst=RUN_RECORD_DIR/(base+"_dataset")
         os.replace(src,dst)
+        if _run_raw_pending is not None and Path(_run_raw_pending).exists():
+            os.replace(_run_raw_pending,raw_dst)
+        _run_raw_pending=None
         _run_record_pending=None
         _run_record_tmp=None
         _run_record_started_wall=0.0
-    log_event("INFO","Прогон сохранён: "+dst.name)
-    return {"ok":True,"name":dst.name}
+    log_event("INFO","Прогон сохранён: "+dst.name+" + RAW dataset")
+    return {"ok":True,"name":dst.name,"dataset":raw_dst.name if raw_dst.exists() else None}
 
 def list_run_records():
     RUN_RECORD_DIR.mkdir(parents=True,exist_ok=True)
