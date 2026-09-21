@@ -87,7 +87,7 @@ int main(int argc,char** argv){
       return 2;
     }
     const std::string root=argv[1];
-    const double focal_scale=(argc==3)?std::stod(argv[2]):1.0;
+    const double focal_scale=(argc>=3)?std::stod(argv[2]):0.931;\n    if(argc==8){\n      g_feature_roi.x0=std::stod(argv[3]); g_feature_roi.y0=std::stod(argv[4]);\n      g_feature_roi.x1=std::stod(argv[5]); g_feature_roi.y1=std::stod(argv[6]);\n      g_max_features=std::stoi(argv[7]);\n    } else {\n      // Frozen current production defaults from config/runtime.json.\n      g_feature_roi={0.20,0.32,0.80,0.90};\n      g_max_features=500;\n    }
     auto meta=readFramesCsv(root+"/frames.csv");
     auto luna=readLuna(root+"/luna_raw.csv");
     if(meta.empty()) throw std::runtime_error("frames.csv has no frames");
