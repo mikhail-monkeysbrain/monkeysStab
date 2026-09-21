@@ -19,6 +19,12 @@ struct State {
   double diag_amag=0,diag_gmag=0,diag_dt=0;
   bool diag_acc_ok=false,diag_gyro_ok=false,diag_stationary=false;
   uint64_t diag_acc_rejects=0,diag_gyro_rejects=0;
+  // Startup calibration diagnostics. These are observational only: the
+  // production 50-sample calibration below is intentionally unchanged.
+  double startup_res_mean_x=0,startup_res_mean_y=0,startup_res_mean_z=0;
+  double startup_res_m2_x=0,startup_res_m2_y=0,startup_res_m2_z=0;
+  double startup_gmag_mean=0,startup_gmag_m2=0;
+  double startup_res_norm_max=0,startup_gmag_max=0;
   uint64_t last_time_usec=0;
 };
 
@@ -69,10 +75,24 @@ inline void update(State& s,double ax,double ay,double az,double gx,double gy,do
     ideal_ax= 9.80665*sp;
     ideal_ay=-9.80665*cp*sr;
     ideal_az=-9.80665*cp*cr;
-    s.bias_bx+=tax-ideal_ax;
-    s.bias_by+=tay-ideal_ay;
-    s.bias_bz+=taz-ideal_az;
+    const double rx=tax-ideal_ax, ry=tay-ideal_ay, rz=taz-ideal_az;
+    const double gm=std::sqrt(gx*gx+gy*gy+gz*gz);
+    s.bias_bx+=rx;
+    s.bias_by+=ry;
+    s.bias_bz+=rz;
     ++s.bias_samples;
+    const double k=static_cast<double>(s.bias_samples);
+    auto welford=[k](double v,double& mean,double& m2){
+      const double delta=v-mean;
+      mean+=delta/k;
+      m2+=delta*(v-mean);
+    };
+    welford(rx,s.startup_res_mean_x,s.startup_res_m2_x);
+    welford(ry,s.startup_res_mean_y,s.startup_res_m2_y);
+    welford(rz,s.startup_res_mean_z,s.startup_res_m2_z);
+    welford(gm,s.startup_gmag_mean,s.startup_gmag_m2);
+    s.startup_res_norm_max=std::max(s.startup_res_norm_max,std::sqrt(rx*rx+ry*ry+rz*rz));
+    s.startup_gmag_max=std::max(s.startup_gmag_max,gm);
     if(s.bias_samples>=50){
       s.bias_bx/=s.bias_samples; s.bias_by/=s.bias_samples; s.bias_bz/=s.bias_samples;
       s.calibrating=false; s.calibrated=true; s.last_time_usec=time_usec;
