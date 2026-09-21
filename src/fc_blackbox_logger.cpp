@@ -10,6 +10,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <netdb.h>
@@ -18,6 +19,8 @@
 #include <sstream>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <vector>
+#include <algorithm>
 
 using Clock=std::chrono::steady_clock;
 
@@ -59,10 +62,39 @@ static void writeRow(std::ostream& out,const mavlink_message_t& m){
 int main(int argc,char**argv){
   std::string ep=argc>1?argv[1]:"tcp://127.0.0.1:5760";
   std::string path=argc>2?argv[2]:"continuous_fc.csv";
-  int fd=openTcp(ep);std::ofstream out(path,std::ios::app);
-  if(!out)die("не удалось открыть "+path);
-  if(out.tellp()==0)out<<"recv_mono_ns,wall_ns,msgid,sysid,compid,time_boot_ms,armed,custom_mode,roll,pitch,yaw,rollspeed,pitchspeed,yawspeed,x,y,z,vx,vy,vz,ekf_flags,vel_var,pos_h_var,pos_v_var,compass_var,terrain_var,flow_x,flow_y,flow_quality,flow_ground_m,range_cm,range_orientation,range_covariance\n";
-  out<<std::setprecision(10);
+  int fd=openTcp(ep);
+  const uint64_t segment_ns=3600ULL*1000000000ULL;
+  const uint64_t retention_ns=12ULL*3600ULL*1000000000ULL;
+  const uintmax_t hard_limit=1100ULL*1024ULL*1024ULL;
+  std::filesystem::path base(path),dir=base.parent_path();
+  std::string stem=base.stem().string();
+  auto segmentPath=[&](uint64_t wn){
+    std::time_t t=(std::time_t)(wn/1000000000ULL);std::tm tm{};localtime_r(&t,&tm);
+    char b[32];std::strftime(b,sizeof(b),"%Y%m%d_%H00",&tm);
+    return dir/(stem+"_"+b+".csv");
+  };
+  auto cleanup=[&](uint64_t now){
+    struct E{std::filesystem::path p;uint64_t ns;uintmax_t sz;};std::vector<E> v;uintmax_t total=0;
+    for(const auto& e:std::filesystem::directory_iterator(dir)){
+      if(!e.is_regular_file())continue;auto n=e.path().filename().string();
+      if(n.rfind(stem+"_",0)!=0||e.path().extension()!=".csv")continue;
+      auto ft=e.last_write_time();auto sys=std::chrono::time_point_cast<std::chrono::system_clock::duration>(ft-std::filesystem::file_time_type::clock::now()+std::chrono::system_clock::now());
+      uint64_t ns=std::chrono::duration_cast<std::chrono::nanoseconds>(sys.time_since_epoch()).count();uintmax_t sz=e.file_size();
+      if(now>ns&&now-ns>retention_ns){std::error_code ec;std::filesystem::remove(e.path(),ec);continue;}
+      v.push_back({e.path(),ns,sz});total+=sz;
+    }
+    std::sort(v.begin(),v.end(),[](const E&a,const E&b){return a.ns<b.ns;});
+    for(const auto&e:v){if(total<=hard_limit)break;std::error_code ec;if(std::filesystem::remove(e.p,ec))total-=e.sz;}
+  };
+  uint64_t seg_start=0;std::filesystem::path current;std::ofstream out;
+  auto ensureOut=[&](uint64_t wn){
+    uint64_t s=(wn/segment_ns)*segment_ns;if(out.is_open()&&s==seg_start)return;
+    if(out.is_open()){out.flush();out.close();}seg_start=s;current=segmentPath(wn);
+    out.open(current,std::ios::app);if(!out)die("не удалось открыть "+current.string());
+    if(out.tellp()==0)out<<"recv_mono_ns,wall_ns,msgid,sysid,compid,time_boot_ms,armed,custom_mode,roll,pitch,yaw,rollspeed,pitchspeed,yawspeed,x,y,z,vx,vy,vz,ekf_flags,vel_var,pos_h_var,pos_v_var,compass_var,terrain_var,flow_x,flow_y,flow_quality,flow_ground_m,range_cm,range_orientation,range_covariance\\n";
+    out<<std::setprecision(10);cleanup(wn);
+  };
+  ensureOut(wallNs());
   mavlink_status_t st{};mavlink_message_t m{};uint8_t buf[8192];
   uint64_t last_flush=monoNs();
   while(true){
@@ -78,7 +110,7 @@ int main(int argc,char**argv){
         if(m.msgid!=MAVLINK_MSG_ID_HEARTBEAT && m.msgid!=MAVLINK_MSG_ID_ATTITUDE &&
            m.msgid!=MAVLINK_MSG_ID_LOCAL_POSITION_NED && m.msgid!=MAVLINK_MSG_ID_EKF_STATUS_REPORT &&
            m.msgid!=MAVLINK_MSG_ID_OPTICAL_FLOW && m.msgid!=MAVLINK_MSG_ID_DISTANCE_SENSOR)continue;
-        writeRow(out,m);
+        ensureOut(wn); writeRow(out,m);
 
       }
     }
