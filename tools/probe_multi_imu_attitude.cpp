@@ -19,7 +19,7 @@ struct Stats {
     void add(double v) { s += v; ++n; }
     double mean() const { return n ? s / n : 0; }
 };
-struct ImuStats { Stats ax, ay, az; };
+struct ImuStats { Stats ax, ay, az; uint64_t t_first_us=0, t_last_us=0; };
 
 static int conn() {
     addrinfo h{}, *r = nullptr;
@@ -122,7 +122,7 @@ int main() {
         rate(fd,sys,comp,MAVLINK_MSG_ID_SCALED_IMU2,50);
         rate(fd,sys,comp,MAVLINK_MSG_ID_SCALED_IMU3,50);
 
-        Stats roll,pitch,yaw;
+        Stats roll,pitch,yaw;\n        uint64_t att_first_us=0, att_last_us=0;
         ImuStats hi,i1,i2,i3;
         std::cout << "Keep stand stationary: 20 s\n";
         auto end=std::chrono::steady_clock::now()+std::chrono::seconds(20);
@@ -135,9 +135,11 @@ int main() {
                 if(m.msgid==MAVLINK_MSG_ID_ATTITUDE) {
                     mavlink_attitude_t a{}; mavlink_msg_attitude_decode(&m,&a);
                     roll.add(a.roll); pitch.add(a.pitch); yaw.add(a.yaw);
+                    const uint64_t tu=uint64_t(a.time_boot_ms)*1000ULL;
+                    if(!att_first_us) att_first_us=tu; att_last_us=tu;
                 } else if(m.msgid==MAVLINK_MSG_ID_HIGHRES_IMU) {
                     mavlink_highres_imu_t a{}; mavlink_msg_highres_imu_decode(&m,&a);
-                    add(hi,a.xacc,a.yacc,a.zacc);
+                    add(hi,a.xacc,a.yacc,a.zacc,a.time_usec);
                 } else if(m.msgid==MAVLINK_MSG_ID_SCALED_IMU) {
                     mavlink_scaled_imu_t a{}; mavlink_msg_scaled_imu_decode(&m,&a);
                     add(i1,a.xacc*9.80665/1000.0,a.yacc*9.80665/1000.0,a.zacc*9.80665/1000.0);
@@ -158,6 +160,8 @@ int main() {
         std::cout << std::fixed << std::setprecision(5);
         std::cout << "ATTITUDE n=" << roll.n << " roll/pitch/yaw=["
                   << ar*k << "," << ap*k << "," << ayaw*k << "] deg\n";
+        std::cout << "ATTITUDE boot_us window=[" << att_first_us << "," << att_last_us << "]\n";
+        std::cout << "HIGHRES boot_us window=[" << hi.t_first_us << "," << hi.t_last_us << "]\n";
         std::cout << "AHRS trim used roll/pitch=["
                   << trimx*k << "," << trimy*k << "] deg\n";
         report("HIGHRES_IMU",hi,ar,ap,ayaw,trimx,trimy);
