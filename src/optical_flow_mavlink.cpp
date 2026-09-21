@@ -1906,6 +1906,14 @@ int main(int argc,char** argv){
                <<" duration="<<(dataset_duration_sec>0.0?std::to_string(dataset_duration_sec):std::string("manual"))
                <<" s\n";
     }
+    // WEB_RAW_DATASET_GATE_V1: when --dataset-dir is not fixed at startup,
+    // Web may gate RAW capture without restarting the flight runtime by writing
+    // the target directory to this control file. Removing the file stops RAW
+    // capture. Production OF/range processing is unaffected.
+    const std::string dataset_control_path="/tmp/monkeysstab_raw_dataset_path";
+    std::string dynamic_dataset_dir=dataset_dir;
+    int64_t dataset_control_last_check_ns=0;
+
     int64_t last_csv_flush_ns=monoNs();
     constexpr int64_t kCsvLiveFlushNs=50000000LL; // 50 ms: low-latency web telemetry without per-frame fsync
     constexpr std::streamoff kCsvMaxBytes=250LL*1024LL*1024LL;
@@ -2315,6 +2323,40 @@ int main(int argc,char** argv){
       fps_prev_selected_ts=ts;
 
       const int64_t now=monoNs();
+
+      if(dataset_dir.empty() && now-dataset_control_last_check_ns>=100000000LL){
+        dataset_control_last_check_ns=now;
+        std::string requested;
+        {
+          std::ifstream ctl(dataset_control_path);
+          if(ctl) std::getline(ctl,requested);
+        }
+        while(!requested.empty() && (requested.back()=='\r' || requested.back()=='\n' || requested.back()==' '))
+          requested.pop_back();
+        if(requested!=dynamic_dataset_dir){
+          if(dataset_frames_bin.is_open()){ dataset_frames_bin.flush(); dataset_frames_bin.close(); }
+          if(dataset_frames_csv.is_open()){ dataset_frames_csv.flush(); dataset_frames_csv.close(); }
+          luna.setRawCsv("");
+          dynamic_dataset_dir.clear();
+          dataset_saved_frames=0; dataset_saved_bytes=0; dataset_start_ns=0;
+          if(!requested.empty()){
+            std::error_code ec;
+            std::filesystem::create_directories(requested,ec);
+            if(ec) throw std::runtime_error("не удалось создать gated dataset: "+requested+" ("+ec.message()+")");
+            dataset_frames_bin.open(requested+"/frames.mjpgbin",std::ios::binary|std::ios::trunc);
+            dataset_frames_csv.open(requested+"/frames.csv",std::ios::trunc);
+            if(!dataset_frames_bin || !dataset_frames_csv)
+              throw std::runtime_error("не удалось открыть gated dataset: "+requested);
+            dataset_frames_csv<<"dataset_frame,camera_ts_ns,mono_ns,jpeg_size\n";
+            luna.setRawCsv(requested+"/luna_raw.csv");
+            dynamic_dataset_dir=requested;
+            dataset_start_ns=now;
+            std::cerr<<"GATED RAW DATASET START: "<<requested<<"\n";
+          } else {
+            std::cerr<<"GATED RAW DATASET STOP\n";
+          }
+        }
+      }
 
       if(dataset_frames_bin.is_open()){
         const uint64_t ts64=(uint64_t)std::max<int64_t>(0,ts);
