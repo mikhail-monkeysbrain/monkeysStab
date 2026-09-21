@@ -42,17 +42,6 @@ static int openTcp(const std::string& ep){
   int fl=fcntl(fd,F_GETFL,0);if(fl>=0)fcntl(fd,F_SETFL,fl|O_NONBLOCK);
   return fd;
 }
-static void sendMsg(int fd,const mavlink_message_t& m){
-  uint8_t b[MAVLINK_MAX_PACKET_LEN];uint16_t n=mavlink_msg_to_send_buffer(b,&m);
-  size_t off=0;while(off<n){ssize_t w=::write(fd,b+off,n-off);if(w>0){off+=(size_t)w;continue;}
-    if(w<0&&errno==EINTR)continue;if(w<0&&(errno==EAGAIN||errno==EWOULDBLOCK)){pollfd p{fd,POLLOUT,0};poll(&p,1,100);continue;}break;}
-}
-static void requestInterval(int fd,uint8_t target_sys,uint8_t target_comp,uint32_t msgid,int usec){
-  mavlink_message_t m{};
-  mavlink_msg_command_long_pack(250,191,&m,target_sys,target_comp,
-    MAV_CMD_SET_MESSAGE_INTERVAL,0,(float)msgid,(float)usec,0,0,0,0,0);
-  sendMsg(fd,m);
-}
 static void blank(std::ostream& o,int n){for(int i=0;i<n;i++)o<<",";}
 
 int main(int argc,char**argv){
@@ -63,7 +52,6 @@ int main(int argc,char**argv){
   if(out.tellp()==0)out<<"recv_mono_ns,wall_ns,msgid,sysid,compid,time_boot_ms,armed,custom_mode,roll,pitch,yaw,rollspeed,pitchspeed,yawspeed,x,y,z,vx,vy,vz,ekf_flags,vel_var,pos_h_var,pos_v_var,compass_var,terrain_var,flow_x,flow_y,flow_quality,flow_ground_m,range_cm,range_orientation,range_covariance\n";
   out<<std::setprecision(10);
   mavlink_status_t st{};mavlink_message_t m{};uint8_t buf[8192];
-  uint8_t target_sys=0,target_comp=MAV_COMP_ID_AUTOPILOT1;bool requested=false;
   uint64_t last_flush=monoNs();
   while(true){
     pollfd p{fd,POLLIN,0};int pr=poll(&p,1,500);
@@ -75,16 +63,6 @@ int main(int argc,char**argv){
       if(n<=0)die("MAVLink TCP закрыт");
       for(ssize_t i=0;i<n;i++){
         if(!mavlink_parse_char(MAVLINK_COMM_0,buf[i],&m,&st))continue;
-        if(m.msgid==MAVLINK_MSG_ID_HEARTBEAT && m.compid==MAV_COMP_ID_AUTOPILOT1 && !requested){
-          target_sys=m.sysid;target_comp=m.compid;
-          requestInterval(fd,target_sys,target_comp,MAVLINK_MSG_ID_HEARTBEAT,500000);
-          requestInterval(fd,target_sys,target_comp,MAVLINK_MSG_ID_ATTITUDE,20000);
-          requestInterval(fd,target_sys,target_comp,MAVLINK_MSG_ID_LOCAL_POSITION_NED,50000);
-          requestInterval(fd,target_sys,target_comp,MAVLINK_MSG_ID_EKF_STATUS_REPORT,100000);
-          requestInterval(fd,target_sys,target_comp,MAVLINK_MSG_ID_OPTICAL_FLOW,50000);
-          requestInterval(fd,target_sys,target_comp,MAVLINK_MSG_ID_DISTANCE_SENSOR,50000);
-          requested=true;
-        }
         if(m.msgid!=MAVLINK_MSG_ID_HEARTBEAT && m.msgid!=MAVLINK_MSG_ID_ATTITUDE &&
            m.msgid!=MAVLINK_MSG_ID_LOCAL_POSITION_NED && m.msgid!=MAVLINK_MSG_ID_EKF_STATUS_REPORT &&
            m.msgid!=MAVLINK_MSG_ID_OPTICAL_FLOW && m.msgid!=MAVLINK_MSG_ID_DISTANCE_SENSOR)continue;
