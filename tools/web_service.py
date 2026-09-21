@@ -2100,6 +2100,16 @@ if __name__=="__main__":
     print("Web-интерфейс: runtime + FC ARM/DISARM + Stabilize/PosHold/Loiter.")
     print("="*70,flush=True)
     try:
+        # Fail before touching router/blackbox/flight runtime if another Web UI
+        # instance already owns the requested HTTP port.
+        probe=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        try:
+            probe.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            probe.bind((a.host,a.port))
+        except OSError as e:
+            raise RuntimeError(f"Web UI не может занять {a.host}:{a.port}: {e}") from e
+        finally:
+            probe.close()
         ensure_router()
         start_live_udp_listener()
         start_statustext_monitor()
