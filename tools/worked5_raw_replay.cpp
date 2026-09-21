@@ -86,7 +86,8 @@ int main(int argc,char** argv){
       std::cerr<<"Использование: "<<argv[0]<<" DATASET_DIR [FOCAL_SCALE]\n";
       return 2;
     }
-    const std::string root=argv[1];\n    const std::string out_csv=root+"/worked5_replay.csv";
+    const std::string root=argv[1];
+    const std::string out_csv=root+"/worked5_replay.csv";
     const double focal_scale=(argc>=3)?std::stod(argv[2]):0.931;
     if(argc==8){
       g_feature_roi.x0=std::stod(argv[3]);
