@@ -87,11 +87,14 @@ static void report(const char* name, const ImuStats& s,
         std::cout << "  " << label << " N/E/D=[" << N << "," << E << "," << D
                   << "] |NE|=" << hypot(N,E) << " m/s^2\n";
     };
+    // DataFlash cross-run audit showed the physically consistent chain is
+    // R_ATT * R_TRIM * a_raw. Keep legacy variants for comparison, but make
+    // the confirmed candidate explicit in live output.
     eval("BASE_ATT",0,0,true);
-    eval("TRIM_TO_ATT",trimx,trimy,true);
-    eval("INVTRIM_TO_ATT",-trimx,-trimy,true);
-    eval("ATT_TO_TRIM",trimx,trimy,false);
-    eval("ATT_TO_INVTRIM",-trimx,-trimy,false);
+    eval("RATT_RTRIM_CONFIRMED",trimx,trimy,true);
+    eval("LEGACY_NEGTRIM_TO_ATT",-trimx,-trimy,true);
+    eval("RTRIM_RATT",trimx,trimy,false);
+    eval("NEGTRIM_RATT",-trimx,-trimy,false);
 }
 
 int main() {
