@@ -36,6 +36,7 @@ def mat321(r,p,y):
             [sy*cp,sy*sp*sr+cy*cr,sy*sp*cr-cy*sr],
             [-sp,cp*sr,cp*cr]]
 def mv(M,v): return [sum(M[i][j]*v[j] for j in range(3)) for i in range(3)]
+def mm(A,B): return [[sum(A[i][k]*B[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
 def tr(M): return [list(x) for x in zip(*M)]
 def median3(rows,keys): return [statistics.median(float(r[k]) for r in rows) for k in keys]
 
