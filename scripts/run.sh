@@ -103,6 +103,58 @@ BIN="$RUN_DIR/monkeysstab_optical_flow"
 CSV="$RUN_DIR/optical_flow_mavlink.csv"
 BUILD_LOG="$RUN_DIR/build.log"
 
+# FORENSIC_DATASET_META_V1
+# A dataset is an offline-replay artifact, not a second sensor reader.  Capture
+# happens inside the production camera/Luna paths; here we freeze the exact
+# software/configuration context needed to interpret it later.
+if [[ -n "${MONKEYS_DATASET_DIR:-}" ]]; then
+  mkdir -p "$MONKEYS_DATASET_DIR"
+  DATASET_META="$MONKEYS_DATASET_DIR/session.json"
+  DATASET_GIT_COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
+  DATASET_GIT_DIRTY="$(git status --porcelain --untracked-files=no 2>/dev/null | wc -l | tr -d ' ')"
+  export DATASET_META DATASET_GIT_COMMIT DATASET_GIT_DIRTY
+  export DATASET_CAMERA="$CAMERA" DATASET_LUNA="$LUNA" DATASET_FC="$FC"
+  export DATASET_CAMERA_YAML="$CAMERA_YAML" DATASET_GEOMETRY_JSON="$GEOMETRY_JSON"
+  export DATASET_FOCAL_SCALE="$FOCAL_SCALE" DATASET_FEATURE_ROI="$FEATURE_ROI"
+  export DATASET_MAX_FEATURES="$MAX_FEATURES" DATASET_RUN_DIR="$RUN_DIR"
+  export DATASET_SURFACE="${MONKEYS_DATASET_SURFACE:-}"
+  export DATASET_DURATION="${MONKEYS_DATASET_DURATION_SEC:-}"
+  python3 - <<'PY'
+import json, os, shutil, time
+from pathlib import Path
+
+dst=Path(os.environ["DATASET_META"]).parent
+meta={
+    "format":"monkeysStab-forensic-dataset-v1",
+    "created_wall_ns":time.time_ns(),
+    "git_commit":os.environ.get("DATASET_GIT_COMMIT",""),
+    "git_dirty_tracked":int(os.environ.get("DATASET_GIT_DIRTY","0") or 0),
+    "camera_device":os.environ["DATASET_CAMERA"],
+    "luna_device":os.environ["DATASET_LUNA"],
+    "fc_endpoint":os.environ["DATASET_FC"],
+    "camera_yaml_source":os.environ["DATASET_CAMERA_YAML"],
+    "geometry_json_source":os.environ["DATASET_GEOMETRY_JSON"],
+    "focal_scale":float(os.environ["DATASET_FOCAL_SCALE"]),
+    "feature_roi":[float(x) for x in os.environ["DATASET_FEATURE_ROI"].split()],
+    "max_features":int(os.environ["DATASET_MAX_FEATURES"]),
+    "surface":os.environ.get("DATASET_SURFACE",""),
+    "duration_sec":float(os.environ["DATASET_DURATION"]) if os.environ.get("DATASET_DURATION") else None,
+    "production_run_dir":os.environ["DATASET_RUN_DIR"],
+    "files":{
+        "frames_bin":"frames.mjpgbin",
+        "frames_index":"frames.csv",
+        "luna_raw":"luna_raw.csv",
+        "camera_calibration":"camera_calibration.yaml",
+        "mount_geometry":"mount_geometry.json",
+    },
+}
+Path(os.environ["DATASET_META"]).write_text(
+    json.dumps(meta,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+shutil.copy2(os.environ["DATASET_CAMERA_YAML"],dst/"camera_calibration.yaml")
+shutil.copy2(os.environ["DATASET_GEOMETRY_JSON"],dst/"mount_geometry.json")
+PY
+fi
+
 read -r RX0 RY0 RX1 RY1 <<< "$FEATURE_ROI"
 
 if ! g++ -std=c++17 -O2 -DNDEBUG -pthread -Wno-address-of-packed-member \
