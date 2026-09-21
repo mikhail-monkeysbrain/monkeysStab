@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -161,9 +162,15 @@ struct LunaReader {
   int fd=-1;
   std::thread th;
   LunaState state;
+  std::ofstream raw_csv;
   ~LunaReader(){ stop(); }
 
-  void start(const std::string& dev){
+  void start(const std::string& dev,const std::string& raw_csv_path=""){
+    if(!raw_csv_path.empty()){
+      raw_csv.open(raw_csv_path,std::ios::out|std::ios::trunc);
+      if(!raw_csv) throw std::runtime_error("не удалось открыть RAW TF-Luna CSV: "+raw_csv_path);
+      raw_csv<<"recv_mono_ns,b0,b1,b2,b3,b4,b5,b6,b7,b8,checksum_ok,distance_cm,strength,temp_raw\n";
+    }
     fd=::open(dev.c_str(),O_RDWR|O_NOCTTY|O_NONBLOCK);
     if(fd<0) fail("open TF-Luna");
     termios t{};
@@ -196,8 +203,14 @@ struct LunaReader {
           const bool ok=((sum&0xff)==q[8]);
           const uint16_t d=q[2]|(uint16_t(q[3])<<8);
           const uint16_t st=q[4]|(uint16_t(q[5])<<8);
+          const uint16_t temp_raw=q[6]|(uint16_t(q[7])<<8);
+          const int64_t recv_ns=monoNs();
+          if(raw_csv.is_open()){
+            raw_csv<<recv_ns;
+            for(int bi=0;bi<9;++bi) raw_csv<<','<<(unsigned)q[bi];
+            raw_csv<<','<<(ok?1:0)<<','<<d<<','<<st<<','<<temp_raw<<'\n';
+          }
           if(ok && d>0){
-            const int64_t recv_ns=monoNs();
             std::lock_guard<std::mutex> l(state.mu);
             state.distance_m=d/100.0;
             state.strength=st;
@@ -227,6 +240,7 @@ struct LunaReader {
 
   void stop(){
     if(th.joinable()) th.join();
+    if(raw_csv.is_open()) raw_csv.flush();
     if(fd>=0){ ::close(fd); fd=-1; }
   }
 };
