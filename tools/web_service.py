@@ -893,6 +893,10 @@ def start_runtime():
         env=os.environ.copy()
         env["MONKEYS_LOCAL_GUI"]="0"
         env["MONKEYS_FC"]=FC_ENDPOINT
+        # Current Web production contour is Variant B: rotation-stabilised
+        # unified publishing.  Keep run.sh preflight and runtime flag in the
+        # same mode; FLOW_OPTIONS=1 is the matching FC contract.
+        env["MONKEYS_STABILISED_UNIFIED_PUBLISH"]="1"
         env["MONKEYS_WEB_TELEMETRY_UDP_PORT"]=str(LIVE_UDP_PORT)
         env["MONKEYS_WEB_PREVIEW_PATH"]=str(PREVIEW_PATH)
         try:
