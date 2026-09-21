@@ -2086,12 +2086,18 @@ def ips():
     except Exception: pass
     return out
 
+def _web_shutdown_signal(signum,frame):
+    # SIGTERM must run the normal finally cleanup instead of orphaning the
+    # router/blackbox/runtime child sessions.
+    raise KeyboardInterrupt
+
 if __name__=="__main__":
     import argparse
     ap=argparse.ArgumentParser()
     ap.add_argument("--host",default="0.0.0.0")
     ap.add_argument("--port",type=int,default=8080)
     a=ap.parse_args()
+    signal.signal(signal.SIGTERM,_web_shutdown_signal)
     RUN_ROOT.mkdir(parents=True,exist_ok=True)
     print("="*70)
     print("monkeysStab WEB")
