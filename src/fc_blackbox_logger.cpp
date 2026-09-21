@@ -47,7 +47,7 @@ static int openTcp(const std::string& ep){
   return fd;
 }
 static void writeRow(std::ostream& out,const mavlink_message_t& m){
-  std::string f[33];
+  std::string f[43];
   auto set=[&](int i,const auto& v){std::ostringstream s;s<<std::setprecision(10)<<v;f[i]=s.str();};
   set(0,monoNs());set(1,wallNs());set(2,m.msgid);set(3,(int)m.sysid);set(4,(int)m.compid);
   if(m.msgid==MAVLINK_MSG_ID_HEARTBEAT){mavlink_heartbeat_t q{};mavlink_msg_heartbeat_decode(&m,&q);set(6,(q.base_mode&MAV_MODE_FLAG_SAFETY_ARMED)?1:0);set(7,q.custom_mode);}
@@ -109,7 +109,7 @@ int main(int argc,char**argv){
         if(!mavlink_parse_char(MAVLINK_COMM_0,buf[i],&m,&st))continue;
         if(m.msgid!=MAVLINK_MSG_ID_HEARTBEAT && m.msgid!=MAVLINK_MSG_ID_ATTITUDE &&
            m.msgid!=MAVLINK_MSG_ID_LOCAL_POSITION_NED && m.msgid!=MAVLINK_MSG_ID_EKF_STATUS_REPORT &&
-           m.msgid!=MAVLINK_MSG_ID_OPTICAL_FLOW && m.msgid!=MAVLINK_MSG_ID_DISTANCE_SENSOR)continue;
+           m.msgid!=MAVLINK_MSG_ID_OPTICAL_FLOW && m.msgid!=MAVLINK_MSG_ID_DISTANCE_SENSOR &&\n           m.msgid!=MAVLINK_MSG_ID_HIGHRES_IMU)continue;
         ensureOut(wallNs()); writeRow(out,m);
 
       }
