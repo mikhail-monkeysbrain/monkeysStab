@@ -47,8 +47,12 @@ static void rate(int fd, uint8_t sys, uint8_t comp, uint32_t id, int hz) {
     if (write(fd,b,n) != (ssize_t)n) throw std::runtime_error("write");
 }
 
-static void add(ImuStats& s, double ax, double ay, double az) {
+static void add(ImuStats& s, double ax, double ay, double az, uint64_t t_us=0) {
     s.ax.add(ax); s.ay.add(ay); s.az.add(az);
+    if (t_us) {
+        if (!s.t_first_us) s.t_first_us=t_us;
+        s.t_last_us=t_us;
+    }
 }
 
 static void rot321(double r, double p, double y,
@@ -122,7 +126,8 @@ int main() {
         rate(fd,sys,comp,MAVLINK_MSG_ID_SCALED_IMU2,50);
         rate(fd,sys,comp,MAVLINK_MSG_ID_SCALED_IMU3,50);
 
-        Stats roll,pitch,yaw;\n        uint64_t att_first_us=0, att_last_us=0;
+        Stats roll,pitch,yaw;
+        uint64_t att_first_us=0, att_last_us=0;
         ImuStats hi,i1,i2,i3;
         std::cout << "Keep stand stationary: 20 s\n";
         auto end=std::chrono::steady_clock::now()+std::chrono::seconds(20);
