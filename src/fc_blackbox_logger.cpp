@@ -15,6 +15,7 @@
 #include <netdb.h>
 #include <poll.h>
 #include <string>
+#include <sstream>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -42,7 +43,18 @@ static int openTcp(const std::string& ep){
   int fl=fcntl(fd,F_GETFL,0);if(fl>=0)fcntl(fd,F_SETFL,fl|O_NONBLOCK);
   return fd;
 }
-static void blank(std::ostream& o,int n){for(int i=0;i<n;i++)o<<",";}
+static void writeRow(std::ostream& out,const mavlink_message_t& m){
+  std::string f[33];
+  auto set=[&](int i,const auto& v){std::ostringstream s;s<<std::setprecision(10)<<v;f[i]=s.str();};
+  set(0,monoNs());set(1,wallNs());set(2,m.msgid);set(3,(int)m.sysid);set(4,(int)m.compid);
+  if(m.msgid==MAVLINK_MSG_ID_HEARTBEAT){mavlink_heartbeat_t q{};mavlink_msg_heartbeat_decode(&m,&q);set(6,(q.base_mode&MAV_MODE_FLAG_SAFETY_ARMED)?1:0);set(7,q.custom_mode);}
+  else if(m.msgid==MAVLINK_MSG_ID_ATTITUDE){mavlink_attitude_t q{};mavlink_msg_attitude_decode(&m,&q);set(5,q.time_boot_ms);set(8,q.roll);set(9,q.pitch);set(10,q.yaw);set(11,q.rollspeed);set(12,q.pitchspeed);set(13,q.yawspeed);}
+  else if(m.msgid==MAVLINK_MSG_ID_LOCAL_POSITION_NED){mavlink_local_position_ned_t q{};mavlink_msg_local_position_ned_decode(&m,&q);set(5,q.time_boot_ms);set(14,q.x);set(15,q.y);set(16,q.z);set(17,q.vx);set(18,q.vy);set(19,q.vz);}
+  else if(m.msgid==MAVLINK_MSG_ID_EKF_STATUS_REPORT){mavlink_ekf_status_report_t q{};mavlink_msg_ekf_status_report_decode(&m,&q);set(20,q.flags);set(21,q.velocity_variance);set(22,q.pos_horiz_variance);set(23,q.pos_vert_variance);set(24,q.compass_variance);set(25,q.terrain_alt_variance);}
+  else if(m.msgid==MAVLINK_MSG_ID_OPTICAL_FLOW){mavlink_optical_flow_t q{};mavlink_msg_optical_flow_decode(&m,&q);set(26,q.flow_comp_m_x);set(27,q.flow_comp_m_y);set(28,(int)q.quality);set(29,q.ground_distance);}
+  else if(m.msgid==MAVLINK_MSG_ID_DISTANCE_SENSOR){mavlink_distance_sensor_t q{};mavlink_msg_distance_sensor_decode(&m,&q);set(5,q.time_boot_ms);set(30,q.current_distance);set(31,(int)q.orientation);set(32,(int)q.covariance);}
+  for(int i=0;i<33;i++){if(i)out<<",";out<<f[i];}out<<"\n";
+}
 
 int main(int argc,char**argv){
   std::string ep=argc>1?argv[1]:"tcp://127.0.0.1:5760";
@@ -66,28 +78,8 @@ int main(int argc,char**argv){
         if(m.msgid!=MAVLINK_MSG_ID_HEARTBEAT && m.msgid!=MAVLINK_MSG_ID_ATTITUDE &&
            m.msgid!=MAVLINK_MSG_ID_LOCAL_POSITION_NED && m.msgid!=MAVLINK_MSG_ID_EKF_STATUS_REPORT &&
            m.msgid!=MAVLINK_MSG_ID_OPTICAL_FLOW && m.msgid!=MAVLINK_MSG_ID_DISTANCE_SENSOR)continue;
-        uint64_t rn=monoNs(),wn=wallNs();
-        out<<rn<<","<<wn<<","<<m.msgid<<","<<(int)m.sysid<<","<<(int)m.compid;
-        if(m.msgid==MAVLINK_MSG_ID_HEARTBEAT){
-          mavlink_heartbeat_t q{};mavlink_msg_heartbeat_decode(&m,&q);
-          out<<",,"<<((q.base_mode&MAV_MODE_FLAG_SAFETY_ARMED)?1:0)<<","<<q.custom_mode;blank(out,25);
-        }else if(m.msgid==MAVLINK_MSG_ID_ATTITUDE){
-          mavlink_attitude_t q{};mavlink_msg_attitude_decode(&m,&q);
-          out<<","<<q.time_boot_ms<<",,,"<<q.roll<<","<<q.pitch<<","<<q.yaw<<","<<q.rollspeed<<","<<q.pitchspeed<<","<<q.yawspeed;blank(out,19);
-        }else if(m.msgid==MAVLINK_MSG_ID_LOCAL_POSITION_NED){
-          mavlink_local_position_ned_t q{};mavlink_msg_local_position_ned_decode(&m,&q);
-          out<<","<<q.time_boot_ms;blank(out,8);out<<q.x<<","<<q.y<<","<<q.z<<","<<q.vx<<","<<q.vy<<","<<q.vz;blank(out,11);
-        }else if(m.msgid==MAVLINK_MSG_ID_EKF_STATUS_REPORT){
-          mavlink_ekf_status_report_t q{};mavlink_msg_ekf_status_report_decode(&m,&q);
-          out<<",";blank(out,14);out<<q.flags<<","<<q.velocity_variance<<","<<q.pos_horiz_variance<<","<<q.pos_vert_variance<<","<<q.compass_variance<<","<<q.terrain_alt_variance;blank(out,6);
-        }else if(m.msgid==MAVLINK_MSG_ID_OPTICAL_FLOW){
-          mavlink_optical_flow_t q{};mavlink_msg_optical_flow_decode(&m,&q);
-          out<<",";blank(out,20);out<<q.flow_comp_m_x<<","<<q.flow_comp_m_y<<","<<(int)q.quality<<","<<q.ground_distance;blank(out,3);
-        }else if(m.msgid==MAVLINK_MSG_ID_DISTANCE_SENSOR){
-          mavlink_distance_sensor_t q{};mavlink_msg_distance_sensor_decode(&m,&q);
-          out<<","<<q.time_boot_ms;blank(out,24);out<<q.current_distance<<","<<(int)q.orientation<<","<<(int)q.covariance;
-        }
-        out<<"\n";
+        writeRow(out,m);
+
       }
     }
     if(monoNs()-last_flush>1000000000ULL){out.flush();last_flush=monoNs();}
