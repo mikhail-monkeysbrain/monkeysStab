@@ -91,7 +91,7 @@ int main(int argc,char**argv){
     uint64_t s=(wn/segment_ns)*segment_ns;if(out.is_open()&&s==seg_start)return;
     if(out.is_open()){out.flush();out.close();}seg_start=s;current=segmentPath(wn);
     out.open(current,std::ios::app);if(!out)die("не удалось открыть "+current.string());
-    if(out.tellp()==0)out<<"recv_mono_ns,wall_ns,msgid,sysid,compid,time_boot_ms,armed,custom_mode,roll,pitch,yaw,rollspeed,pitchspeed,yawspeed,x,y,z,vx,vy,vz,ekf_flags,vel_var,pos_h_var,pos_v_var,compass_var,terrain_var,flow_x,flow_y,flow_quality,flow_ground_m,range_cm,range_orientation,range_covariance\\n";
+    if(out.tellp()==0)out<<"recv_mono_ns,wall_ns,msgid,sysid,compid,time_boot_ms,armed,custom_mode,roll,pitch,yaw,rollspeed,pitchspeed,yawspeed,x,y,z,vx,vy,vz,ekf_flags,vel_var,pos_h_var,pos_v_var,compass_var,terrain_var,flow_x,flow_y,flow_quality,flow_ground_m,range_cm,range_orientation,range_covariance\n";
     out<<std::setprecision(10);cleanup(wn);
   };
   ensureOut(wallNs());
