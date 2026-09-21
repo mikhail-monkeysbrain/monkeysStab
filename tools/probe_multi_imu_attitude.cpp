@@ -74,13 +74,24 @@ static void report(const char* name, const ImuStats& s,
               << " gravity roll/pitch=[" << rg*k << "," << pg*k << "] deg"
               << " delta_to_ATT=[" << (rg-ar)*k << "," << (pg-ap)*k << "] deg\n";
 
-    double vx,vy,vz,N,E,D;
-    rot321(trimx,trimy,0,ax,ay,az,vx,vy,vz);
-    rot321(ar,ap,ayaw,vx,vy,vz,N,E,D);
-    D += 9.80665;
-    std::cout << "  trim-aware vehicle raw=[" << vx << "," << vy << "," << vz << "]"
-              << " N/E/D=[" << N << "," << E << "," << D << "]"
-              << " |NE|=" << hypot(N,E) << " m/s^2\n";
+    auto eval = [&](const char* label, double tr, double tp, bool trim_first) {
+        double x1=ax,y1=ay,z1=az,N,E,D;
+        if (trim_first) {
+            rot321(tr,tp,0,ax,ay,az,x1,y1,z1);
+            rot321(ar,ap,ayaw,x1,y1,z1,N,E,D);
+        } else {
+            rot321(ar,ap,ayaw,ax,ay,az,x1,y1,z1);
+            rot321(tr,tp,0,x1,y1,z1,N,E,D);
+        }
+        D += 9.80665;
+        std::cout << "  " << label << " N/E/D=[" << N << "," << E << "," << D
+                  << "] |NE|=" << hypot(N,E) << " m/s^2\n";
+    };
+    eval("BASE_ATT",0,0,true);
+    eval("TRIM_TO_ATT",trimx,trimy,true);
+    eval("INVTRIM_TO_ATT",-trimx,-trimy,true);
+    eval("ATT_TO_TRIM",trimx,trimy,false);
+    eval("ATT_TO_INVTRIM",-trimx,-trimy,false);
 }
 
 int main() {
