@@ -1,0 +1,117 @@
+// monkeysStab — independent FC MAVLink blackbox logger.
+// Lives outside the optical-flow runtime so STOP/START of Variant B does not
+// create a blind interval in FC telemetry.
+#include "ardupilotmega/mavlink.h"
+#include <arpa/inet.h>
+#include <chrono>
+#include <cerrno>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <netdb.h>
+#include <poll.h>
+#include <string>
+#include <sys/socket.h>
+#include <unistd.h>
+
+using Clock=std::chrono::steady_clock;
+
+[[noreturn]] static void die(const std::string& s){std::cerr<<"ОШИБКА: "<<s<<"\n";std::exit(2);}
+static uint64_t monoNs(){return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();}
+static uint64_t wallNs(){return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();}
+
+static int openTcp(const std::string& ep){
+  if(ep.rfind("tcp://",0)!=0)die("поддерживается только tcp://host:port");
+  std::string hp=ep.substr(6);auto p=hp.rfind(':');
+  if(p==std::string::npos)die("ожидается tcp://host:port");
+  std::string host=hp.substr(0,p),port=hp.substr(p+1);
+  addrinfo h{},*res=nullptr;h.ai_family=AF_UNSPEC;h.ai_socktype=SOCK_STREAM;
+  int gr=getaddrinfo(host.c_str(),port.c_str(),&h,&res);
+  if(gr!=0)die(std::string("getaddrinfo: ")+gai_strerror(gr));
+  int fd=-1;
+  for(auto*q=res;q;q=q->ai_next){
+    fd=::socket(q->ai_family,q->ai_socktype,q->ai_protocol);if(fd<0)continue;
+    if(::connect(fd,q->ai_addr,q->ai_addrlen)==0)break;
+    ::close(fd);fd=-1;
+  }
+  freeaddrinfo(res);if(fd<0)die("не удалось подключиться к "+ep);
+  int fl=fcntl(fd,F_GETFL,0);if(fl>=0)fcntl(fd,F_SETFL,fl|O_NONBLOCK);
+  return fd;
+}
+static void sendMsg(int fd,const mavlink_message_t& m){
+  uint8_t b[MAVLINK_MAX_PACKET_LEN];uint16_t n=mavlink_msg_to_send_buffer(b,&m);
+  size_t off=0;while(off<n){ssize_t w=::write(fd,b+off,n-off);if(w>0){off+=(size_t)w;continue;}
+    if(w<0&&errno==EINTR)continue;if(w<0&&(errno==EAGAIN||errno==EWOULDBLOCK)){pollfd p{fd,POLLOUT,0};poll(&p,1,100);continue;}break;}
+}
+static void requestInterval(int fd,uint8_t target_sys,uint8_t target_comp,uint32_t msgid,int usec){
+  mavlink_message_t m{};
+  mavlink_msg_command_long_pack(250,191,&m,target_sys,target_comp,
+    MAV_CMD_SET_MESSAGE_INTERVAL,0,(float)msgid,(float)usec,0,0,0,0,0);
+  sendMsg(fd,m);
+}
+static void blank(std::ostream& o,int n){for(int i=0;i<n;i++)o<<",";}
+
+int main(int argc,char**argv){
+  std::string ep=argc>1?argv[1]:"tcp://127.0.0.1:5760";
+  std::string path=argc>2?argv[2]:"continuous_fc.csv";
+  int fd=openTcp(ep);std::ofstream out(path,std::ios::app);
+  if(!out)die("не удалось открыть "+path);
+  if(out.tellp()==0)out<<"recv_mono_ns,wall_ns,msgid,sysid,compid,time_boot_ms,armed,custom_mode,roll,pitch,yaw,rollspeed,pitchspeed,yawspeed,x,y,z,vx,vy,vz,ekf_flags,vel_var,pos_h_var,pos_v_var,compass_var,terrain_var,flow_x,flow_y,flow_quality,flow_ground_m,range_cm,range_orientation,range_covariance\n";
+  out<<std::setprecision(10);
+  mavlink_status_t st{};mavlink_message_t m{};uint8_t buf[8192];
+  uint8_t target_sys=0,target_comp=MAV_COMP_ID_AUTOPILOT1;bool requested=false;
+  uint64_t last_flush=monoNs();
+  while(true){
+    pollfd p{fd,POLLIN,0};int pr=poll(&p,1,500);
+    if(pr<0&&errno==EINTR)continue;if(pr<0)die(std::string("poll: ")+std::strerror(errno));
+    if(pr==0){if(monoNs()-last_flush>1000000000ULL){out.flush();last_flush=monoNs();}continue;}
+    for(;;){
+      ssize_t n=::read(fd,buf,sizeof(buf));
+      if(n<0&&(errno==EAGAIN||errno==EWOULDBLOCK))break;if(n<0&&errno==EINTR)continue;
+      if(n<=0)die("MAVLink TCP закрыт");
+      for(ssize_t i=0;i<n;i++){
+        if(!mavlink_parse_char(MAVLINK_COMM_0,buf[i],&m,&st))continue;
+        if(m.msgid==MAVLINK_MSG_ID_HEARTBEAT && m.compid==MAV_COMP_ID_AUTOPILOT1 && !requested){
+          target_sys=m.sysid;target_comp=m.compid;
+          requestInterval(fd,target_sys,target_comp,MAVLINK_MSG_ID_HEARTBEAT,500000);
+          requestInterval(fd,target_sys,target_comp,MAVLINK_MSG_ID_ATTITUDE,20000);
+          requestInterval(fd,target_sys,target_comp,MAVLINK_MSG_ID_LOCAL_POSITION_NED,50000);
+          requestInterval(fd,target_sys,target_comp,MAVLINK_MSG_ID_EKF_STATUS_REPORT,100000);
+          requestInterval(fd,target_sys,target_comp,MAVLINK_MSG_ID_OPTICAL_FLOW,50000);
+          requestInterval(fd,target_sys,target_comp,MAVLINK_MSG_ID_DISTANCE_SENSOR,50000);
+          requested=true;
+        }
+        if(m.msgid!=MAVLINK_MSG_ID_HEARTBEAT && m.msgid!=MAVLINK_MSG_ID_ATTITUDE &&
+           m.msgid!=MAVLINK_MSG_ID_LOCAL_POSITION_NED && m.msgid!=MAVLINK_MSG_ID_EKF_STATUS_REPORT &&
+           m.msgid!=MAVLINK_MSG_ID_OPTICAL_FLOW && m.msgid!=MAVLINK_MSG_ID_DISTANCE_SENSOR)continue;
+        uint64_t rn=monoNs(),wn=wallNs();
+        out<<rn<<","<<wn<<","<<m.msgid<<","<<(int)m.sysid<<","<<(int)m.compid;
+        if(m.msgid==MAVLINK_MSG_ID_HEARTBEAT){
+          mavlink_heartbeat_t q{};mavlink_msg_heartbeat_decode(&m,&q);
+          out<<",,"<<((q.base_mode&MAV_MODE_FLAG_SAFETY_ARMED)?1:0)<<","<<q.custom_mode;blank(out,25);
+        }else if(m.msgid==MAVLINK_MSG_ID_ATTITUDE){
+          mavlink_attitude_t q{};mavlink_msg_attitude_decode(&m,&q);
+          out<<","<<q.time_boot_ms<<",,,"<<q.roll<<","<<q.pitch<<","<<q.yaw<<","<<q.rollspeed<<","<<q.pitchspeed<<","<<q.yawspeed;blank(out,19);
+        }else if(m.msgid==MAVLINK_MSG_ID_LOCAL_POSITION_NED){
+          mavlink_local_position_ned_t q{};mavlink_msg_local_position_ned_decode(&m,&q);
+          out<<","<<q.time_boot_ms;blank(out,8);out<<q.x<<","<<q.y<<","<<q.z<<","<<q.vx<<","<<q.vy<<","<<q.vz;blank(out,11);
+        }else if(m.msgid==MAVLINK_MSG_ID_EKF_STATUS_REPORT){
+          mavlink_ekf_status_report_t q{};mavlink_msg_ekf_status_report_decode(&m,&q);
+          out<<",";blank(out,14);out<<q.flags<<","<<q.velocity_variance<<","<<q.pos_horiz_variance<<","<<q.pos_vert_variance<<","<<q.compass_variance<<","<<q.terrain_alt_variance;blank(out,6);
+        }else if(m.msgid==MAVLINK_MSG_ID_OPTICAL_FLOW){
+          mavlink_optical_flow_t q{};mavlink_msg_optical_flow_decode(&m,&q);
+          out<<",";blank(out,20);out<<q.flow_comp_m_x<<","<<q.flow_comp_m_y<<","<<(int)q.quality<<","<<q.ground_distance;blank(out,3);
+        }else if(m.msgid==MAVLINK_MSG_ID_DISTANCE_SENSOR){
+          mavlink_distance_sensor_t q{};mavlink_msg_distance_sensor_decode(&m,&q);
+          out<<","<<q.time_boot_ms;blank(out,24);out<<q.current_distance<<","<<(int)q.orientation<<","<<(int)q.covariance;
+        }
+        out<<"\n";
+      }
+    }
+    if(monoNs()-last_flush>1000000000ULL){out.flush();last_flush=monoNs();}
+  }
+}
