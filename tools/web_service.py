@@ -811,11 +811,23 @@ def stop_fc_blackbox():
         except Exception:pass
         _fc_blackbox_log_handle=None
 
+def log_runtime_forensic(event,pid=None,detail=""):
+    """Append lifecycle boundaries independently of the flight-runtime log."""
+    RUN_ROOT.mkdir(parents=True,exist_ok=True)
+    p=RUN_ROOT/"runtime_events.csv"
+    new=not p.exists()
+    with open(p,"a",encoding="utf-8",newline="",buffering=1) as h:
+        w=csv.writer(h)
+        if new:w.writerow(["mono_ns","wall_ns","event","pid","detail"])
+        w.writerow([time.monotonic_ns(),time.time_ns(),event,pid if pid is not None else "",detail])
+
 def start_runtime():
     global _proc,_log_handle,_runtime_started_wall,_active_csv
     with _lock:
         if running():
+            log_runtime_forensic("RUNTIME_START_ALREADY_RUNNING",_proc.pid)
             return {"ok":True,"already_running":True,"pid":_proc.pid}
+        log_runtime_forensic("RUNTIME_START_REQUEST")
         RUN_ROOT.mkdir(parents=True,exist_ok=True)
         _log_handle=open_rotating_log(WEB_LOG)
         _log_handle.write("\n===== WEB START %s =====\n"%time.strftime("%Y-%m-%d %H:%M:%S"))
@@ -845,6 +857,7 @@ def start_runtime():
             start_new_session=True, text=True
         )
         pid=_proc.pid
+        log_runtime_forensic("RUNTIME_PROCESS_CREATED",pid)
     # Let fast preflight/audit failures surface to the caller instead of
     # silently returning to "Остановлен".
     deadline=time.time()+1.2
@@ -857,17 +870,21 @@ def start_runtime():
             if info.get("log_tail"):
                 msg+="\n"+info["log_tail"]
             log_event("ERROR",msg)
+            log_runtime_forensic("RUNTIME_START_FAIL",pid,msg.replace("\n"," | "))
             raise RuntimeError(msg)
         time.sleep(0.08)
     log_event("INFO","Flight runtime запущен")
+    log_runtime_forensic("RUNTIME_START_OK",pid)
     return {"ok":True,"pid":pid}
 
 def stop_runtime():
     global _proc,_log_handle,_active_csv,_live_latest,_live_last_wall
     with _lock:
         if not running():
+            log_runtime_forensic("RUNTIME_STOP_ALREADY_STOPPED")
             return {"ok":True,"already_stopped":True}
         pid=_proc.pid
+        log_runtime_forensic("RUNTIME_STOP_REQUEST",pid)
         try:
             os.killpg(pid, signal.SIGTERM)
         except ProcessLookupError:
@@ -887,6 +904,7 @@ def stop_runtime():
         _live_last_wall=0.0
         ws_broadcast({"type":"runtime","running":False})
         log_event("INFO","Flight runtime остановлен")
+        log_runtime_forensic("RUNTIME_STOP_OK",pid)
         return {"ok":True}
 
 def latest_run_csv():
