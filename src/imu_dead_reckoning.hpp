@@ -24,6 +24,24 @@ struct State {
 
 inline void reset(State& s){ s=State{}; }
 
+// FC AHRS trim measured read-only from this airframe.  HIGHRES_IMU is in the
+// autopilot/sensor body frame while MAVLink ATTITUDE is vehicle attitude.
+// Convert acceleration with exact inverse AHRS_TRIM before using ATTITUDE.
+constexpr double kAhrsTrimX=-0.03428453207;
+constexpr double kAhrsTrimY=-0.0220823437;
+
+inline void inverseAhrsTrim(double ax,double ay,double az,double& x,double& y,double& z){
+  // R_trim = R321(trim_x,trim_y,0); inverse is its exact transpose.
+  const double cr=std::cos(kAhrsTrimX),sr=std::sin(kAhrsTrimX);
+  const double cp=std::cos(kAhrsTrimY),sp=std::sin(kAhrsTrimY);
+  // R321 with yaw=0:
+  // [ cp, sp*sr, sp*cr ; 0, cr, -sr ; -sp, cp*sr, cp*cr ]
+  // Apply transpose directly.
+  x= cp*ax - sp*az;
+  y= sp*sr*ax + cr*ay + cp*sr*az;
+  z= sp*cr*ax - sr*ay + cp*cr*az;
+}
+
 inline void bodyToNed(double ax,double ay,double az,double roll,double pitch,double yaw,
                       double& n,double& e,double& d){
   const double cr=std::cos(roll),sr=std::sin(roll),cp=std::cos(pitch),sp=std::sin(pitch),cy=std::cos(yaw),sy=std::sin(yaw);
@@ -40,6 +58,10 @@ inline void update(State& s,double ax,double ay,double az,double gx,double gy,do
   // R_ned_to_body * [0,0,-g] for the HIGHRES_IMU convention used below.
   // Subtracting that ideal vector leaves a body-fixed sensor bias, which then
   // rotates correctly with the airframe on every subsequent sample.
+  // First put HIGHRES_IMU into the same vehicle/body frame as ATTITUDE.
+  double tax,tay,taz;
+  inverseAhrsTrim(ax,ay,az,tax,tay,taz);
+
   if(s.calibrating){
     double ideal_ax,ideal_ay,ideal_az;
     const double cr=std::cos(roll),sr=std::sin(roll);
@@ -47,9 +69,9 @@ inline void update(State& s,double ax,double ay,double az,double gx,double gy,do
     ideal_ax= 9.80665*sp;
     ideal_ay=-9.80665*cp*sr;
     ideal_az=-9.80665*cp*cr;
-    s.bias_bx+=ax-ideal_ax;
-    s.bias_by+=ay-ideal_ay;
-    s.bias_bz+=az-ideal_az;
+    s.bias_bx+=tax-ideal_ax;
+    s.bias_by+=tay-ideal_ay;
+    s.bias_bz+=taz-ideal_az;
     ++s.bias_samples;
     if(s.bias_samples>=50){
       s.bias_bx/=s.bias_samples; s.bias_by/=s.bias_samples; s.bias_bz/=s.bias_samples;
@@ -61,7 +83,7 @@ inline void update(State& s,double ax,double ay,double az,double gx,double gy,do
   const double dt=(time_usec-s.last_time_usec)*1e-6; s.last_time_usec=time_usec;
   if(!(dt>0&&dt<0.1))return;
   double n,e,d;
-  bodyToNed(ax-s.bias_bx,ay-s.bias_by,az-s.bias_bz,roll,pitch,yaw,n,e,d);
+  bodyToNed(tax-s.bias_bx,tay-s.bias_by,taz-s.bias_bz,roll,pitch,yaw,n,e,d);
   s.acc_n=n; s.acc_e=e; s.acc_d=d;
   const double amag=std::sqrt(s.acc_n*s.acc_n+s.acc_e*s.acc_e+s.acc_d*s.acc_d);
   const double gmag=std::sqrt(gx*gx+gy*gy+gz*gz);
