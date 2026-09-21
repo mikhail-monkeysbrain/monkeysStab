@@ -74,6 +74,9 @@ RUN_RECORD_COLUMNS=[
     "wall_time","mono_ns","frame","valid","quality","features","tracked","inliers",
     "range_m","range_age_ms","armed","ekf_valid","x_mm","y_mm","z_mm","ekf_drift_mm",
     "raw_of_valid","raw_of_n_mm","raw_of_e_mm","raw_of_drift_mm","raw_of_vn","raw_of_ve",
+    "worked5_valid","worked5_dN_m","worked5_dE_m",
+    "variant_b_publish_mode","variant_b_ready","variant_b_source","variant_b_flow_x","variant_b_flow_y",
+    "flow_sent","range_sent",
     "vx","vy","vz","roll_deg","pitch_deg","yaw_deg"
 ]
 LIVE_UDP_PORT=int(os.environ.get("MONKEYS_WEB_TELEMETRY_UDP_PORT","8766"))
@@ -291,6 +294,16 @@ def live_payload(raw):
         "raw_of_drift_mm":math.hypot(raw_rel_n,raw_rel_e)*1000.0 if raw_rel_n is not None and raw_rel_e is not None else None,
         "raw_of_vn":raw.get("raw_of_vn"),
         "raw_of_ve":raw.get("raw_of_ve"),
+        "worked5_valid":bool(raw.get("worked5_valid",False)),
+        "worked5_dN_m":raw.get("worked5_dN_m"),
+        "worked5_dE_m":raw.get("worked5_dE_m"),
+        "variant_b_publish_mode":bool(raw.get("variant_b_publish_mode",False)),
+        "variant_b_ready":bool(raw.get("variant_b_ready",False)),
+        "variant_b_source":raw.get("variant_b_source",0),
+        "variant_b_flow_x":raw.get("variant_b_flow_x"),
+        "variant_b_flow_y":raw.get("variant_b_flow_y"),
+        "flow_sent":bool(raw.get("flow_sent",False)),
+        "range_sent":bool(raw.get("range_sent",False)),
         "imu_dr_n_mm":imu_rel_n,
         "imu_dr_e_mm":imu_rel_e,
         "imu_dr_d_mm":imu_rel_d,
