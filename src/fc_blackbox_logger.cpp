@@ -56,7 +56,8 @@ static void writeRow(std::ostream& out,const mavlink_message_t& m){
   else if(m.msgid==MAVLINK_MSG_ID_EKF_STATUS_REPORT){mavlink_ekf_status_report_t q{};mavlink_msg_ekf_status_report_decode(&m,&q);set(20,q.flags);set(21,q.velocity_variance);set(22,q.pos_horiz_variance);set(23,q.pos_vert_variance);set(24,q.compass_variance);set(25,q.terrain_alt_variance);}
   else if(m.msgid==MAVLINK_MSG_ID_OPTICAL_FLOW){mavlink_optical_flow_t q{};mavlink_msg_optical_flow_decode(&m,&q);set(26,q.flow_comp_m_x);set(27,q.flow_comp_m_y);set(28,(int)q.quality);set(29,q.ground_distance);}
   else if(m.msgid==MAVLINK_MSG_ID_DISTANCE_SENSOR){mavlink_distance_sensor_t q{};mavlink_msg_distance_sensor_decode(&m,&q);set(5,q.time_boot_ms);set(30,q.current_distance);set(31,(int)q.orientation);set(32,(int)q.covariance);}
-  for(int i=0;i<33;i++){if(i)out<<",";out<<f[i];}out<<"\n";
+  else if(m.msgid==MAVLINK_MSG_ID_HIGHRES_IMU){mavlink_highres_imu_t q{};mavlink_msg_highres_imu_decode(&m,&q);set(33,q.time_usec);set(34,q.xgyro);set(35,q.ygyro);set(36,q.zgyro);set(37,q.xmag);set(38,q.ymag);set(39,q.zmag);set(40,q.xacc);set(41,q.yacc);set(42,q.zacc);}
+  for(int i=0;i<43;i++){if(i)out<<",";out<<f[i];}out<<"\n";
 }
 
 int main(int argc,char**argv){
@@ -90,8 +91,12 @@ int main(int argc,char**argv){
   auto ensureOut=[&](uint64_t wn){
     uint64_t s=(wn/segment_ns)*segment_ns;if(out.is_open()&&s==seg_start)return;
     if(out.is_open()){out.flush();out.close();}seg_start=s;current=segmentPath(wn);
+    if(std::filesystem::exists(current) && std::filesystem::file_size(current)>0){
+      std::ifstream chk(current);std::string hdr;std::getline(chk,hdr);
+      if(hdr.find("imu_xmag")==std::string::npos)current=dir/(current.stem().string()+"_v2.csv");
+    }
     out.open(current,std::ios::app);if(!out)die("не удалось открыть "+current.string());
-    if(out.tellp()==0)out<<"recv_mono_ns,wall_ns,msgid,sysid,compid,time_boot_ms,armed,custom_mode,roll,pitch,yaw,rollspeed,pitchspeed,yawspeed,x,y,z,vx,vy,vz,ekf_flags,vel_var,pos_h_var,pos_v_var,compass_var,terrain_var,flow_x,flow_y,flow_quality,flow_ground_m,range_cm,range_orientation,range_covariance\n";
+    if(out.tellp()==0)out<<"recv_mono_ns,wall_ns,msgid,sysid,compid,time_boot_ms,armed,custom_mode,roll,pitch,yaw,rollspeed,pitchspeed,yawspeed,x,y,z,vx,vy,vz,ekf_flags,vel_var,pos_h_var,pos_v_var,compass_var,terrain_var,flow_x,flow_y,flow_quality,flow_ground_m,range_cm,range_orientation,range_covariance,imu_time_usec,imu_xgyro,imu_ygyro,imu_zgyro,imu_xmag,imu_ymag,imu_zmag,imu_xacc,imu_yacc,imu_zacc\n";
     out<<std::setprecision(10);cleanup(wn);
   };
   ensureOut(wallNs());
@@ -109,7 +114,8 @@ int main(int argc,char**argv){
         if(!mavlink_parse_char(MAVLINK_COMM_0,buf[i],&m,&st))continue;
         if(m.msgid!=MAVLINK_MSG_ID_HEARTBEAT && m.msgid!=MAVLINK_MSG_ID_ATTITUDE &&
            m.msgid!=MAVLINK_MSG_ID_LOCAL_POSITION_NED && m.msgid!=MAVLINK_MSG_ID_EKF_STATUS_REPORT &&
-           m.msgid!=MAVLINK_MSG_ID_OPTICAL_FLOW && m.msgid!=MAVLINK_MSG_ID_DISTANCE_SENSOR &&\n           m.msgid!=MAVLINK_MSG_ID_HIGHRES_IMU)continue;
+           m.msgid!=MAVLINK_MSG_ID_OPTICAL_FLOW && m.msgid!=MAVLINK_MSG_ID_DISTANCE_SENSOR &&
+           m.msgid!=MAVLINK_MSG_ID_HIGHRES_IMU)continue;
         ensureOut(wallNs()); writeRow(out,m);
 
       }
