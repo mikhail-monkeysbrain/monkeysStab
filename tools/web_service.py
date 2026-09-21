@@ -233,7 +233,11 @@ def live_payload(raw):
             rc_zero_event=True
             log_event("INFO",f"HOME/0 с пульта: RC6={raw.get('rc6_us',0)} RC8={raw.get('rc8_us',0)} RC10={raw.get('rc10_us',0)} seq={rc_seq}")
 
-        if _zero["x"] is None:
+        # Set the display HOME only from the first valid FC EKF sample.
+        # Runtime startup can emit telemetry before LOCAL_POSITION_NED is valid;
+        # using its default x/y/z=0 would make the later absolute NED Z
+        # (e.g. -34 m) appear as a huge relative jump in the Web UI.
+        if _zero["x"] is None and bool(raw.get("ekf_valid",False)):
             _zero["x"],_zero["y"],_zero["z"]=x,y,z
         zx,zy,zz=_zero["x"],_zero["y"],_zero["z"]
         if raw_n is not None and raw_e is not None and _raw_zero["n"] is None:
@@ -258,8 +262,10 @@ def live_payload(raw):
     fused_rel_e=(fused_e-fze) if fused_e is not None and fze is not None else None
     camvc_rel_n=(camvc_n-czn) if camvc_n is not None and czn is not None else None
     camvc_rel_e=(camvc_e-cze) if camvc_e is not None and cze is not None else None
-    ekf_rel_x=x-zx
-    ekf_rel_y=y-zy
+    ekf_has_zero=zx is not None and zy is not None and zz is not None
+    ekf_rel_x=(x-zx) if ekf_has_zero else 0.0
+    ekf_rel_y=(y-zy) if ekf_has_zero else 0.0
+    ekf_rel_z=(z-zz) if ekf_has_zero else 0.0
     out={
         "type":"telemetry",
         "available":True,
@@ -277,7 +283,7 @@ def live_payload(raw):
         "ekf_valid":bool(raw.get("ekf_valid",False)),
         "x_mm":ekf_rel_x*1000.0,
         "y_mm":ekf_rel_y*1000.0,
-        "z_mm":(z-zz)*1000.0,
+        "z_mm":ekf_rel_z*1000.0,
         "ekf_drift_mm":math.hypot(ekf_rel_x,ekf_rel_y)*1000.0,
         "raw_of_valid":bool(raw.get("raw_of_valid",False)),
         "raw_of_n_mm":raw_rel_n*1000.0 if raw_rel_n is not None else None,
