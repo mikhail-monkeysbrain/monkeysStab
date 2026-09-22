@@ -12,6 +12,13 @@ struct State {
   // Accelerometer bias must stay in the sensor/body frame.  A bias stored
   // in NED becomes yaw-dependent after the airframe rotates.
   double bias_bx=0,bias_by=0,bias_bz=0;
+  // IMU_DR_GRAVITY_OBSERVER_V1: gravity/specific-force reference is estimated
+  // in the native HIGHRES_IMU frame from the same accel+gyro stream. This
+  // avoids subtracting a gravity vector synthesized from independently moving
+  // FC ATTITUDE roll/pitch.
+  double gravity_x=0,gravity_y=0,gravity_z=0;
+  double gyro_bias_x=0,gyro_bias_y=0,gyro_bias_z=0;
+  double gravity_mag=0;
   double acc_n=0,acc_e=0,acc_d=0;
   double vel_n=0,vel_e=0,vel_d=0;
   double pos_n=0,pos_e=0,pos_d=0;
@@ -69,17 +76,14 @@ inline void update(State& s,double ax,double ay,double az,double gx,double gy,do
   inverseAhrsTrim(ax,ay,az,tax,tay,taz);
 
   if(s.calibrating){
-    double ideal_ax,ideal_ay,ideal_az;
-    const double cr=std::cos(roll),sr=std::sin(roll);
-    const double cp=std::cos(pitch),sp=std::sin(pitch);
-    ideal_ax= 9.80665*sp;
-    ideal_ay=-9.80665*cp*sr;
-    ideal_az=-9.80665*cp*cr;
-    const double rx=tax-ideal_ax, ry=tay-ideal_ay, rz=taz-ideal_az;
+    // Calibrate in the native HIGHRES_IMU frame. The mean accelerometer vector
+    // is the initial gravity/specific-force reference; the mean gyro is the
+    // propagation bias.  Keep the legacy bias_* telemetry fields observational
+    // only so the Web/API schema remains compatible.
+    const double rx=ax, ry=ay, rz=az;
     const double gm=std::sqrt(gx*gx+gy*gy+gz*gz);
-    s.bias_bx+=rx;
-    s.bias_by+=ry;
-    s.bias_bz+=rz;
+    s.gravity_x+=ax; s.gravity_y+=ay; s.gravity_z+=az;
+    s.gyro_bias_x+=gx; s.gyro_bias_y+=gy; s.gyro_bias_z+=gz;
     ++s.bias_samples;
     const double k=static_cast<double>(s.bias_samples);
     auto welford=[k](double v,double& mean,double& m2){
@@ -93,8 +97,16 @@ inline void update(State& s,double ax,double ay,double az,double gx,double gy,do
     welford(gm,s.startup_gmag_mean,s.startup_gmag_m2);
     s.startup_res_norm_max=std::max(s.startup_res_norm_max,std::sqrt(rx*rx+ry*ry+rz*rz));
     s.startup_gmag_max=std::max(s.startup_gmag_max,gm);
-    if(s.bias_samples>=50){
-      s.bias_bx/=s.bias_samples; s.bias_by/=s.bias_samples; s.bias_bz/=s.bias_samples;
+    if(s.bias_samples>=200){
+      const double inv=1.0/static_cast<double>(s.bias_samples);
+      s.gravity_x*=inv; s.gravity_y*=inv; s.gravity_z*=inv;
+      s.gyro_bias_x*=inv; s.gyro_bias_y*=inv; s.gyro_bias_z*=inv;
+      s.gravity_mag=std::sqrt(s.gravity_x*s.gravity_x+
+                              s.gravity_y*s.gravity_y+
+                              s.gravity_z*s.gravity_z);
+      // Preserve legacy fields for telemetry; they no longer participate in
+      // the estimator.
+      s.bias_bx=s.gravity_x; s.bias_by=s.gravity_y; s.bias_bz=s.gravity_z;
       s.calibrating=false; s.calibrated=true; s.last_time_usec=time_usec;
     }
     return;
@@ -102,9 +114,45 @@ inline void update(State& s,double ax,double ay,double az,double gx,double gy,do
   if(!s.calibrated||!s.last_time_usec||time_usec<=s.last_time_usec){s.last_time_usec=time_usec;return;}
   const double dt=(time_usec-s.last_time_usec)*1e-6; s.last_time_usec=time_usec;
   if(!(dt>0&&dt<0.1))return;
-  double n,e,d;
-  bodyToNed(tax-s.bias_bx,tay-s.bias_by,taz-s.bias_bz,roll,pitch,yaw,n,e,d);
-  s.acc_n=n; s.acc_e=e; s.acc_d=d;
+  // Propagate the gravity reference with HIGHRES_IMU gyro in that same native
+  // frame, then weakly pull it toward the measured accelerometer direction.
+  // tau=1 s is deliberately the already-tested static MVP; dynamic validation
+  // is required before treating this as a final inertial-navigation model.
+  const double wx=gx-s.gyro_bias_x, wy=gy-s.gyro_bias_y, wz=gz-s.gyro_bias_z;
+  const double cx=wy*s.gravity_z-wz*s.gravity_y;
+  const double cy=wz*s.gravity_x-wx*s.gravity_z;
+  const double cz=wx*s.gravity_y-wy*s.gravity_x;
+  s.gravity_x-=cx*dt; s.gravity_y-=cy*dt; s.gravity_z-=cz*dt;
+  auto renorm_gravity=[&](){
+    const double q=std::sqrt(s.gravity_x*s.gravity_x+s.gravity_y*s.gravity_y+
+                             s.gravity_z*s.gravity_z);
+    if(q>1e-9 && s.gravity_mag>1e-9){
+      const double k=s.gravity_mag/q;
+      s.gravity_x*=k; s.gravity_y*=k; s.gravity_z*=k;
+    }
+  };
+  renorm_gravity();
+  const double amag_raw=std::sqrt(ax*ax+ay*ay+az*az);
+  if(amag_raw>1e-9 && s.gravity_mag>1e-9){
+    constexpr double kGravityTauS=1.0;
+    const double alpha=1.0-std::exp(-dt/kGravityTauS);
+    const double k=s.gravity_mag/amag_raw;
+    s.gravity_x=(1.0-alpha)*s.gravity_x+alpha*(ax*k);
+    s.gravity_y=(1.0-alpha)*s.gravity_y+alpha*(ay*k);
+    s.gravity_z=(1.0-alpha)*s.gravity_z+alpha*(az*k);
+    renorm_gravity();
+  }
+
+  // Linear specific force is formed BEFORE ATTITUDE, in the same native IMU
+  // frame. Only the residual is trim-converted and rotated to NED. Therefore
+  // slow FC roll/pitch evolution can no longer manufacture acceleration from
+  // an otherwise unchanged accelerometer vector.
+  const double rax=ax-s.gravity_x, ray=ay-s.gravity_y, raz=az-s.gravity_z;
+  double rbx,rby,rbz;
+  inverseAhrsTrim(rax,ray,raz,rbx,rby,rbz);
+  double n,e,d_with_g;
+  bodyToNed(rbx,rby,rbz,roll,pitch,yaw,n,e,d_with_g);
+  s.acc_n=n; s.acc_e=e; s.acc_d=d_with_g-9.80665;
   const double amag=std::sqrt(s.acc_n*s.acc_n+s.acc_e*s.acc_e+s.acc_d*s.acc_d);
   const double gmag=std::sqrt(gx*gx+gy*gy+gz*gz);
   const bool acc_ok=amag<0.12;
