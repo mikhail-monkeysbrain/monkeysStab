@@ -26,6 +26,9 @@ struct State {
   int stationary_samples=0;
   double diag_amag=0,diag_gmag=0,diag_dt=0;
   bool diag_acc_ok=false,diag_gyro_ok=false,diag_stationary=false;
+  // V2 transition diagnostics: observational only; no estimator decisions use these fields.
+  double diag_external_motion_speed_mps=0.0,diag_gravity_correction_weight=0.0;
+  bool diag_external_zupt_allow=true,diag_zupt_active=false;
   uint64_t diag_acc_rejects=0,diag_gyro_rejects=0;
   // Startup calibration diagnostics. These are observational only.
   double startup_res_mean_x=0,startup_res_mean_y=0,startup_res_mean_z=0;
@@ -142,6 +145,9 @@ inline void update(State& s,double ax,double ay,double az,double gx,double gy,do
         correction_weight=(kVisualMovingMps-external_motion_speed_mps)/
                           (kVisualMovingMps-kVisualStillMps);
     }
+    s.diag_external_motion_speed_mps=external_motion_speed_mps;
+    s.diag_gravity_correction_weight=correction_weight;
+    s.diag_external_zupt_allow=external_zupt_allow;
     const double alpha=correction_weight*(1.0-std::exp(-dt/kGravityTauS));
     if(alpha>0.0){
       const double k=s.gravity_mag/amag_raw;
@@ -168,6 +174,9 @@ inline void update(State& s,double ax,double ay,double az,double gx,double gy,do
   const bool gyro_ok=gmag<0.02;
   const bool imu_stationary=acc_ok&&gyro_ok;
   const bool stationary=imu_stationary&&external_zupt_allow;
+  s.diag_external_motion_speed_mps=external_motion_speed_mps;
+  s.diag_external_zupt_allow=external_zupt_allow;
+  s.diag_zupt_active=stationary;
   s.diag_amag=amag; s.diag_gmag=gmag; s.diag_dt=dt;
   s.diag_acc_ok=acc_ok; s.diag_gyro_ok=gyro_ok; s.diag_stationary=imu_stationary;
   if(!acc_ok) ++s.diag_acc_rejects;
