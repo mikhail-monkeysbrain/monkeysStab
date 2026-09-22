@@ -2761,6 +2761,12 @@ int main(int argc,char** argv){
               }
               highres_phase_csv<<'\n';
               highres_phase_csv.flush();
+              constexpr std::streamoff kHighresPhaseCsvMaxBytes=64LL*1024LL*1024LL;
+              const std::streamoff phase_pos=highres_phase_csv.tellp();
+              if(phase_pos<0 || phase_pos>=kHighresPhaseCsvMaxBytes){
+                highres_phase_csv.close();
+                highres_phase_header=true; // cap reached: do not reopen this run
+              }
             }
           }
 
@@ -4134,6 +4140,12 @@ int main(int argc,char** argv){
           }
           dr_csv<<'\n';
           dr_csv.flush();
+          constexpr std::streamoff kDeltaRShadowCsvMaxBytes=128LL*1024LL*1024LL;
+          const std::streamoff dr_pos=dr_csv.tellp();
+          if(dr_pos<0 || dr_pos>=kDeltaRShadowCsvMaxBytes){
+            dr_csv.close();
+            dr_header=true; // cap reached: do not reopen this run
+          }
         }
 
         FlowFcTarget csv_ct{}; FlowFcAttTarget csv_ca{}; FlowFcOutputs csv_co{};
