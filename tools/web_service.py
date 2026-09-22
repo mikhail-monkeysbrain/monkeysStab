@@ -1227,6 +1227,14 @@ button{cursor:pointer}
 .badge{display:inline-flex;align-items:center;gap:5px}
 @media(max-width:1250px){.main{grid-template-columns:255px 1fr}.right{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr 1fr}.sceneCard{min-height:520px}#glCanvas{height:520px}.bottomCharts{grid-template-columns:1fr}.topStatus{display:none}}
 @media(max-width:850px){.main{grid-template-columns:1fr}.left,.right{grid-column:auto}.right{display:flex}.nav{display:none}.brand{min-width:0;flex:1}.sceneCard{min-height:430px}#glCanvas{height:430px}.metrics{grid-template-columns:repeat(2,1fr)}}
+
+/* IMU DR display intentionally disabled: production UI is WORKED5 + EKF3. */
+.metrics:has(#imuX),
+.card:has(#imuAcc),
+.metrics:has(#camvcX),
+.metrics:has(#fusedX),
+.compareItem:has(#cmpImu),
+.compareItem:has(#cmpFused) { display:none !important; }
 </style>
 </head>
 <body>
@@ -1355,7 +1363,7 @@ button{cursor:pointer}
 
   <div class="card compareCard">
    <div class="compareHead">
-    <h3>Перемещение — CAM / IMU / FUSED / ФАКТ</h3>
+    <h3>Перемещение — WORKED5 / FC EKF</h3>
     <span class="compareHint">вид сверху · N ↑ · E → · realtime</span>
    </div>
    <canvas id="motionCompare"></canvas>
@@ -1775,7 +1783,7 @@ function drawMotionCompare(){
  }
  x.strokeStyle='#55768e';x.lineWidth=1.5;x.beginPath();x.moveTo(pad,cy);x.lineTo(w-pad,cy);x.stroke();x.beginPath();x.moveTo(cx,pad);x.lineTo(cx,h-pad);x.stroke();
  x.fillStyle='#8da9bd';x.fillText('N',cx+6,pad+7);x.fillText('E',w-pad-12,cy-10);x.fillText('±'+half+' мм',8,14);
- const cfg={cam:['#15d2ff','CAM'],imu:['#ffc928','IMU'],fused:['#c98bff','FUSED'],ekf:['#0bd777','ФАКТ']};
+ const cfg={cam:['#15d2ff','WORKED5'],ekf:['#0bd777','FC EKF']};
  for(const [k,[col]] of Object.entries(cfg)){
    const tr=motionTrails[k];if(!tr.length)continue;x.strokeStyle=col;x.lineWidth=2.4;x.beginPath();
    tr.forEach((p,i)=>{const px=cx+p.e*scale,py=cy-p.n*scale;i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke();
