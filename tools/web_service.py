@@ -1322,7 +1322,7 @@ button{cursor:pointer}
 
  <div class="col center">
   <div class="card sceneCard">
-   <div class="sceneTitle">3D — Траектория и ориентация</div>
+   <div class="sceneTitle">3D — FC EKF · сетка 5 см</div>
    <canvas id="glCanvas"></canvas><canvas id="lightCanvas" style="display:none;width:100%;height:625px;background:#07121c"></canvas>
    <div class="sceneControls">
     <label><input id="showTrail" type="checkbox" checked> Траектория</label>
@@ -1396,15 +1396,15 @@ button{cursor:pointer}
 
   <div class="card compareCard">
    <div class="compareHead">
-    <h3>Перемещение — FC EKF</h3>
+    <h3>Перемещение — FC EKF · клетка 5 см</h3>
     <span class="compareHint">вид сверху · HOME X/Y · realtime · клетка 5 см</span>
    </div>
    <canvas id="motionCompare"></canvas>
    <div class="compareLegend">
-    <div class="compareItem"><span><i class="compareDot" style="background:#15d2ff"></i>CAM / WORKED5</span><b id="cmpCam">—</b></div>
-    <div class="compareItem"><span><i class="compareDot" style="background:#ffc928"></i>IMU DR</span><b id="cmpImu">—</b></div>
-    <div class="compareItem"><span><i class="compareDot" style="background:#c98bff"></i>FUSED V1</span><b id="cmpFused">—</b></div>
-    <div class="compareItem"><span><i class="compareDot" style="background:#0bd777"></i>ФАКТ / FC EKF</span><b id="cmpEkf">—</b></div>
+    <div class="compareItem" style="display:none"><span>WORKED5</span><b id="cmpCam">—</b></div>
+    <div class="compareItem" style="display:none"><span>IMU DR</span><b id="cmpImu">—</b></div>
+    <div class="compareItem" style="display:none"><span>FUSED V1</span><b id="cmpFused">—</b></div>
+    <div class="compareItem"><span><i class="compareDot" style="background:#0bd777"></i>FC EKF</span><b id="cmpEkf">—</b></div>
    </div>
   </div>
 
@@ -1808,7 +1808,7 @@ function drawMotionCompare(){
  for(const tr of Object.values(motionTrails))for(const p of tr)maxAbs=Math.max(maxAbs,Math.abs(p.n),Math.abs(p.e));
  const half=Math.max(100,Math.ceil(maxAbs/100)*100),pad=34,scale=Math.min((w-2*pad)/(2*half),(h-2*pad)/(2*half)),cx=w/2,cy=h/2;
  x.font='11px system-ui';x.textAlign='left';x.textBaseline='middle';
- const step=half<=500?100:(half<=1500?250:500);
+ const step=50;
  x.lineWidth=1;
  for(let q=-half;q<=half+1e-6;q+=step){
    x.strokeStyle='#153247';x.beginPath();x.moveTo(cx+q*scale,pad);x.lineTo(cx+q*scale,h-pad);x.stroke();
@@ -1816,14 +1816,14 @@ function drawMotionCompare(){
  }
  x.strokeStyle='#55768e';x.lineWidth=1.5;x.beginPath();x.moveTo(pad,cy);x.lineTo(w-pad,cy);x.stroke();x.beginPath();x.moveTo(cx,pad);x.lineTo(cx,h-pad);x.stroke();
  x.fillStyle='#8da9bd';x.fillText('N',cx+6,pad+7);x.fillText('E',w-pad-12,cy-10);x.fillText('±'+half+' мм',8,14);
- const cfg={cam:['#15d2ff','WORKED5'],ekf:['#0bd777','FC EKF']};
+ const cfg={ekf:['#0bd777','FC EKF']};
  for(const [k,[col]] of Object.entries(cfg)){
    const tr=motionTrails[k];if(!tr.length)continue;x.strokeStyle=col;x.lineWidth=2.4;x.beginPath();
    tr.forEach((p,i)=>{const px=cx+p.e*scale,py=cy-p.n*scale;i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke();
    const p=tr[tr.length-1],px=cx+p.e*scale,py=cy-p.n*scale;x.fillStyle=col;x.beginPath();x.arc(px,py,5,0,Math.PI*2);x.fill();
  }
  function label(id,k){const tr=motionTrails[k],el=$(id);if(!el)return;if(!tr.length){el.textContent='—';return}const p=tr[tr.length-1];el.textContent='N '+fmt(p.n,1)+' · E '+fmt(p.e,1)+' · |XY| '+fmt(Math.hypot(p.n,p.e),1)+' мм'}
- label('cmpCam','cam');label('cmpImu','imu');label('cmpFused','fused');label('cmpEkf','ekf');
+ label('cmpEkf','ekf');
 }
 function updateHud(t){
  latest=t;window.latest=t;$('runState').textContent=t.running?'Работает':'Остановлен';
@@ -1955,7 +1955,7 @@ function rotLocal(p,r,pit,y){let cr=Math.cos(r),sr=Math.sin(r),cp=Math.cos(pit),
 function renderScene(){
  if(!gl)return;let c=$('glCanvas'),dpr=devicePixelRatio,w=Math.floor(c.clientWidth*dpr),h=Math.floor(c.clientHeight*dpr);if(c.width!==w||c.height!==h){c.width=w;c.height=h}gl.viewport(0,0,w,h);gl.clearColor(.025,.065,.095,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.enable(gl.DEPTH_TEST);
  let P=[],C=[];
- if($('showGrid').checked){for(let i=-50;i<=50;i++){let q=i*.05;addLine(P,C,[-2.5,q,0],[2.5,q,0],[.08,.23,.34]);addLine(P,C,[q,-2.5,0],[q,2.5,0],[.08,.23,.34])}}
+ if($('showGrid').checked){const step=.05,extent=2.5;for(let q=-extent;q<=extent+1e-9;q+=step){addLine(P,C,[-extent,q,0],[extent,q,0],[.08,.23,.34]);addLine(P,C,[q,-extent,0],[q,extent,0],[.08,.23,.34])}}
  if($('showAxes').checked){addThickLine(P,C,[0,0,0],[1.15,0,0],[1,.15,.15],.010);addThickLine(P,C,[0,0,0],[0,1.15,0],[.1,1,.25],.010);addThickLine(P,C,[0,0,0],[0,0,1.15],[.1,.45,1],.010)}
  addCircle(P,C,[0,0,.01],.08,[.1,1,.35]);
  if(latest&&$('showTrail').checked&&(latest.trail||[]).length>1){let tr=latest.trail;for(let i=1;i<tr.length;i++){let a=tr[i-1],b=tr[i];addThickLine(P,C,[a.x_mm/1000,a.y_mm/1000,-(a.z_mm||0)/1000],[b.x_mm/1000,b.y_mm/1000,-(b.z_mm||0)/1000],[.05,.75,1],.012)}}
