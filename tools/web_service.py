@@ -49,6 +49,7 @@ _statustext_thread=None
 _fc_blackbox_proc=None
 _fc_blackbox_log_handle=None
 _zero={"x":None,"y":None,"z":None}
+_yaw_zero_deg=None
 _raw_zero={"n":None,"e":None}
 _imu_zero={"n":None,"e":None,"d":None}
 _fused_zero={"n":None,"e":None}
@@ -202,7 +203,7 @@ def _strip_legacy_imu_fields(payload):
     return payload
 
 def live_payload(raw):
-    global _live_latest,_live_last_wall,_last_rc_zero_seq,_imu_zero,_fused_zero,_camvc_zero
+    global _live_latest,_live_last_wall,_last_rc_zero_seq,_imu_zero,_fused_zero,_camvc_zero,_yaw_zero_deg
     try:
         x=float(raw.get("x",0.0));y=float(raw.get("y",0.0));z=float(raw.get("z",0.0))
     except Exception:
@@ -224,6 +225,11 @@ def live_payload(raw):
     fused_n=_opt_float("fused_v1_n_mm"); fused_e=_opt_float("fused_v1_e_mm")
     camvc_n=_opt_float("imu_camvc_n_mm"); camvc_e=_opt_float("imu_camvc_e_mm"); camvc_d=_opt_float("imu_camvc_d_mm")
 
+    try:
+        raw_yaw_deg=float(raw.get("yaw_deg",0.0) or 0.0)
+    except Exception:
+        raw_yaw_deg=0.0
+
     rc_zero_event=False
     try:
         rc_seq=int(raw.get("rc_zero_seq",0) or 0)
@@ -236,6 +242,7 @@ def live_payload(raw):
         elif rc_seq!=_last_rc_zero_seq:
             _last_rc_zero_seq=rc_seq
             _zero["x"],_zero["y"],_zero["z"]=x,y,z
+            _yaw_zero_deg=raw_yaw_deg
             if raw_n is not None and raw_e is not None:
                 _raw_zero["n"],_raw_zero["e"]=raw_n,raw_e
             if imu_n is not None: _imu_zero["n"]=imu_n
@@ -254,6 +261,7 @@ def live_payload(raw):
         # (e.g. -34 m) appear as a huge relative jump in the Web UI.
         if _zero["x"] is None and bool(raw.get("ekf_valid",False)):
             _zero["x"],_zero["y"],_zero["z"]=x,y,z
+            _yaw_zero_deg=raw_yaw_deg
         zx,zy,zz=_zero["x"],_zero["y"],_zero["z"]
         if raw_n is not None and raw_e is not None and _raw_zero["n"] is None:
             _raw_zero["n"],_raw_zero["e"]=raw_n,raw_e
@@ -281,6 +289,7 @@ def live_payload(raw):
     ekf_rel_x=(x-zx) if ekf_has_zero else 0.0
     ekf_rel_y=(y-zy) if ekf_has_zero else 0.0
     ekf_rel_z=(z-zz) if ekf_has_zero else 0.0
+    yaw_rel_deg=((raw_yaw_deg-_yaw_zero_deg+180.0)%360.0-180.0) if _yaw_zero_deg is not None else 0.0
     out={
         "type":"telemetry",
         "available":True,
@@ -388,7 +397,7 @@ def live_payload(raw):
         "vx":raw.get("vx",0.0),"vy":raw.get("vy",0.0),"vz":raw.get("vz",0.0),
         "roll_deg":raw.get("roll_deg",0.0),
         "pitch_deg":raw.get("pitch_deg",0.0),
-        "yaw_deg":raw.get("yaw_deg",0.0),
+        "yaw_deg":yaw_rel_deg,
     }
     _strip_legacy_imu_fields(out)
     with _lock:
@@ -928,12 +937,13 @@ def start_runtime():
             PREVIEW_PATH.unlink()
         except FileNotFoundError:
             pass
-        global _live_latest,_live_last_wall,_last_rc_zero_seq
+        global _live_latest,_live_last_wall,_last_rc_zero_seq,_yaw_zero_deg
         with _lock:
             _live_latest=None
             _live_last_wall=0.0
             _last_rc_zero_seq=None
             _zero["x"]=_zero["y"]=_zero["z"]=None
+            _yaw_zero_deg=None
             _raw_zero["n"]=_raw_zero["e"]=None
         _runtime_started_wall=time.time()
         _active_csv=None
@@ -1078,7 +1088,7 @@ def telemetry():
     return _strip_legacy_imu_fields(latest)
 
 def set_zero():
-    global _live_latest,_imu_zero,_fused_zero,_camvc_zero
+    global _live_latest,_imu_zero,_fused_zero,_camvc_zero,_yaw_zero_deg
     with _lock:
         if not _live_latest:
             raise RuntimeError("Нет live-телеметрии WebSocket")
@@ -1088,6 +1098,11 @@ def set_zero():
         raw_y=(zy or 0.0)+float(cur.get("y_mm",0.0))/1000.0
         raw_z=(zz or 0.0)+float(cur.get("z_mm",0.0))/1000.0
         _zero["x"],_zero["y"],_zero["z"]=raw_x,raw_y,raw_z
+        # HOME defines the current heading as local yaw=0.  _live_latest
+        # contains yaw relative to the previous HOME, so reconstruct the
+        # absolute FC yaw before advancing the baseline.
+        cur_yaw_rel=float(cur.get("yaw_deg",0.0) or 0.0)
+        _yaw_zero_deg=((_yaw_zero_deg or 0.0)+cur_yaw_rel+180.0)%360.0-180.0
         rn=cur.get("raw_of_n_mm")
         re=cur.get("raw_of_e_mm")
         if rn is not None and re is not None:
@@ -1106,6 +1121,7 @@ def set_zero():
             v=cur.get(key)
             if v is not None: _camvc_zero[axis]=(_camvc_zero[axis] or 0.0)+float(v)
         cur["x_mm"]=cur["y_mm"]=cur["z_mm"]=0.0
+        cur["yaw_deg"]=0.0
         cur["ekf_drift_mm"]=0.0
         if rn is not None and re is not None:
             cur["raw_of_n_mm"]=0.0;cur["raw_of_e_mm"]=0.0;cur["raw_of_drift_mm"]=0.0
@@ -1919,15 +1935,23 @@ function initGL(){
  c.onwheel=e=>{e.preventDefault();viewDist=clamp(viewDist+e.deltaY*.005,3.5,11);renderScene()};
 }
 function addLine(P,C,a,b,col){P.push(...a,...b);C.push(...col,...col)}
+function addThickLine(P,C,a,b,col){
+ // WebGL1 lineWidth is commonly fixed to 1 px. Draw a small bundle whose
+ // world-space separation follows camera distance, keeping axes/trail visible
+ // while zooming and orbiting.
+ let e=Math.max(.004,viewDist*.0015);
+ const offs=[[0,0,0],[e,0,0],[-e,0,0],[0,e,0],[0,-e,0],[0,0,e],[0,0,-e]];
+ for(const o of offs)addLine(P,C,[a[0]+o[0],a[1]+o[1],a[2]+o[2]],[b[0]+o[0],b[1]+o[1],b[2]+o[2]],col);
+}
 function addCircle(P,C,center,r,col,plane='xy'){let n=28;for(let i=0;i<n;i++){let a=i/n*Math.PI*2,b=(i+1)/n*Math.PI*2,A=[...center],B=[...center];if(plane==='xy'){A[0]+=Math.cos(a)*r;A[1]+=Math.sin(a)*r;B[0]+=Math.cos(b)*r;B[1]+=Math.sin(b)*r}else{A[0]+=Math.cos(a)*r;A[2]+=Math.sin(a)*r;B[0]+=Math.cos(b)*r;B[2]+=Math.sin(b)*r}addLine(P,C,A,B,col)}}
 function rotLocal(p,r,pit,y){let cr=Math.cos(r),sr=Math.sin(r),cp=Math.cos(pit),sp=Math.sin(pit),cy=Math.cos(y),sy=Math.sin(y);let [x,Y,z]=p;let y1=cr*Y-sr*z,z1=sr*Y+cr*z,x1=x;let x2=cp*x1+sp*z1,y2=y1,z2=-sp*x1+cp*z1;return [cy*x2-sy*y2,sy*x2+cy*y2,z2]}
 function renderScene(){
  if(!gl)return;let c=$('glCanvas'),dpr=devicePixelRatio,w=Math.floor(c.clientWidth*dpr),h=Math.floor(c.clientHeight*dpr);if(c.width!==w||c.height!==h){c.width=w;c.height=h}gl.viewport(0,0,w,h);gl.clearColor(.025,.065,.095,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.enable(gl.DEPTH_TEST);
  let P=[],C=[];
  if($('showGrid').checked){for(let i=-10;i<=10;i++){let q=i*.25;addLine(P,C,[-2.5,q,0],[2.5,q,0],[.08,.23,.34]);addLine(P,C,[q,-2.5,0],[q,2.5,0],[.08,.23,.34])}}
- if($('showAxes').checked){addLine(P,C,[0,0,0],[1.15,0,0],[1,.15,.15]);addLine(P,C,[0,0,0],[0,1.15,0],[.1,1,.25]);addLine(P,C,[0,0,0],[0,0,1.15],[.1,.45,1])}
+ if($('showAxes').checked){addThickLine(P,C,[0,0,0],[1.15,0,0],[1,.15,.15]);addThickLine(P,C,[0,0,0],[0,1.15,0],[.1,1,.25]);addThickLine(P,C,[0,0,0],[0,0,1.15],[.1,.45,1])}
  addCircle(P,C,[0,0,.01],.08,[.1,1,.35]);
- if(latest&&$('showTrail').checked&&(latest.trail||[]).length>1){let tr=latest.trail;for(let i=1;i<tr.length;i++){let a=tr[i-1],b=tr[i];addLine(P,C,[-a.x_mm/1000,a.y_mm/1000,-(a.z_mm||0)/1000],[-b.x_mm/1000,b.y_mm/1000,-(b.z_mm||0)/1000],[.05,.75,1])}}
+ if(latest&&$('showTrail').checked&&(latest.trail||[]).length>1){let tr=latest.trail;for(let i=1;i<tr.length;i++){let a=tr[i-1],b=tr[i];addThickLine(P,C,[-a.x_mm/1000,a.y_mm/1000,-(a.z_mm||0)/1000],[-b.x_mm/1000,b.y_mm/1000,-(b.z_mm||0)/1000],[.05,.75,1])}}
  let pos=latest?[-(latest.x_mm||0)/1000,(latest.y_mm||0)/1000,-(latest.z_mm||0)/1000]:[0,0,.2],rr=(latest?.roll_deg||0)*Math.PI/180,pp=(latest?.pitch_deg||0)*Math.PI/180,yy=(latest?.yaw_deg||0)*Math.PI/180;
  function wp(v){let q=rotLocal(v,rr,pp,yy);return[q[0]+pos[0],q[1]+pos[1],q[2]+pos[2]]}
  {
