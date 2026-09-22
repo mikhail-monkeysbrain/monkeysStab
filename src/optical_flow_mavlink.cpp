@@ -2754,6 +2754,76 @@ int main(int argc,char** argv){
 
           metric_step=metric_shadow::estimate(mi);
 
+          // PERSPECTIVE_CELL_SHADOW_V1: diagnostic-only 3x3 ray-plane replay.
+          // Uses the exact same accepted RANSAC correspondences, K/D, attitude,
+          // range and extrinsics as Metric Shadow, but estimates each image
+          // region independently. It never affects production OPTICAL_FLOW.
+          std::array<metric_shadow::Step,9> perspective_cell_steps{};
+          std::array<int,9> perspective_cell_pairs{};
+          {
+            std::array<metric_shadow::Input,9> cell_inputs;
+            for(int ci=0;ci<9;++ci){
+              cell_inputs[ci]=mi;
+              cell_inputs[ci].px0.clear();
+              cell_inputs[ci].px1.clear();
+            }
+            for(size_t k=0;k<mi.px0.size() && k<mi.px1.size();++k){
+              const double nx=(mi.px0[k].x/(double)prev.cols-g_feature_roi.x0)/
+                              (g_feature_roi.x1-g_feature_roi.x0);
+              const double ny=(mi.px0[k].y/(double)prev.rows-g_feature_roi.y0)/
+                              (g_feature_roi.y1-g_feature_roi.y0);
+              const int cx=std::clamp((int)std::floor(nx*3.0),0,2);
+              const int cy=std::clamp((int)std::floor(ny*3.0),0,2);
+              const int ci=cy*3+cx;
+              cell_inputs[ci].px0.push_back(mi.px0[k]);
+              cell_inputs[ci].px1.push_back(mi.px1[k]);
+            }
+            for(int ci=0;ci<9;++ci){
+              perspective_cell_pairs[ci]=(int)cell_inputs[ci].px0.size();
+              perspective_cell_steps[ci]=metric_shadow::estimate(cell_inputs[ci]);
+            }
+          }
+
+          static std::ofstream perspective_cell_csv;
+          static bool perspective_cell_header=false;
+          if(!perspective_cell_csv.is_open()){
+            const std::filesystem::path production_csv_path(csvpath);
+            perspective_cell_csv.open(
+              production_csv_path.parent_path()/"perspective_cell_shadow.csv",
+              std::ios::out|std::ios::trunc);
+          }
+          if(perspective_cell_csv.is_open()){
+            if(!perspective_cell_header){
+              perspective_cell_csv<<"frame,t0_ns,t1_ns";
+              for(int ci=0;ci<9;++ci){
+                perspective_cell_csv<<",c"<<ci<<"_pairs"
+                  <<",c"<<ci<<"_valid"
+                  <<",c"<<ci<<"_reason"
+                  <<",c"<<ci<<"_used"
+                  <<",c"<<ci<<"_dN_m"
+                  <<",c"<<ci<<"_dE_m"
+                  <<",c"<<ci<<"_dD_m"
+                  <<",c"<<ci<<"_residual_median_m";
+              }
+              perspective_cell_csv<<'\n';
+              perspective_cell_header=true;
+            }
+            perspective_cell_csv<<frame<<','<<prev_ts<<','<<ts;
+            for(int ci=0;ci<9;++ci){
+              const auto& cs=perspective_cell_steps[ci];
+              perspective_cell_csv<<','<<perspective_cell_pairs[ci]
+                <<','<<(cs.valid?1:0)
+                <<','<<metric_shadow::rejectReasonName(cs.reason)
+                <<','<<cs.points
+                <<','<<cs.delta_local_m[0]
+                <<','<<cs.delta_local_m[1]
+                <<','<<cs.delta_local_m[2]
+                <<','<<cs.residual_median_m;
+            }
+            perspective_cell_csv<<'\n';
+            perspective_cell_csv.flush();
+          }
+
           if(a0.valid){
             HighresPhasePending pq;
             pq.frame=frame;
