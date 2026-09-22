@@ -2916,7 +2916,7 @@ int main(int argc,char** argv){
               <<causal35_publish_flow_x<<','<<causal35_publish_flow_y<<','
               <<(r0.valid?1:0)<<','<<(r1.valid?1:0)<<','
               <<r0.distance_m<<','<<r1.distance_m<<','
-              <<(r1.distance_m-r0.distance_m)<<'\\n';
+              <<(r1.distance_m-r0.distance_m)<<'\n';
             angular_b_csv.flush();
           }
 
