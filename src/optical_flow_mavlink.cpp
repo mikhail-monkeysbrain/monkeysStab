@@ -900,8 +900,7 @@ struct FlowFc {
                                gyro.roll,gyro.pitch,gyro.yaw,q.time_usec,
                 (imu_cam_valid && (monoNs()-imu_cam_recv_ns)>=0 &&
                  (monoNs()-imu_cam_recv_ns)<100000000LL &&
-                 std::hypot(imu_cam_vn,imu_cam_ve)<0.01),
-                (imu_cam_valid ? std::hypot(imu_cam_vn,imu_cam_ve) : 1e9));
+                 std::hypot(imu_cam_vn,imu_cam_ve)<0.01));
       // FUSED-V1 IMU velocity prediction. Position remains WORKED5-only in V1.
       if(imu_dr_state.calibrated &&
          imu_dr_state.diag_dt>0.0 &&
@@ -945,8 +944,7 @@ struct FlowFc {
                   q.xgyro,q.ygyro,q.zgyro,
                   gyro.roll,gyro.pitch,gyro.yaw,
                   q.time_usec,
-                  false,
-                  (imu_cam_valid ? std::hypot(imu_cam_vn,imu_cam_ve) : 1e9));
+                  false);
 
               // Three consecutive fresh WORKED5 stationary observations
               // confirm horizontal zero velocity in the shadow only.
@@ -1864,15 +1862,8 @@ int main(int argc,char** argv){
     calib.fx*=focal_scale; calib.fy*=focal_scale;
     calib.K=(cv::Mat_<double>(3,3)<<calib.fx,0,calib.cx,0,calib.fy,calib.cy,0,0,1);
 
-    if(!dataset_dir.empty()){
-      std::error_code ec;
-      std::filesystem::create_directories(dataset_dir,ec);
-      if(ec) throw std::runtime_error("не удалось создать каталог датасета: "+dataset_dir+" ("+ec.message()+")");
-    }
-
     Camera cam; cam.openDev(camdev);
-    LunaReader luna;
-    luna.start(lunadev,dataset_dir.empty()?std::string():dataset_dir+"/luna_raw.csv");
+    LunaReader luna; luna.start(lunadev);
     FlowFc fc; fc.start(fcdev);
     if(!remote_log_path.empty()){
       if(fc.startRemoteLog(remote_log_path)){
@@ -1908,20 +1899,12 @@ int main(int argc,char** argv){
                <<" duration="<<(dataset_duration_sec>0.0?std::to_string(dataset_duration_sec):std::string("manual"))
                <<" s\n";
     }
-    // WEB_RAW_DATASET_GATE_V1: when --dataset-dir is not fixed at startup,
-    // Web may gate RAW capture without restarting the flight runtime by writing
-    // the target directory to this control file. Removing the file stops RAW
-    // capture. Production OF/range processing is unaffected.
-    const std::string dataset_control_path="/tmp/monkeysstab_raw_dataset_path";
-    std::string dynamic_dataset_dir=dataset_dir;
-    int64_t dataset_control_last_check_ns=0;
-
     int64_t last_csv_flush_ns=monoNs();
     constexpr int64_t kCsvLiveFlushNs=50000000LL; // 50 ms: low-latency web telemetry without per-frame fsync
     constexpr std::streamoff kCsvMaxBytes=250LL*1024LL*1024LL;
     bool csv_logging_enabled=true;
     bool csv_limit_reported=false;
-    csv<<"mono_ns,camera_ts_ns,v4l2_timestamp_ns,camera_dequeue_ns,v4l2_flags,v4l2_to_dequeue_ms,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,lever_valid,lever_production_applied,lever_flow_body_x,lever_flow_body_y,lever_pred_flow_x,lever_pred_flow_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,stabilised_publish_mode,stabilised_publish_ready,stabilised_publish_source,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,rc_zero_seq,worked5_valid,worked5_points,worked5_hcam_m,worked5_du_norm,worked5_dv_norm,worked5_dx_m,worked5_dy_m,worked5_dN_m,worked5_dE_m,worked5_acc_n_m,worked5_acc_e_m,imu_v2_cam_speed_mps,imu_v2_gravity_weight,imu_v2_external_zupt_allow,imu_v2_zupt_active,imu_v2_stationary_samples,imu_v2_acc_n,imu_v2_acc_e,imu_v2_acc_d,imu_v2_raw_ax,imu_v2_raw_ay,imu_v2_raw_az,imu_v2_gravity_x,imu_v2_gravity_y,imu_v2_gravity_z,imu_v2_native_rx,imu_v2_native_ry,imu_v2_native_rz,imu_v2_trimmed_rx,imu_v2_trimmed_ry,imu_v2_trimmed_rz,imu_v2_vel_n,imu_v2_vel_e,imu_v2_vel_d,imu_v2_pos_n,imu_v2_pos_e,imu_v2_pos_d,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
+    csv<<"mono_ns,camera_ts_ns,v4l2_timestamp_ns,camera_dequeue_ns,v4l2_flags,v4l2_to_dequeue_ms,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,lever_valid,lever_production_applied,lever_flow_body_x,lever_flow_body_y,lever_pred_flow_x,lever_pred_flow_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,stabilised_publish_mode,stabilised_publish_ready,stabilised_publish_source,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,rc_zero_seq,worked5_valid,worked5_points,worked5_hcam_m,worked5_du_norm,worked5_dv_norm,worked5_dx_m,worked5_dy_m,worked5_dN_m,worked5_dE_m,worked5_acc_n_m,worked5_acc_e_m,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
 
     if(g_fb_shadow_max_px>0.0){
       std::cerr<<(g_obs_shadow_enabled?"A/B/C/D SHADOW: ":"A/B/C SHADOW: ")
@@ -2326,40 +2309,6 @@ int main(int argc,char** argv){
 
       const int64_t now=monoNs();
 
-      if(dataset_dir.empty() && now-dataset_control_last_check_ns>=100000000LL){
-        dataset_control_last_check_ns=now;
-        std::string requested;
-        {
-          std::ifstream ctl(dataset_control_path);
-          if(ctl) std::getline(ctl,requested);
-        }
-        while(!requested.empty() && (requested.back()=='\r' || requested.back()=='\n' || requested.back()==' '))
-          requested.pop_back();
-        if(requested!=dynamic_dataset_dir){
-          if(dataset_frames_bin.is_open()){ dataset_frames_bin.flush(); dataset_frames_bin.close(); }
-          if(dataset_frames_csv.is_open()){ dataset_frames_csv.flush(); dataset_frames_csv.close(); }
-          luna.setRawCsv("");
-          dynamic_dataset_dir.clear();
-          dataset_saved_frames=0; dataset_saved_bytes=0; dataset_start_ns=0;
-          if(!requested.empty()){
-            std::error_code ec;
-            std::filesystem::create_directories(requested,ec);
-            if(ec) throw std::runtime_error("не удалось создать gated dataset: "+requested+" ("+ec.message()+")");
-            dataset_frames_bin.open(requested+"/frames.mjpgbin",std::ios::binary|std::ios::trunc);
-            dataset_frames_csv.open(requested+"/frames.csv",std::ios::trunc);
-            if(!dataset_frames_bin || !dataset_frames_csv)
-              throw std::runtime_error("не удалось открыть gated dataset: "+requested);
-            dataset_frames_csv<<"dataset_frame,camera_ts_ns,mono_ns,jpeg_size\n";
-            luna.setRawCsv(requested+"/luna_raw.csv");
-            dynamic_dataset_dir=requested;
-            dataset_start_ns=now;
-            std::cerr<<"GATED RAW DATASET START: "<<requested<<"\n";
-          } else {
-            std::cerr<<"GATED RAW DATASET STOP\n";
-          }
-        }
-      }
-
       if(dataset_frames_bin.is_open()){
         const uint64_t ts64=(uint64_t)std::max<int64_t>(0,ts);
         const uint32_t sz32=(uint32_t)std::min<size_t>(latest_jpeg.size(),0xffffffffu);
@@ -2652,7 +2601,6 @@ int main(int argc,char** argv){
         static std::deque<HighresPhasePending> highres_phase_pending;
         static std::ofstream highres_phase_csv;
         static bool highres_phase_header=false;
-        static bool highres_phase_logging_enabled=true;
         // HIGHRES_CAUSAL15_SHADOW_V1: diagnostic-only bounded causal hold.
         // Never feeds Variant B publication until its coverage/error is audited.
         static std::ofstream highres_causal15_csv;
@@ -2722,7 +2670,7 @@ int main(int argc,char** argv){
           // cannot be evaluated causally at t1 because those gyro samples do
           // not exist yet. Wait 30 ms, then evaluate every offset on the same
           // stored camera correspondences and geometry.
-          if(highres_phase_logging_enabled && !highres_phase_csv.is_open()){
+          if(!highres_phase_csv.is_open()){
             const std::filesystem::path production_csv_path(csvpath);
             highres_phase_csv.open(
               production_csv_path.parent_path()/"highres_phase_sweep_v2.csv",
@@ -2764,12 +2712,6 @@ int main(int argc,char** argv){
               }
               highres_phase_csv<<'\n';
               highres_phase_csv.flush();
-              constexpr std::streamoff kHighresPhaseCsvMaxBytes=64LL*1024LL*1024LL;
-              const std::streamoff phase_pos=highres_phase_csv.tellp();
-              if(phase_pos<0 || phase_pos>=kHighresPhaseCsvMaxBytes){
-                highres_phase_csv.close();
-                highres_phase_logging_enabled=false;
-              }
             }
           }
 
@@ -3933,8 +3875,7 @@ int main(int argc,char** argv){
         {
           static std::ofstream dr_csv;
           static bool dr_header=false;
-          static bool dr_logging_enabled=true;
-          if(dr_logging_enabled && !dr_csv.is_open()){
+          if(!dr_csv.is_open()){
             const std::filesystem::path production_csv_path(csvpath);
             dr_csv.open(
               production_csv_path.parent_path()/"deltar_rotation_shadow.csv",
@@ -4144,12 +4085,6 @@ int main(int argc,char** argv){
           }
           dr_csv<<'\n';
           dr_csv.flush();
-          constexpr std::streamoff kDeltaRShadowCsvMaxBytes=128LL*1024LL*1024LL;
-          const std::streamoff dr_pos=dr_csv.tellp();
-          if(dr_pos<0 || dr_pos>=kDeltaRShadowCsvMaxBytes){
-            dr_csv.close();
-            dr_logging_enabled=false;
-          }
         }
 
         FlowFcTarget csv_ct{}; FlowFcAttTarget csv_ca{}; FlowFcOutputs csv_co{};
@@ -4208,18 +4143,6 @@ int main(int argc,char** argv){
            <<worked5_diag_du_norm<<','<<worked5_diag_dv_norm<<','
            <<worked5_diag_dx<<','<<worked5_diag_dy<<','<<worked5_diag_dN<<','<<worked5_diag_dE<<','
            <<web_raw_n<<','<<web_raw_e<<','
-           <<fc.imu_dr_state.diag_external_motion_speed_mps<<','
-           <<fc.imu_dr_state.diag_gravity_correction_weight<<','
-           <<(fc.imu_dr_state.diag_external_zupt_allow?1:0)<<','
-           <<(fc.imu_dr_state.diag_zupt_active?1:0)<<','
-           <<fc.imu_dr_state.stationary_samples<<','
-           <<fc.imu_dr_state.acc_n<<','<<fc.imu_dr_state.acc_e<<','<<fc.imu_dr_state.acc_d<<','
-           <<fc.imu_dr_state.diag_raw_ax<<','<<fc.imu_dr_state.diag_raw_ay<<','<<fc.imu_dr_state.diag_raw_az<<','
-           <<fc.imu_dr_state.diag_gravity_x<<','<<fc.imu_dr_state.diag_gravity_y<<','<<fc.imu_dr_state.diag_gravity_z<<','
-           <<fc.imu_dr_state.diag_native_rx<<','<<fc.imu_dr_state.diag_native_ry<<','<<fc.imu_dr_state.diag_native_rz<<','
-           <<fc.imu_dr_state.diag_trimmed_rx<<','<<fc.imu_dr_state.diag_trimmed_ry<<','<<fc.imu_dr_state.diag_trimmed_rz<<','
-           <<fc.imu_dr_state.vel_n<<','<<fc.imu_dr_state.vel_e<<','<<fc.imu_dr_state.vel_d<<','
-           <<fc.imu_dr_state.pos_n<<','<<fc.imu_dr_state.pos_e<<','<<fc.imu_dr_state.pos_d<<','
            <<(fg_ok?fg.roll:0.0)<<','<<(fg_ok?fg.pitch:0.0)<<','<<(fg_ok?fg.yaw:0.0)<<','
            <<(fg_ok?fg.x:0.0)<<','<<(fg_ok?fg.y:0.0)<<','<<(fg_ok?fg.z:0.0)<<','<<(fg_ok?fg_age:-1.0)<<','<<fg_samples<<','
            <<(csv_ct_ok?1:0)<<','<<csv_ct.x<<','<<csv_ct.y<<','<<csv_ct.vx<<','<<csv_ct.vy<<','<<(csv_ct_ok?csv_ct_age:-1.0)<<','
@@ -4281,16 +4204,6 @@ int main(int argc,char** argv){
             <<",\"raw_of_e\":"<<jsonNumber(web_raw_e)
             <<",\"raw_of_vn\":"<<jsonNumber(web_raw_vn)
             <<",\"raw_of_ve\":"<<jsonNumber(web_raw_ve)
-            <<",\"worked5_valid\":"<<(worked5_diag_valid?"true":"false")
-            <<",\"worked5_dN_m\":"<<jsonNumber(worked5_diag_dN)
-            <<",\"worked5_dE_m\":"<<jsonNumber(worked5_diag_dE)
-            <<",\"variant_b_publish_mode\":"<<(stabilised_unified_publish?"true":"false")
-            <<",\"variant_b_ready\":"<<(stabilised_publish_ready?"true":"false")
-            <<",\"variant_b_source\":"<<stabilised_unified_shadow_source
-            <<",\"variant_b_flow_x\":"<<jsonNumber(flow_send_x)
-            <<",\"variant_b_flow_y\":"<<jsonNumber(flow_send_y)
-            <<",\"flow_sent\":"<<(flow_sent?"true":"false")
-            <<",\"range_sent\":"<<(range_sent?"true":"false")
             <<",\"imu_raw_ax\":"<<jsonNumber(fc.imu.ax)
             <<",\"imu_raw_ay\":"<<jsonNumber(fc.imu.ay)
             <<",\"imu_raw_az\":"<<jsonNumber(fc.imu.az)
@@ -4300,16 +4213,6 @@ int main(int argc,char** argv){
             <<",\"imu_dr_bias_bx\":"<<jsonNumber(fc.imu_dr_state.bias_bx)
             <<",\"imu_dr_bias_by\":"<<jsonNumber(fc.imu_dr_state.bias_by)
             <<",\"imu_dr_bias_bz\":"<<jsonNumber(fc.imu_dr_state.bias_bz)
-            <<",\"imu_startup_res_mean_x\":"<<jsonNumber(fc.imu_dr_state.startup_res_mean_x)
-            <<",\"imu_startup_res_mean_y\":"<<jsonNumber(fc.imu_dr_state.startup_res_mean_y)
-            <<",\"imu_startup_res_mean_z\":"<<jsonNumber(fc.imu_dr_state.startup_res_mean_z)
-            <<",\"imu_startup_res_sd_x\":"<<jsonNumber(fc.imu_dr_state.bias_samples>1?std::sqrt(fc.imu_dr_state.startup_res_m2_x/(fc.imu_dr_state.bias_samples-1)):0.0)
-            <<",\"imu_startup_res_sd_y\":"<<jsonNumber(fc.imu_dr_state.bias_samples>1?std::sqrt(fc.imu_dr_state.startup_res_m2_y/(fc.imu_dr_state.bias_samples-1)):0.0)
-            <<",\"imu_startup_res_sd_z\":"<<jsonNumber(fc.imu_dr_state.bias_samples>1?std::sqrt(fc.imu_dr_state.startup_res_m2_z/(fc.imu_dr_state.bias_samples-1)):0.0)
-            <<",\"imu_startup_res_norm_max\":"<<jsonNumber(fc.imu_dr_state.startup_res_norm_max)
-            <<",\"imu_startup_gmag_mean\":"<<jsonNumber(fc.imu_dr_state.startup_gmag_mean)
-            <<",\"imu_startup_gmag_sd\":"<<jsonNumber(fc.imu_dr_state.bias_samples>1?std::sqrt(fc.imu_dr_state.startup_gmag_m2/(fc.imu_dr_state.bias_samples-1)):0.0)
-            <<",\"imu_startup_gmag_max\":"<<jsonNumber(fc.imu_dr_state.startup_gmag_max)
             <<",\"imu_dr_n_mm\":"<<jsonNumber(fc.imu_dr_state.pos_n*1000.0)
             <<",\"imu_dr_e_mm\":"<<jsonNumber(fc.imu_dr_state.pos_e*1000.0)
             <<",\"imu_dr_d_mm\":"<<jsonNumber(fc.imu_dr_state.pos_d*1000.0)
