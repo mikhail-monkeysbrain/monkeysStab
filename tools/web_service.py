@@ -193,6 +193,14 @@ def ws_broadcast(obj):
         with _ws_lock:
             for sock in dead:_ws_clients.discard(sock)
 
+def _strip_legacy_imu_fields(payload):
+    if not isinstance(payload, dict):
+        return payload
+    for key in list(payload):
+        if key.startswith("imu_") or key.startswith("fused_"):
+            payload.pop(key, None)
+    return payload
+
 def live_payload(raw):
     global _live_latest,_live_last_wall,_last_rc_zero_seq,_imu_zero,_fused_zero,_camvc_zero
     try:
@@ -382,6 +390,7 @@ def live_payload(raw):
         "pitch_deg":raw.get("pitch_deg",0.0),
         "yaw_deg":raw.get("yaw_deg",0.0),
     }
+    _strip_legacy_imu_fields(out)
     with _lock:
         _live_latest=out
         _live_last_wall=time.time()
@@ -1066,7 +1075,7 @@ def telemetry():
     latest["running"]=live
     latest["transport"]="websocket"
     latest["source_age_ms"]=age_ms
-    return latest
+    return _strip_legacy_imu_fields(latest)
 
 def set_zero():
     global _live_latest,_imu_zero,_fused_zero,_camvc_zero
@@ -1104,6 +1113,7 @@ def set_zero():
         cur["fused_v1_n_mm"]=cur["fused_v1_e_mm"]=0.0
         cur["imu_camvc_n_mm"]=cur["imu_camvc_e_mm"]=0.0
         cur["imu_camvc_d_mm"]=None
+        _strip_legacy_imu_fields(cur)
         _live_latest=cur
     ws_broadcast({"type":"zero"})
 
