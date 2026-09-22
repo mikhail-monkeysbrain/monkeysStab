@@ -1939,7 +1939,7 @@ function initGL(){
  prog=gl.createProgram();gl.attachShader(prog,vs);gl.attachShader(prog,fs);gl.linkProgram(prog);gl.useProgram(prog);
  locPos=gl.getAttribLocation(prog,'p');locCol=gl.getAttribLocation(prog,'c');locMvp=gl.getUniformLocation(prog,'m');bufPos=gl.createBuffer();bufCol=gl.createBuffer();
  c.onmousedown=e=>{drag=true;lastX=e.clientX;lastY=e.clientY};window.onmouseup=()=>drag=false;window.onmousemove=e=>{if(!drag)return;viewYaw+=(e.clientX-lastX)*.008;viewPitch=clamp(viewPitch+(e.clientY-lastY)*.008,.1,1.45);lastX=e.clientX;lastY=e.clientY;renderScene()};
- c.onwheel=e=>{e.preventDefault();viewDist=clamp(viewDist+e.deltaY*.005,3.5,11);renderScene()};
+ c.onwheel=e=>{e.preventDefault();viewDist=clamp(viewDist+e.deltaY*.005,0.8,11);renderScene()};
 }
 function addLine(P,C,a,b,col){P.push(...a,...b);C.push(...col,...col)}
 function addThickLine(P,C,a,b,col,r=.014){
@@ -1962,9 +1962,9 @@ function renderScene(){
  let pos=latest?[(latest.x_mm||0)/1000,(latest.y_mm||0)/1000,-(latest.z_mm||0)/1000]:[0,0,.2],rr=(latest?.roll_deg||0)*Math.PI/180,pp=(latest?.pitch_deg||0)*Math.PI/180,yy=(latest?.yaw_deg||0)*Math.PI/180;
  function wp(v){let q=rotLocal(v,rr,pp,yy);return[q[0]+pos[0],q[1]+pos[1],q[2]+pos[2]]}
  {
-   let arm=.32;addLine(P,C,wp([arm,arm,0]),wp([-arm,-arm,0]),[.7,.78,.84]);addLine(P,C,wp([arm,-arm,0]),wp([-arm,arm,0]),[.7,.78,.84]);
-   [[arm,arm],[-arm,-arm],[arm,-arm],[-arm,arm]].forEach((xy,i)=>{let n=30;for(let k=0;k<n;k++){let a=k/n*Math.PI*2,b=(k+1)/n*Math.PI*2,A=wp([xy[0]+Math.cos(a)*.17,xy[1]+Math.sin(a)*.17,.03]),B=wp([xy[0]+Math.cos(b)*.17,xy[1]+Math.sin(b)*.17,.03]);addLine(P,C,A,B,i<2?[.1,.9,.55]:[.25,.55,1])}});
-   let body=[[-.12,-.08,-.05],[.12,-.08,-.05],[.12,.08,-.05],[-.12,.08,-.05],[-.12,-.08,.07],[.12,-.08,.07],[.12,.08,.07],[-.12,.08,.07]],edges=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];edges.forEach(e=>addLine(P,C,wp(body[e[0]]),wp(body[e[1]]),[1,.45,.08]));addLine(P,C,wp([.1,0,.02]),wp([.48,0,.02]),[1,.1,.1]);
+   let arm=.16;addLine(P,C,wp([arm,arm,0]),wp([-arm,-arm,0]),[.7,.78,.84]);addLine(P,C,wp([arm,-arm,0]),wp([-arm,arm,0]),[.7,.78,.84]);
+   [[arm,arm],[-arm,-arm],[arm,-arm],[-arm,arm]].forEach((xy,i)=>{let n=30;for(let k=0;k<n;k++){let a=k/n*Math.PI*2,b=(k+1)/n*Math.PI*2,A=wp([xy[0]+Math.cos(a)*.085,xy[1]+Math.sin(a)*.085,.015]),B=wp([xy[0]+Math.cos(b)*.085,xy[1]+Math.sin(b)*.085,.015]);addLine(P,C,A,B,i<2?[.1,.9,.55]:[.25,.55,1])}});
+   let body=[[-.06,-.04,-.025],[.06,-.04,-.025],[.06,.04,-.025],[-.06,.04,-.025],[-.06,-.04,.035],[.06,-.04,.035],[.06,.04,.035],[-.06,.04,.035]],edges=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];edges.forEach(e=>addLine(P,C,wp(body[e[0]]),wp(body[e[1]]),[1,.45,.08]));addLine(P,C,wp([.05,0,.01]),wp([.24,0,.01]),[1,.1,.1]);
  }
  let a=viewYaw,p=viewPitch;if(viewMode==='top'){a=0;p=.05}else if(viewMode==='front'){a=Math.PI/2;p=.4}else if(viewMode==='side'){a=0;p=.4}
  let eye=[Math.cos(a)*Math.cos(p)*viewDist,Math.sin(a)*Math.cos(p)*viewDist,Math.sin(p)*viewDist],target=$('followCam').checked?pos:[0,0,.25],V=lookAt(eye,target,[0,0,1]),Pr=perspective(.8,w/h,.05,40),M=m4mul(Pr,V);gl.uniformMatrix4fv(locMvp,false,M);
