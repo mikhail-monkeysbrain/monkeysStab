@@ -1,226 +1,198 @@
 #!/usr/bin/env python3
 """
-Послойный read-only анализ воспроизводимости monkeysStab.
+Episode-based read-only forensic analyzer for monkeysStab.
 
-Скрипт НЕ изменяет runtime, параметры FC или логи. Он читает один или несколько
-optical_flow_mavlink.csv и сравнивает слои:
-  visual frontend -> WORKED5 BODY -> BODY->N/E -> published flow -> EKF3.
+IMPORTANT:
+- does not change runtime, FC parameters, logs, or production code;
+- does not infer physical direction or ground truth;
+- detects motion episodes only from logged WORKED5 per-frame BODY displacement;
+- reports where logged layers diverge: BODY -> N/E -> publish -> EKF3.
 
-Физическое направление и ошибка относительно ground truth намеренно НЕ
-выводятся: без отдельного GT это неизвестно.
+This V2 intentionally lives on a diagnostic-only branch.
 """
 from __future__ import annotations
-
-import argparse
-import csv
-import math
-import statistics
+import argparse, csv, math, time
 from pathlib import Path
 
-
-def f(row, key):
+def F(r,k):
     try:
-        v = float(row.get(key, ""))
+        v=float(r.get(k,""))
         return v if math.isfinite(v) else None
-    except (TypeError, ValueError):
-        return None
+    except (TypeError,ValueError): return None
 
+def B(r,k):
+    v=F(r,k); return v is not None and v!=0.0
 
-def truth(row, key):
-    v = f(row, key)
-    return v is not None and v != 0.0
+def fmt(v,scale=1.0,n=3):
+    return "N/A" if v is None or not math.isfinite(v) else f"{v*scale:.{n}f}"
 
+def percentile(a,p):
+    a=sorted(v for v in a if v is not None and math.isfinite(v))
+    if not a:return None
+    return a[min(len(a)-1,max(0,round((len(a)-1)*p)))]
 
-def pct(n, d):
-    return 100.0 * n / d if d else float("nan")
+def angle_delta(a,b):
+    return math.atan2(math.sin(b-a),math.cos(b-a))
 
-
-def q(values, frac):
-    a = sorted(v for v in values if v is not None and math.isfinite(v))
-    if not a:
-        return None
-    i = min(len(a) - 1, max(0, round((len(a) - 1) * frac)))
-    return a[i]
-
-
-def span(values):
-    a = [v for v in values if v is not None and math.isfinite(v)]
-    return (max(a) - min(a)) if a else None
-
-
-def endpoint_delta(rows, keys):
-    good = []
-    for r in rows:
-        vals = tuple(f(r, k) for k in keys)
-        if all(v is not None for v in vals):
-            good.append(vals)
-    if len(good) < 2:
-        return None
-    return tuple(b - a for a, b in zip(good[0], good[-1]))
-
-
-def norm2(x, y):
-    if x is None or y is None:
-        return None
-    return math.hypot(x, y)
-
-
-def fmt(v, scale=1.0, digits=3):
-    if v is None or not math.isfinite(v):
-        return "N/A"
-    return f"{v * scale:.{digits}f}"
-
+def unwrap_span(vals):
+    a=[v for v in vals if v is not None]
+    if len(a)<2:return None
+    u=[a[0]]
+    for v in a[1:]: u.append(u[-1]+angle_delta(u[-1],v))
+    return max(u)-min(u)
 
 def find_csv(p):
-    p = Path(p).expanduser()
-    if p.is_file():
-        return p
-    candidate = p / "optical_flow_mavlink.csv"
-    if candidate.is_file():
-        return candidate
-    raise FileNotFoundError(f"не найден optical_flow_mavlink.csv: {p}")
+    p=Path(p).expanduser()
+    if p.is_file(): return p
+    q=p/"optical_flow_mavlink.csv"
+    if q.is_file(): return q
+    raise FileNotFoundError(p)
 
+def load(path):
+    path=find_csv(path)
+    with path.open(newline="") as f:return path,list(csv.DictReader(f))
 
-def analyze(path):
-    path = find_csv(path)
-    with path.open(newline="") as fh:
-        rows = list(csv.DictReader(fh))
-    if not rows:
-        raise ValueError(f"пустой CSV: {path}")
+def mono_s(r):
+    v=F(r,"mono_ns")
+    return None if v is None else v/1e9
 
-    n = len(rows)
-    valid = [r for r in rows if truth(r, "valid")]
-    w5 = [r for r in rows if truth(r, "worked5_valid")]
-    sent = [r for r in rows if truth(r, "flow_sent")]
-    ready = [r for r in rows if truth(r, "stabilised_publish_ready")]
-    ekf = [r for r in rows if truth(r, "ekf_local_valid")]
+def step_body_mm(r):
+    if not B(r,"worked5_valid"): return 0.0
+    x=F(r,"worked5_dx_m") or 0.0; y=F(r,"worked5_dy_m") or 0.0
+    return 1000.0*math.hypot(x,y)
 
-    w5_dx = sum((f(r, "worked5_dx_m") or 0.0) for r in w5)
-    w5_dy = sum((f(r, "worked5_dy_m") or 0.0) for r in w5)
-    w5_dn = sum((f(r, "worked5_dN_m") or 0.0) for r in w5)
-    w5_de = sum((f(r, "worked5_dE_m") or 0.0) for r in w5)
+def episodes(rows, start_mm, stop_mm, start_frames, stop_frames, pad_s, merge_gap_s, min_motion_mm):
+    # Hysteresis over per-frame WORKED5 BODY displacement.
+    raw=[]; active=False; s=None; hi=lo=0; last_motion=None
+    for i,r in enumerate(rows):
+        m=step_body_mm(r)
+        hi = hi+1 if m>=start_mm else 0
+        lo = lo+1 if m<=stop_mm else 0
+        if not active and hi>=start_frames:
+            s=max(0,i-start_frames+1); active=True; lo=0
+        if active and m>stop_mm: last_motion=i
+        if active and lo>=stop_frames:
+            e=max(s,i-stop_frames)
+            raw.append((s,e)); active=False; hi=lo=0; s=None
+    if active and s is not None: raw.append((s,len(rows)-1))
 
-    # flow_send_x/y are angular rates. Integrate only rows actually sent.
-    pub_x = pub_y = 0.0
-    pub_steps = 0
-    for r in sent:
-        dt = f(r, "dt_s")
-        x = f(r, "flow_send_x")
-        y = f(r, "flow_send_y")
-        if dt is not None and x is not None and y is not None and 0.0 < dt < 0.2:
-            pub_x += x * dt
-            pub_y += y * dt
-            pub_steps += 1
+    # pad using timestamps, then merge close episodes
+    padded=[]
+    for s,e in raw:
+        ts=mono_s(rows[s]); te=mono_s(rows[e])
+        while s>0 and ts is not None and mono_s(rows[s-1]) is not None and ts-mono_s(rows[s-1])<=pad_s:
+            s-=1
+        while e+1<len(rows) and te is not None and mono_s(rows[e+1]) is not None and mono_s(rows[e+1])-te<=pad_s:
+            e+=1
+        padded.append((s,e))
+    merged=[]
+    for s,e in padded:
+        if merged:
+            pe=merged[-1][1]; a=mono_s(rows[pe]); b=mono_s(rows[s])
+            if a is not None and b is not None and b-a<=merge_gap_s:
+                merged[-1]=(merged[-1][0],e); continue
+        merged.append((s,e))
 
-    ekf_d = endpoint_delta(ekf, ("ekf_x_ned", "ekf_y_ned", "ekf_z_ned"))
-    roll = [f(r, "fc_roll") for r in rows]
-    pitch = [f(r, "fc_pitch") for r in rows]
-    yaw = [f(r, "fc_yaw") for r in rows]
+    out=[]
+    for s,e in merged:
+        dist=sum(step_body_mm(r) for r in rows[s:e+1])
+        if dist>=min_motion_mm: out.append((s,e))
+    return out
 
-    inliers = [f(r, "inliers") for r in valid]
-    ratios = [f(r, "inlier_ratio") for r in valid]
-    heights = [f(r, "worked5_hcam_m") for r in w5]
-    luna = [f(r, "luna_m") for r in rows]
-    luna_age = [f(r, "luna_age_ms") for r in rows]
-    att_age = [f(r, "fc_gyro_age_ms") for r in rows]
-    ekf_age = [f(r, "ekf_age_ms") for r in rows]
-    latency = [f(r, "frame_pipeline_latency_ms") for r in rows]
-    dtvals = [f(r, "dt_s") for r in valid]
-    drops = f(rows[-1], "camera_queue_dropped_total")
+def endpoint(rows,keys):
+    good=[]
+    for r in rows:
+        v=tuple(F(r,k) for k in keys)
+        if all(x is not None for x in v):good.append(v)
+    if len(good)<2:return None
+    return tuple(b-a for a,b in zip(good[0],good[-1]))
 
-    return {
-        "path": path, "rows": n,
-        "valid_pct": pct(len(valid), n),
-        "w5_pct": pct(len(w5), n),
-        "sent_pct": pct(len(sent), n),
-        "ready_pct": pct(len(ready), n),
-        "ekf_pct": pct(len(ekf), n),
-        "w5_dx": w5_dx, "w5_dy": w5_dy,
-        "w5_body_mag": norm2(w5_dx, w5_dy),
-        "w5_dn": w5_dn, "w5_de": w5_de,
-        "w5_ne_mag": norm2(w5_dn, w5_de),
-        "pub_x_int": pub_x, "pub_y_int": pub_y, "pub_steps": pub_steps,
-        "ekf_dn": ekf_d[0] if ekf_d else None,
-        "ekf_de": ekf_d[1] if ekf_d else None,
-        "ekf_dz": ekf_d[2] if ekf_d else None,
-        "ekf_mag": norm2(ekf_d[0], ekf_d[1]) if ekf_d else None,
-        "roll_span_deg": math.degrees(span(roll)) if span(roll) is not None else None,
-        "pitch_span_deg": math.degrees(span(pitch)) if span(pitch) is not None else None,
-        "yaw_span_deg": math.degrees(span(yaw)) if span(yaw) is not None else None,
-        "inliers_med": q(inliers, .5), "inliers_min": q(inliers, 0),
-        "ratio_med": q(ratios, .5),
-        "height_med": q(heights, .5), "height_min": q(heights, 0), "height_max": q(heights, 1),
-        "luna_med": q(luna, .5), "luna_min": q(luna, 0), "luna_max": q(luna, 1),
-        "luna_age_p95": q(luna_age, .95),
-        "att_age_p95": q(att_age, .95),
-        "ekf_age_p95": q(ekf_age, .95),
-        "latency_p95": q(latency, .95),
-        "dt_med_ms": (q(dtvals, .5) * 1000.0) if q(dtvals, .5) is not None else None,
-        "drops": drops,
-    }
+def summarize(rows,s,e):
+    a=rows[s:e+1]; w=[r for r in a if B(r,"worked5_valid")]
+    dx=sum(F(r,"worked5_dx_m") or 0 for r in w); dy=sum(F(r,"worked5_dy_m") or 0 for r in w)
+    dn=sum(F(r,"worked5_dN_m") or 0 for r in w); de=sum(F(r,"worked5_dE_m") or 0 for r in w)
+    body=math.hypot(dx,dy); ne=math.hypot(dn,de)
+    ek=endpoint([r for r in a if B(r,"ekf_local_valid")],("ekf_x_ned","ekf_y_ned","ekf_z_ned"))
+    roll=[F(r,"fc_roll") for r in a]; pitch=[F(r,"fc_pitch") for r in a]; yaw=[F(r,"fc_yaw") for r in a]
+    h=[F(r,"worked5_hcam_m") for r in w]; la=[F(r,"luna_age_ms") for r in a]
+    aa=[F(r,"fc_gyro_age_ms") for r in a]; ea=[F(r,"ekf_age_ms") for r in a]
+    sent=sum(B(r,"flow_sent") for r in a); ready=sum(B(r,"stabilised_publish_ready") for r in a)
+    valid=sum(B(r,"valid") for r in a)
+    t0=mono_s(a[0]); t1=mono_s(a[-1]); dur=(t1-t0) if t0 is not None and t1 is not None else None
 
+    # Detect logged EKF jumps between adjacent valid samples; threshold is diagnostic, not GT.
+    jumps=[]; prev=None
+    for j,r in enumerate(a):
+        cur=tuple(F(r,k) for k in ("ekf_x_ned","ekf_y_ned","ekf_z_ned"))
+        if all(v is not None for v in cur):
+            if prev is not None:
+                d=math.sqrt(sum((x-y)**2 for x,y in zip(cur,prev)))
+                if d>0.25:jumps.append((j,d))
+            prev=cur
 
-def cv_pct(vals):
-    a = [v for v in vals if v is not None and math.isfinite(v)]
-    if len(a) < 2:
-        return None
-    mean = statistics.fmean(a)
-    return 100.0 * statistics.pstdev(a) / abs(mean) if abs(mean) > 1e-12 else None
+    flags=[]
+    if len(a) and sent/len(a)<0.98:flags.append("PUBLISH_GAP")
+    if percentile(aa,.95) is not None and percentile(aa,.95)>100:flags.append("ATTITUDE_STALE")
+    if jumps:flags.append("EKF_DISCONTINUITY")
+    rs=unwrap_span(roll); ps=unwrap_span(pitch); ys=unwrap_span(yaw)
+    if (rs is not None and abs(math.degrees(rs))>10) or (ps is not None and abs(math.degrees(ps))>10):flags.append("HIGH_TILT")
+    if ys is not None and abs(math.degrees(ys))>15:flags.append("YAW_CHANGE")
+    if body>0 and abs(ne-body)/body>0.10:flags.append("BODY_NE_DIVERGENCE")
 
+    return dict(s=s,e=e,n=len(a),dur=dur,valid=100*valid/len(a),w5=100*len(w)/len(a),
+      sent=100*sent/len(a),ready=100*ready/len(a),dx=dx,dy=dy,body=body,dn=dn,de=de,ne=ne,
+      ekdn=ek[0] if ek else None,ekde=ek[1] if ek else None,ekdz=ek[2] if ek else None,
+      ekmag=math.hypot(ek[0],ek[1]) if ek else None,
+      roll=math.degrees(rs) if rs is not None else None,pitch=math.degrees(ps) if ps is not None else None,
+      yaw=math.degrees(ys) if ys is not None else None,hmed=percentile(h,.5),hmin=percentile(h,0),hmax=percentile(h,1),
+      lap95=percentile(la,.95),aap95=percentile(aa,.95),eap95=percentile(ea,.95),jumps=len(jumps),flags=flags)
 
-def print_run(i, s):
-    print(f"\n===== RUN {i}: {s['path']} =====")
-    print("LAYER 1 — FRONTEND")
-    print(f"  rows={s['rows']} valid={s['valid_pct']:.2f}%  inliers med/min={fmt(s['inliers_med'])}/{fmt(s['inliers_min'])}  ratio med={fmt(s['ratio_med'])}")
-    print(f"  dt median={fmt(s['dt_med_ms'])} ms  pipeline p95={fmt(s['latency_p95'])} ms  queue_drops_total={fmt(s['drops'])}")
-    print("LAYER 2 — WORKED5 BODY")
-    print(f"  coverage={s['w5_pct']:.2f}%  dX={fmt(s['w5_dx'],1000)} mm  dY={fmt(s['w5_dy'],1000)} mm  |XY|={fmt(s['w5_body_mag'],1000)} mm")
-    print(f"  hcam med/min/max={fmt(s['height_med'],1000)}/{fmt(s['height_min'],1000)}/{fmt(s['height_max'],1000)} mm")
-    print("LAYER 3 — BODY -> N/E")
-    print(f"  dN={fmt(s['w5_dn'],1000)} mm  dE={fmt(s['w5_de'],1000)} mm  |NE|={fmt(s['w5_ne_mag'],1000)} mm")
-    print(f"  roll/pitch/yaw span={fmt(s['roll_span_deg'])}/{fmt(s['pitch_span_deg'])}/{fmt(s['yaw_span_deg'])} deg")
-    print("LAYER 4 — PUBLISH")
-    print(f"  sent={s['sent_pct']:.2f}% ready={s['ready_pct']:.2f}% integrated angular x/y={fmt(s['pub_x_int'],1,6)}/{fmt(s['pub_y_int'],1,6)} rad  steps={s['pub_steps']}")
-    print("LAYER 5 — EKF3")
-    print(f"  coverage={s['ekf_pct']:.2f}%  dN={fmt(s['ekf_dn'],1000)} mm  dE={fmt(s['ekf_de'],1000)} mm  dZ={fmt(s['ekf_dz'],1000)} mm  |XY|={fmt(s['ekf_mag'],1000)} mm")
-    print("TIMING / RANGE")
-    print(f"  Luna med/min/max={fmt(s['luna_med'],1000)}/{fmt(s['luna_min'],1000)}/{fmt(s['luna_max'],1000)} mm")
-    print(f"  age p95: Luna={fmt(s['luna_age_p95'])} ms ATT={fmt(s['att_age_p95'])} ms EKF={fmt(s['ekf_age_p95'])} ms")
-
+def progress(i,n,start,label):
+    elapsed=time.monotonic()-start; rate=elapsed/i if i else 0; left=rate*(n-i)
+    pct=100*i/n; bars=int(pct/5)
+    print(f"\r[{'█'*bars}{'░'*(20-bars)}] {pct:5.1f}% | {i}/{n} | {elapsed:6.1f}s | осталось ~{left:6.1f}s | {label[:30]:30s}",end="",flush=True)
 
 def main():
-    ap = argparse.ArgumentParser(description="Послойный анализ воспроизводимости monkeysStab")
-    ap.add_argument("runs", nargs="+", help="CSV или каталог прогона")
-    args = ap.parse_args()
+    p=argparse.ArgumentParser()
+    p.add_argument("runs",nargs="+")
+    p.add_argument("--start-mm",type=float,default=0.35,help="per-frame BODY threshold to enter motion")
+    p.add_argument("--stop-mm",type=float,default=0.15,help="per-frame BODY threshold to leave motion")
+    p.add_argument("--start-frames",type=int,default=3)
+    p.add_argument("--stop-frames",type=int,default=12)
+    p.add_argument("--pad-s",type=float,default=0.15)
+    p.add_argument("--merge-gap-s",type=float,default=0.35)
+    p.add_argument("--min-motion-mm",type=float,default=20.0)
+    args=p.parse_args()
 
-    stats = [analyze(p) for p in args.runs]
-    for i, s in enumerate(stats, 1):
-        print_run(i, s)
+    start=time.monotonic(); all_ep=[]
+    for i,x in enumerate(args.runs,1):
+        path,rows=load(x)
+        eps=episodes(rows,args.start_mm,args.stop_mm,args.start_frames,args.stop_frames,args.pad_s,args.merge_gap_s,args.min_motion_mm)
+        ss=[summarize(rows,s,e) for s,e in eps]
+        all_ep.append((path,ss))
+        progress(i,len(args.runs),start,path.name)
+    print()
 
-    print("\n===== CROSS-RUN REPRODUCIBILITY =====")
-    if len(stats) < 2:
-        print("Нужны >=2 прогона для cross-run статистики.")
-    else:
-        for label, key in [
-            ("WORKED5 BODY |XY|", "w5_body_mag"),
-            ("WORKED5 N/E  |XY|", "w5_ne_mag"),
-            ("EKF3         |XY|", "ekf_mag"),
-            ("yaw span", "yaw_span_deg"),
-            ("pitch span", "pitch_span_deg"),
-            ("roll span", "roll_span_deg"),
-        ]:
-            vals = [s[key] for s in stats]
-            scale = 1000.0 if "XY" in label else 1.0
-            unit = "mm" if "XY" in label else "deg"
-            rendered = ", ".join(fmt(v, scale) for v in vals)
-            cv = cv_pct(vals)
-            print(f"{label:20s}: [{rendered}] {unit}  CV={fmt(cv)}%")
+    print("\n===== EPISODE FORENSIC V2 =====")
+    total=0
+    for path,ss in all_ep:
+        print(f"\nFILE: {path}")
+        print(f"episodes={len(ss)}")
+        for k,z in enumerate(ss,1):
+            total+=1
+            flags=",".join(z["flags"]) if z["flags"] else "NONE"
+            print(f"  E{k:03d} rows={z['s']}..{z['e']} n={z['n']} dur={fmt(z['dur'])}s flags={flags}")
+            print(f"       BODY dX/dY/|XY|={fmt(z['dx'],1000)}/{fmt(z['dy'],1000)}/{fmt(z['body'],1000)} mm  W5={z['w5']:.2f}%")
+            print(f"       N/E dN/dE/|NE|={fmt(z['dn'],1000)}/{fmt(z['de'],1000)}/{fmt(z['ne'],1000)} mm")
+            print(f"       EKF dN/dE/dZ/|XY|={fmt(z['ekdn'],1000)}/{fmt(z['ekde'],1000)}/{fmt(z['ekdz'],1000)}/{fmt(z['ekmag'],1000)} mm jumps={z['jumps']}")
+            print(f"       spans roll/pitch/yaw={fmt(z['roll'])}/{fmt(z['pitch'])}/{fmt(z['yaw'])} deg")
+            print(f"       hcam med/min/max={fmt(z['hmed'],1000)}/{fmt(z['hmin'],1000)}/{fmt(z['hmax'],1000)} mm")
+            print(f"       valid={z['valid']:.2f}% sent={z['sent']:.2f}% ready={z['ready']:.2f}% age95 Luna/ATT/EKF={fmt(z['lap95'])}/{fmt(z['aap95'])}/{fmt(z['eap95'])} ms")
 
+    print(f"\nTOTAL EPISODES: {total}")
     print("\n===== FORENSIC CONTRACT =====")
-    print("Это RAW/LOG-derived facts. Физическое направление, истинная дистанция")
-    print("и ошибка относительно GT из этих CSV не выводятся.")
-    print("Классификация причины требует сравнения слоёв и, для ошибки %, отдельного GT.")
+    print("Эпизоды выделены только по logged WORKED5 BODY activity.")
+    print("Это НЕ физический ground truth и НЕ утверждение о направлении аппарата.")
+    print("Ошибка относительно реальной дистанции без отдельного GT не вычисляется.")
 
-
-if __name__ == "__main__":
-    main()
+if __name__=="__main__":main()
