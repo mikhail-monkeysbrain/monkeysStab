@@ -8,7 +8,7 @@ IMPORTANT:
 - detects motion episodes only from logged WORKED5 per-frame BODY displacement;
 - reports where logged layers diverge: BODY -> N/E -> publish -> EKF3.
 
-This V2 intentionally lives on a diagnostic-only branch.
+This V3 intentionally lives on a diagnostic-only branch. It adds layer-divergence classification only.
 """
 from __future__ import annotations
 import argparse, csv, math, time
@@ -145,7 +145,9 @@ def summarize(rows,s,e):
       ekmag=math.hypot(ek[0],ek[1]) if ek else None,
       roll=math.degrees(rs) if rs is not None else None,pitch=math.degrees(ps) if ps is not None else None,
       yaw=math.degrees(ys) if ys is not None else None,hmed=percentile(h,.5),hmin=percentile(h,0),hmax=percentile(h,1),
-      lap95=percentile(la,.95),aap95=percentile(aa,.95),eap95=percentile(ea,.95),jumps=len(jumps),flags=flags)
+      lap95=percentile(la,.95),aap95=percentile(aa,.95),eap95=percentile(ea,.95),jumps=len(jumps),flags=flags,
+      body_ne_pct=(100.0*(ne-body)/body) if body>=0.020 else None,
+      ne_ekf_pct=(100.0*(math.hypot(ek[0],ek[1])-ne)/ne) if ek and ne>=0.020 else None)
 
 def progress(i,n,start,label):
     elapsed=time.monotonic()-start; rate=elapsed/i if i else 0; left=rate*(n-i)
@@ -188,10 +190,11 @@ def main():
             print(f"       spans roll/pitch/yaw={fmt(z['roll'])}/{fmt(z['pitch'])}/{fmt(z['yaw'])} deg")
             print(f"       hcam med/min/max={fmt(z['hmed'],1000)}/{fmt(z['hmin'],1000)}/{fmt(z['hmax'],1000)} mm")
             print(f"       valid={z['valid']:.2f}% sent={z['sent']:.2f}% ready={z['ready']:.2f}% age95 Luna/ATT/EKF={fmt(z['lap95'])}/{fmt(z['aap95'])}/{fmt(z['eap95'])} ms")
+            print(f"       LAYER delta BODY->NE={fmt(z['body_ne_pct'])}%  NE->EKF={fmt(z['ne_ekf_pct'])}%")
 
     print(f"\nTOTAL EPISODES: {total}")
     print("\n===== FORENSIC CONTRACT =====")
-    print("Эпизоды выделены только по logged WORKED5 BODY activity.")
+    print("Эпизоды выделены только по logged WORKED5 BODY activity. V3 сравнивает только внутренние слои BODY->N/E->EKF.")
     print("Это НЕ физический ground truth и НЕ утверждение о направлении аппарата.")
     print("Ошибка относительно реальной дистанции без отдельного GT не вычисляется.")
 
