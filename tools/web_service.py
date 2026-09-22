@@ -286,9 +286,16 @@ def live_payload(raw):
     camvc_rel_n=(camvc_n-czn) if camvc_n is not None and czn is not None else None
     camvc_rel_e=(camvc_e-cze) if camvc_e is not None and cze is not None else None
     ekf_has_zero=zx is not None and zy is not None and zz is not None
-    ekf_rel_x=(x-zx) if ekf_has_zero else 0.0
-    ekf_rel_y=(y-zy) if ekf_has_zero else 0.0
+    # LOCAL HOME frame: +X is the vehicle nose at HOME, +Y is vehicle-right.
+    # FC LOCAL_POSITION_NED is N/E/D, so position must be rotated by the same
+    # HOME heading used to zero the displayed yaw.  Merely subtracting N/E
+    # origins leaves the trajectory in the global NED frame.
+    ned_dn=(x-zx) if ekf_has_zero else 0.0
+    ned_de=(y-zy) if ekf_has_zero else 0.0
     ekf_rel_z=(z-zz) if ekf_has_zero else 0.0
+    home_yaw_rad=math.radians(_yaw_zero_deg) if _yaw_zero_deg is not None else 0.0
+    ekf_rel_x= math.cos(home_yaw_rad)*ned_dn + math.sin(home_yaw_rad)*ned_de
+    ekf_rel_y=-math.sin(home_yaw_rad)*ned_dn + math.cos(home_yaw_rad)*ned_de
     yaw_rel_deg=((raw_yaw_deg-_yaw_zero_deg+180.0)%360.0-180.0) if _yaw_zero_deg is not None else 0.0
     out={
         "type":"telemetry",
@@ -1951,8 +1958,8 @@ function renderScene(){
  if($('showGrid').checked){for(let i=-10;i<=10;i++){let q=i*.25;addLine(P,C,[-2.5,q,0],[2.5,q,0],[.08,.23,.34]);addLine(P,C,[q,-2.5,0],[q,2.5,0],[.08,.23,.34])}}
  if($('showAxes').checked){addThickLine(P,C,[0,0,0],[1.15,0,0],[1,.15,.15],.020);addThickLine(P,C,[0,0,0],[0,1.15,0],[.1,1,.25],.020);addThickLine(P,C,[0,0,0],[0,0,1.15],[.1,.45,1],.020)}
  addCircle(P,C,[0,0,.01],.08,[.1,1,.35]);
- if(latest&&$('showTrail').checked&&(latest.trail||[]).length>1){let tr=latest.trail;for(let i=1;i<tr.length;i++){let a=tr[i-1],b=tr[i];addThickLine(P,C,[-a.x_mm/1000,a.y_mm/1000,-(a.z_mm||0)/1000],[-b.x_mm/1000,b.y_mm/1000,-(b.z_mm||0)/1000],[.05,.75,1],.012)}}
- let pos=latest?[-(latest.x_mm||0)/1000,(latest.y_mm||0)/1000,-(latest.z_mm||0)/1000]:[0,0,.2],rr=(latest?.roll_deg||0)*Math.PI/180,pp=(latest?.pitch_deg||0)*Math.PI/180,yy=(latest?.yaw_deg||0)*Math.PI/180;
+ if(latest&&$('showTrail').checked&&(latest.trail||[]).length>1){let tr=latest.trail;for(let i=1;i<tr.length;i++){let a=tr[i-1],b=tr[i];addThickLine(P,C,[a.x_mm/1000,a.y_mm/1000,-(a.z_mm||0)/1000],[b.x_mm/1000,b.y_mm/1000,-(b.z_mm||0)/1000],[.05,.75,1],.012)}}
+ let pos=latest?[(latest.x_mm||0)/1000,(latest.y_mm||0)/1000,-(latest.z_mm||0)/1000]:[0,0,.2],rr=(latest?.roll_deg||0)*Math.PI/180,pp=(latest?.pitch_deg||0)*Math.PI/180,yy=(latest?.yaw_deg||0)*Math.PI/180;
  function wp(v){let q=rotLocal(v,rr,pp,yy);return[q[0]+pos[0],q[1]+pos[1],q[2]+pos[2]]}
  {
    let arm=.32;addLine(P,C,wp([arm,arm,0]),wp([-arm,-arm,0]),[.7,.78,.84]);addLine(P,C,wp([arm,-arm,0]),wp([-arm,arm,0]),[.7,.78,.84]);
