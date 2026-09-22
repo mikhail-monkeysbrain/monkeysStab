@@ -1935,13 +1935,13 @@ function initGL(){
  c.onwheel=e=>{e.preventDefault();viewDist=clamp(viewDist+e.deltaY*.005,3.5,11);renderScene()};
 }
 function addLine(P,C,a,b,col){P.push(...a,...b);C.push(...col,...col)}
-function addThickLine(P,C,a,b,col){
- // WebGL1 lineWidth is commonly fixed to 1 px. Draw a small bundle whose
- // world-space separation follows camera distance, keeping axes/trail visible
- // while zooming and orbiting.
- let e=Math.max(.004,viewDist*.0015);
- const offs=[[0,0,0],[e,0,0],[-e,0,0],[0,e,0],[0,-e,0],[0,0,e],[0,0,-e]];
- for(const o of offs)addLine(P,C,[a[0]+o[0],a[1]+o[1],a[2]+o[2]],[b[0]+o[0],b[1]+o[1],b[2]+o[2]],col);
+function addThickLine(P,C,a,b,col,r=.014){
+ let dx=b[0]-a[0],dy=b[1]-a[1],dz=b[2]-a[2],L=Math.hypot(dx,dy,dz)||1;
+ let ux=dx/L,uy=dy/L,uz=dz/L,rx=Math.abs(uz)<.9?0:1,ry=0,rz=Math.abs(uz)<.9?1:0;
+ let vx=uy*rz-uz*ry,vy=uz*rx-ux*rz,vz=ux*ry-uy*rx,V=Math.hypot(vx,vy,vz)||1;vx/=V;vy/=V;vz/=V;
+ let wx=uy*vz-uz*vy,wy=uz*vx-ux*vz,wz=ux*vy-uy*vx,ring=[];
+ for(let i=0;i<8;i++){let q=i*Math.PI/4;ring.push([r*(Math.cos(q)*vx+Math.sin(q)*wx),r*(Math.cos(q)*vy+Math.sin(q)*wy),r*(Math.cos(q)*vz+Math.sin(q)*wz)])}
+ for(let i=0;i<8;i++){let o=ring[i],n=ring[(i+1)%8];addLine(P,C,[a[0]+o[0],a[1]+o[1],a[2]+o[2]],[b[0]+o[0],b[1]+o[1],b[2]+o[2]],col);addLine(P,C,[a[0]+o[0],a[1]+o[1],a[2]+o[2]],[a[0]+n[0],a[1]+n[1],a[2]+n[2]],col);addLine(P,C,[b[0]+o[0],b[1]+o[1],b[2]+o[2]],[b[0]+n[0],b[1]+n[1],b[2]+n[2]],col)}
 }
 function addCircle(P,C,center,r,col,plane='xy'){let n=28;for(let i=0;i<n;i++){let a=i/n*Math.PI*2,b=(i+1)/n*Math.PI*2,A=[...center],B=[...center];if(plane==='xy'){A[0]+=Math.cos(a)*r;A[1]+=Math.sin(a)*r;B[0]+=Math.cos(b)*r;B[1]+=Math.sin(b)*r}else{A[0]+=Math.cos(a)*r;A[2]+=Math.sin(a)*r;B[0]+=Math.cos(b)*r;B[2]+=Math.sin(b)*r}addLine(P,C,A,B,col)}}
 function rotLocal(p,r,pit,y){let cr=Math.cos(r),sr=Math.sin(r),cp=Math.cos(pit),sp=Math.sin(pit),cy=Math.cos(y),sy=Math.sin(y);let [x,Y,z]=p;let y1=cr*Y-sr*z,z1=sr*Y+cr*z,x1=x;let x2=cp*x1+sp*z1,y2=y1,z2=-sp*x1+cp*z1;return [cy*x2-sy*y2,sy*x2+cy*y2,z2]}
@@ -1949,9 +1949,9 @@ function renderScene(){
  if(!gl)return;let c=$('glCanvas'),dpr=devicePixelRatio,w=Math.floor(c.clientWidth*dpr),h=Math.floor(c.clientHeight*dpr);if(c.width!==w||c.height!==h){c.width=w;c.height=h}gl.viewport(0,0,w,h);gl.clearColor(.025,.065,.095,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.enable(gl.DEPTH_TEST);
  let P=[],C=[];
  if($('showGrid').checked){for(let i=-10;i<=10;i++){let q=i*.25;addLine(P,C,[-2.5,q,0],[2.5,q,0],[.08,.23,.34]);addLine(P,C,[q,-2.5,0],[q,2.5,0],[.08,.23,.34])}}
- if($('showAxes').checked){addThickLine(P,C,[0,0,0],[1.15,0,0],[1,.15,.15]);addThickLine(P,C,[0,0,0],[0,1.15,0],[.1,1,.25]);addThickLine(P,C,[0,0,0],[0,0,1.15],[.1,.45,1])}
+ if($('showAxes').checked){addThickLine(P,C,[0,0,0],[1.15,0,0],[1,.15,.15],.020);addThickLine(P,C,[0,0,0],[0,1.15,0],[.1,1,.25],.020);addThickLine(P,C,[0,0,0],[0,0,1.15],[.1,.45,1],.020)}
  addCircle(P,C,[0,0,.01],.08,[.1,1,.35]);
- if(latest&&$('showTrail').checked&&(latest.trail||[]).length>1){let tr=latest.trail;for(let i=1;i<tr.length;i++){let a=tr[i-1],b=tr[i];addThickLine(P,C,[-a.x_mm/1000,a.y_mm/1000,-(a.z_mm||0)/1000],[-b.x_mm/1000,b.y_mm/1000,-(b.z_mm||0)/1000],[.05,.75,1])}}
+ if(latest&&$('showTrail').checked&&(latest.trail||[]).length>1){let tr=latest.trail;for(let i=1;i<tr.length;i++){let a=tr[i-1],b=tr[i];addThickLine(P,C,[-a.x_mm/1000,a.y_mm/1000,-(a.z_mm||0)/1000],[-b.x_mm/1000,b.y_mm/1000,-(b.z_mm||0)/1000],[.05,.75,1],.012)}}
  let pos=latest?[-(latest.x_mm||0)/1000,(latest.y_mm||0)/1000,-(latest.z_mm||0)/1000]:[0,0,.2],rr=(latest?.roll_deg||0)*Math.PI/180,pp=(latest?.pitch_deg||0)*Math.PI/180,yy=(latest?.yaw_deg||0)*Math.PI/180;
  function wp(v){let q=rotLocal(v,rr,pp,yy);return[q[0]+pos[0],q[1]+pos[1],q[2]+pos[2]]}
  {
