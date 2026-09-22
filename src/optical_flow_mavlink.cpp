@@ -2902,7 +2902,7 @@ int main(int argc,char** argv){
                 <<"new_du_norm,new_dv_norm,new_scale_rate,new_residual_rotation_rate,"
                 <<"new_flow_x,new_flow_y,new_rms_norm,"
                 <<"old_valid,old_flow_x,old_flow_y,"
-                <<"range0_valid,range1_valid,range0_m,range1_m,delta_range_m\\n";
+                <<"range0_valid,range1_valid,range0_m,range1_m,delta_range_m\n";
               angular_b_header=true;
             }
             angular_b_csv
