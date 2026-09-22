@@ -65,7 +65,8 @@ inline void bodyToNed(double ax,double ay,double az,double roll,double pitch,dou
 
 inline void update(State& s,double ax,double ay,double az,double gx,double gy,double gz,
                    double roll,double pitch,double yaw,uint64_t time_usec,
-                   bool external_zupt_allow=true){
+                   bool external_zupt_allow=true,
+                   double external_motion_speed_mps=0.0){
   // V1 startup calibration uses 200 HIGHRES_IMU samples (~2 s at 100 Hz).
   // It deliberately does not synthesize gravity from FC ATTITUDE.
   if(s.calibrating){
@@ -127,13 +128,28 @@ inline void update(State& s,double ax,double ay,double az,double gx,double gy,do
   renorm_gravity();
   const double amag_raw=std::sqrt(ax*ax+ay*ay+az*az);
   if(amag_raw>1e-9 && s.gravity_mag>1e-9){
+    // IMU_DR_GRAVITY_OBSERVER_V2: accelerometer correction is strong only
+    // while the independent visual velocity says the camera is nearly still.
+    // During translation, gyro propagation carries gravity so real specific
+    // force is not immediately absorbed as a tilt/gravity change.
     constexpr double kGravityTauS=1.0;
-    const double alpha=1.0-std::exp(-dt/kGravityTauS);
-    const double k=s.gravity_mag/amag_raw;
-    s.gravity_x=(1.0-alpha)*s.gravity_x+alpha*(ax*k);
-    s.gravity_y=(1.0-alpha)*s.gravity_y+alpha*(ay*k);
-    s.gravity_z=(1.0-alpha)*s.gravity_z+alpha*(az*k);
-    renorm_gravity();
+    constexpr double kVisualStillMps=0.01;
+    constexpr double kVisualMovingMps=0.05;
+    double correction_weight=0.0;
+    if(std::isfinite(external_motion_speed_mps)){
+      if(external_motion_speed_mps<=kVisualStillMps) correction_weight=1.0;
+      else if(external_motion_speed_mps<kVisualMovingMps)
+        correction_weight=(kVisualMovingMps-external_motion_speed_mps)/
+                          (kVisualMovingMps-kVisualStillMps);
+    }
+    const double alpha=correction_weight*(1.0-std::exp(-dt/kGravityTauS));
+    if(alpha>0.0){
+      const double k=s.gravity_mag/amag_raw;
+      s.gravity_x=(1.0-alpha)*s.gravity_x+alpha*(ax*k);
+      s.gravity_y=(1.0-alpha)*s.gravity_y+alpha*(ay*k);
+      s.gravity_z=(1.0-alpha)*s.gravity_z+alpha*(az*k);
+      renorm_gravity();
+    }
   }
 
   // Linear specific force is formed BEFORE ATTITUDE, in the same native IMU
