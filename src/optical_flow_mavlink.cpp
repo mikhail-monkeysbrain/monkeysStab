@@ -900,7 +900,8 @@ struct FlowFc {
                                gyro.roll,gyro.pitch,gyro.yaw,q.time_usec,
                 (imu_cam_valid && (monoNs()-imu_cam_recv_ns)>=0 &&
                  (monoNs()-imu_cam_recv_ns)<100000000LL &&
-                 std::hypot(imu_cam_vn,imu_cam_ve)<0.01));
+                 std::hypot(imu_cam_vn,imu_cam_ve)<0.01),
+                (imu_cam_valid ? std::hypot(imu_cam_vn,imu_cam_ve) : 1e9));
       // FUSED-V1 IMU velocity prediction. Position remains WORKED5-only in V1.
       if(imu_dr_state.calibrated &&
          imu_dr_state.diag_dt>0.0 &&
@@ -944,7 +945,8 @@ struct FlowFc {
                   q.xgyro,q.ygyro,q.zgyro,
                   gyro.roll,gyro.pitch,gyro.yaw,
                   q.time_usec,
-                  false);
+                  false,
+                  (imu_cam_valid ? std::hypot(imu_cam_vn,imu_cam_ve) : 1e9));
 
               // Three consecutive fresh WORKED5 stationary observations
               // confirm horizontal zero velocity in the shadow only.
