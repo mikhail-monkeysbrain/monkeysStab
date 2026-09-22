@@ -1380,11 +1380,11 @@ button{cursor:pointer}
   </div>
 
   <div class="metrics">
-   <div class="metric"><span>X · CAM</span><b id="camX">—</b></div>
-   <div class="metric"><span>Y · CAM</span><b id="camY">—</b></div>
-   <div class="metric"><span>Z · CAM</span><b id="camZ">—</b></div>
-   <div class="metric"><span>Источник</span><b>WORKED5</b></div>
-   <div class="metric"><span>Примечание</span><b style="font-size:12px">Z камерой не оценивается</b></div>
+   <div class="metric"><span>X · FC EKF</span><b id="camX">—</b></div>
+   <div class="metric"><span>Y · FC EKF</span><b id="camY">—</b></div>
+   <div class="metric"><span>Z · FC EKF</span><b id="camZ">—</b></div>
+   <div class="metric"><span>Источник</span><b>FC EKF</b></div>
+   <div class="metric"><span>Примечание</span><b style="font-size:12px">Диагностика положения аппарата</b></div>
   </div>
   <div class="metrics">
    <div class="metric"><span>X · ОБЩЕЕ</span><b id="fusedX">—</b></div>
@@ -1396,8 +1396,8 @@ button{cursor:pointer}
 
   <div class="card compareCard">
    <div class="compareHead">
-    <h3>Перемещение — WORKED5 / FC EKF</h3>
-    <span class="compareHint">вид сверху · N ↑ · E → · realtime</span>
+    <h3>Перемещение — FC EKF</h3>
+    <span class="compareHint">вид сверху · HOME X/Y · realtime · клетка 5 см</span>
    </div>
    <canvas id="motionCompare"></canvas>
    <div class="compareLegend">
@@ -1862,9 +1862,9 @@ function updateHud(t){
  if($('camvcZ'))$('camvcZ').textContent='—';
  if($('camvcVel'))$('camvcVel').textContent=fmt(t.imu_camvc_vn,3)+' / '+fmt(t.imu_camvc_ve,3);
  if($('camvcState'))$('camvcState').textContent=t.imu_camvc_active?'ACTIVE':'INACTIVE';
- if($('camX'))$('camX').textContent=fmt(t.raw_of_n_mm,0)+' мм';
- if($('camY'))$('camY').textContent=fmt(t.raw_of_e_mm,0)+' мм';
- if($('camZ'))$('camZ').textContent='—';
+ if($('camX'))$('camX').textContent=fmt(t.x_mm,0)+' мм';
+ if($('camY'))$('camY').textContent=fmt(t.y_mm,0)+' мм';
+ if($('camZ'))$('camZ').textContent=fmt(t.z_mm,0)+' мм';
  if($('fusedX'))$('fusedX').textContent=fmt(t.fused_v1_n_mm,0)+' мм';
  if($('fusedY'))$('fusedY').textContent=fmt(t.fused_v1_e_mm,0)+' мм';
  if($('fusedZ'))$('fusedZ').textContent='—';
@@ -1955,7 +1955,7 @@ function rotLocal(p,r,pit,y){let cr=Math.cos(r),sr=Math.sin(r),cp=Math.cos(pit),
 function renderScene(){
  if(!gl)return;let c=$('glCanvas'),dpr=devicePixelRatio,w=Math.floor(c.clientWidth*dpr),h=Math.floor(c.clientHeight*dpr);if(c.width!==w||c.height!==h){c.width=w;c.height=h}gl.viewport(0,0,w,h);gl.clearColor(.025,.065,.095,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.enable(gl.DEPTH_TEST);
  let P=[],C=[];
- if($('showGrid').checked){for(let i=-10;i<=10;i++){let q=i*.25;addLine(P,C,[-2.5,q,0],[2.5,q,0],[.08,.23,.34]);addLine(P,C,[q,-2.5,0],[q,2.5,0],[.08,.23,.34])}}
+ if($('showGrid').checked){for(let i=-50;i<=50;i++){let q=i*.05;addLine(P,C,[-2.5,q,0],[2.5,q,0],[.08,.23,.34]);addLine(P,C,[q,-2.5,0],[q,2.5,0],[.08,.23,.34])}}
  if($('showAxes').checked){addThickLine(P,C,[0,0,0],[1.15,0,0],[1,.15,.15],.010);addThickLine(P,C,[0,0,0],[0,1.15,0],[.1,1,.25],.010);addThickLine(P,C,[0,0,0],[0,0,1.15],[.1,.45,1],.010)}
  addCircle(P,C,[0,0,.01],.08,[.1,1,.35]);
  if(latest&&$('showTrail').checked&&(latest.trail||[]).length>1){let tr=latest.trail;for(let i=1;i<tr.length;i++){let a=tr[i-1],b=tr[i];addThickLine(P,C,[a.x_mm/1000,a.y_mm/1000,-(a.z_mm||0)/1000],[b.x_mm/1000,b.y_mm/1000,-(b.z_mm||0)/1000],[.05,.75,1],.012)}}
