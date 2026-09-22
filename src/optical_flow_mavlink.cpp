@@ -2650,6 +2650,7 @@ int main(int argc,char** argv){
         static std::deque<HighresPhasePending> highres_phase_pending;
         static std::ofstream highres_phase_csv;
         static bool highres_phase_header=false;
+        static bool highres_phase_logging_enabled=true;
         // HIGHRES_CAUSAL15_SHADOW_V1: diagnostic-only bounded causal hold.
         // Never feeds Variant B publication until its coverage/error is audited.
         static std::ofstream highres_causal15_csv;
@@ -2719,7 +2720,7 @@ int main(int argc,char** argv){
           // cannot be evaluated causally at t1 because those gyro samples do
           // not exist yet. Wait 30 ms, then evaluate every offset on the same
           // stored camera correspondences and geometry.
-          if(!highres_phase_csv.is_open()){
+          if(highres_phase_logging_enabled && !highres_phase_csv.is_open()){
             const std::filesystem::path production_csv_path(csvpath);
             highres_phase_csv.open(
               production_csv_path.parent_path()/"highres_phase_sweep_v2.csv",
@@ -2765,7 +2766,7 @@ int main(int argc,char** argv){
               const std::streamoff phase_pos=highres_phase_csv.tellp();
               if(phase_pos<0 || phase_pos>=kHighresPhaseCsvMaxBytes){
                 highres_phase_csv.close();
-                highres_phase_header=true; // cap reached: do not reopen this run
+                highres_phase_logging_enabled=false;
               }
             }
           }
@@ -3930,7 +3931,8 @@ int main(int argc,char** argv){
         {
           static std::ofstream dr_csv;
           static bool dr_header=false;
-          if(!dr_csv.is_open()){
+          static bool dr_logging_enabled=true;
+          if(dr_logging_enabled && !dr_csv.is_open()){
             const std::filesystem::path production_csv_path(csvpath);
             dr_csv.open(
               production_csv_path.parent_path()/"deltar_rotation_shadow.csv",
@@ -4144,7 +4146,7 @@ int main(int argc,char** argv){
           const std::streamoff dr_pos=dr_csv.tellp();
           if(dr_pos<0 || dr_pos>=kDeltaRShadowCsvMaxBytes){
             dr_csv.close();
-            dr_header=true; // cap reached: do not reopen this run
+            dr_logging_enabled=false;
           }
         }
 
