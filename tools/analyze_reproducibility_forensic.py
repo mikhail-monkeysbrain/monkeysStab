@@ -175,7 +175,7 @@ def main():
         progress(i,len(args.runs),start,path.name)
     print()
 
-    print("\n===== EPISODE FORENSIC V2 =====")
+    print("\n===== EPISODE FORENSIC V3 =====")
     total=0
     for path,ss in all_ep:
         print(f"\nFILE: {path}")
@@ -191,6 +191,36 @@ def main():
             print(f"       hcam med/min/max={fmt(z['hmed'],1000)}/{fmt(z['hmin'],1000)}/{fmt(z['hmax'],1000)} mm")
             print(f"       valid={z['valid']:.2f}% sent={z['sent']:.2f}% ready={z['ready']:.2f}% age95 Luna/ATT/EKF={fmt(z['lap95'])}/{fmt(z['aap95'])}/{fmt(z['eap95'])} ms")
             print(f"       LAYER delta BODY->NE={fmt(z['body_ne_pct'])}%  NE->EKF={fmt(z['ne_ekf_pct'])}%")
+
+    print("\n===== LAYER DIVERGENCE TABLE =====")
+    print("run,episode,body_mm,ne_mm,ekf_mm,body_to_ne_pct,ne_to_ekf_pct,roll_span,pitch_span,yaw_span,sent_pct,att_age95_ms,flags")
+    for path,ss in all_ep:
+        run=path.parent.name
+        for k,z in enumerate(ss,1):
+            print(",".join([run,f"E{k:03d}",fmt(z["body"],1000),fmt(z["ne"],1000),fmt(z["ekmag"],1000),fmt(z["body_ne_pct"]),fmt(z["ne_ekf_pct"]),fmt(z["roll"]),fmt(z["pitch"]),fmt(z["yaw"]),f'{z["sent"]:.2f}',fmt(z["aap95"]),"|".join(z["flags"]) if z["flags"] else "NONE"]))
+
+    print("\n===== EKF RUNAWAY / DISCONTINUITY =====")
+    bad=[]
+    for path,ss in all_ep:
+        for k,z in enumerate(ss,1):
+            ratio=(z["ekmag"]/z["ne"]) if z["ekmag"] is not None and z["ne"]>=0.020 else None
+            if z["jumps"]>0 or (ratio is not None and ratio>=3.0 and z["ekmag"]>=0.250):
+                bad.append((path.parent.name,k,z,ratio))
+    if not bad:
+        print("NONE")
+    else:
+        for run,k,z,ratio in bad:
+            print(f"{run} E{k:03d}: NE={fmt(z['ne'],1000)} mm EKF={fmt(z['ekmag'],1000)} mm ratio={fmt(ratio)} jumps={z['jumps']} flags={','.join(z['flags']) or 'NONE'}")
+
+    print("\n===== CLEAN INTERNAL-CONSISTENCY EPISODES =====")
+    clean=[]
+    for path,ss in all_ep:
+        for k,z in enumerate(ss,1):
+            if (z["body"]>=0.100 and z["jumps"]==0 and z["sent"]>=98.0 and z["body_ne_pct"] is not None and abs(z["body_ne_pct"])<=10.0 and z["ne_ekf_pct"] is not None and abs(z["ne_ekf_pct"])<=20.0):
+                clean.append((path.parent.name,k,z))
+    print(f"count={len(clean)}")
+    for run,k,z in clean:
+        print(f"{run} E{k:03d}: BODY={fmt(z['body'],1000)} NE={fmt(z['ne'],1000)} EKF={fmt(z['ekmag'],1000)} mm BODY->NE={fmt(z['body_ne_pct'])}% NE->EKF={fmt(z['ne_ekf_pct'])}%")
 
     print(f"\nTOTAL EPISODES: {total}")
     print("\n===== FORENSIC CONTRACT =====")
