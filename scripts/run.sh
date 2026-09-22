@@ -64,6 +64,10 @@ export MAVLINK_ROOT
 RUN_ROOT="${MONKEYS_RUN_ROOT:-$HOME/monkeysStab_runs}"
 mkdir -p "$RUN_ROOT"
 
+# Bound total storage used by automatically-created production runs before
+# starting another logger. Named Web recordings/forensic datasets are excluded.
+bash "$ROOT/scripts/log_retention.sh"
+
 FREE_KB="$(df -Pk "$RUN_ROOT" | awk 'NR==2 {print $4}')"
 FREE_MB=$((FREE_KB / 1024))
 if (( FREE_MB < 300 )); then
