@@ -21,6 +21,12 @@ struct State {
   double gyro_bias_x=0,gyro_bias_y=0,gyro_bias_z=0;
   double gravity_mag=0;
   double acc_n=0,acc_e=0,acc_d=0;
+  // IMU_DR_FRAME_SHADOW_V1: diagnostic-only snapshots at each transform stage.
+  // These fields never feed estimator decisions.
+  double diag_raw_ax=0,diag_raw_ay=0,diag_raw_az=0;
+  double diag_gravity_x=0,diag_gravity_y=0,diag_gravity_z=0;
+  double diag_native_rx=0,diag_native_ry=0,diag_native_rz=0;
+  double diag_trimmed_rx=0,diag_trimmed_ry=0,diag_trimmed_rz=0;
   double vel_n=0,vel_e=0,vel_d=0;
   double pos_n=0,pos_e=0,pos_d=0;
   int stationary_samples=0;
@@ -163,8 +169,15 @@ inline void update(State& s,double ax,double ay,double az,double gx,double gy,do
   // slow FC roll/pitch evolution can no longer manufacture acceleration from
   // an otherwise unchanged accelerometer vector.
   const double rax=ax-s.gravity_x, ray=ay-s.gravity_y, raz=az-s.gravity_z;
+  // Snapshot the exact values used by the estimator before any frame transform.
+  // Logging these makes it possible to distinguish gravity-estimation error from
+  // trim/ATTITUDE transform error without changing the production calculation.
+  s.diag_raw_ax=ax; s.diag_raw_ay=ay; s.diag_raw_az=az;
+  s.diag_gravity_x=s.gravity_x; s.diag_gravity_y=s.gravity_y; s.diag_gravity_z=s.gravity_z;
+  s.diag_native_rx=rax; s.diag_native_ry=ray; s.diag_native_rz=raz;
   double rbx,rby,rbz;
   inverseAhrsTrim(rax,ray,raz,rbx,rby,rbz);
+  s.diag_trimmed_rx=rbx; s.diag_trimmed_ry=rby; s.diag_trimmed_rz=rbz;
   double n,e,d_with_g;
   bodyToNed(rbx,rby,rbz,roll,pitch,yaw,n,e,d_with_g);
   s.acc_n=n; s.acc_e=e; s.acc_d=d_with_g-9.80665;
