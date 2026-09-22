@@ -13,6 +13,9 @@ mapfile -t RUN_DIRS < <(
   find "$RUN_ROOT" -mindepth 1 -maxdepth 1 -type d     -name '????????_??????_OPTICAL_FLOW' -printf '%T@ %p\n' 2>/dev/null   | sort -n
 )
 
+# A production run can be pinned by creating RUN_DIR/.preserve.
+# Pinned runs remain visible in the accounting but are never deleted.
+
 dir_kb() {
   du -sk -- "$1" 2>/dev/null | awk '{print $1+0}'
 }
@@ -35,6 +38,10 @@ for entry in "${RUN_DIRS[@]}"; do
     break
   fi
   p="${entry#* }"
+  if [[ -e "$p/.preserve" ]]; then
+    echo "LOG RETENTION: сохраняю protected runtime: $p"
+    continue
+  fi
   kb=$(dir_kb "$p")
   echo "LOG RETENTION: удаляю старый runtime: $p ($((kb/1024)) MB)"
   rm -rf --one-file-system -- "$p"
