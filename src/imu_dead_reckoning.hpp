@@ -9,8 +9,9 @@ struct State {
   bool calibrated=false;
   bool calibrating=true;
   int bias_samples=0;
-  // Accelerometer bias must stay in the sensor/body frame.  A bias stored
-  // in NED becomes yaw-dependent after the airframe rotates.
+  // Legacy telemetry fields retained for Web/API compatibility. In V1 they
+  // expose the startup mean HIGHRES_IMU acceleration and are not subtracted
+  // as a fixed accelerometer bias.
   double bias_bx=0,bias_by=0,bias_bz=0;
   // IMU_DR_GRAVITY_OBSERVER_V1: gravity/specific-force reference is estimated
   // in the native HIGHRES_IMU frame from the same accel+gyro stream. This
@@ -26,8 +27,7 @@ struct State {
   double diag_amag=0,diag_gmag=0,diag_dt=0;
   bool diag_acc_ok=false,diag_gyro_ok=false,diag_stationary=false;
   uint64_t diag_acc_rejects=0,diag_gyro_rejects=0;
-  // Startup calibration diagnostics. These are observational only: the
-  // production 50-sample calibration below is intentionally unchanged.
+  // Startup calibration diagnostics. These are observational only.
   double startup_res_mean_x=0,startup_res_mean_y=0,startup_res_mean_z=0;
   double startup_res_m2_x=0,startup_res_m2_y=0,startup_res_m2_z=0;
   double startup_gmag_mean=0,startup_gmag_m2=0;
@@ -66,15 +66,8 @@ inline void bodyToNed(double ax,double ay,double az,double roll,double pitch,dou
 inline void update(State& s,double ax,double ay,double az,double gx,double gy,double gz,
                    double roll,double pitch,double yaw,uint64_t time_usec,
                    bool external_zupt_allow=true){
-  // Calibrate the accelerometer residual in BODY coordinates.  During the
-  // stationary startup calibration the ideal specific-force vector in body is
-  // R_ned_to_body * [0,0,-g] for the HIGHRES_IMU convention used below.
-  // Subtracting that ideal vector leaves a body-fixed sensor bias, which then
-  // rotates correctly with the airframe on every subsequent sample.
-  // First put HIGHRES_IMU into the same vehicle/body frame as ATTITUDE.
-  double tax,tay,taz;
-  inverseAhrsTrim(ax,ay,az,tax,tay,taz);
-
+  // V1 startup calibration uses 200 HIGHRES_IMU samples (~2 s at 100 Hz).
+  // It deliberately does not synthesize gravity from FC ATTITUDE.
   if(s.calibrating){
     // Calibrate in the native HIGHRES_IMU frame. The mean accelerometer vector
     // is the initial gravity/specific-force reference; the mean gyro is the
