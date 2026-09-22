@@ -20,6 +20,7 @@
 #include "metric_shadow_sync.hpp"
 #include "metric_shadow_range_sync.hpp"
 #include "worked5_estimator.hpp"
+#include "variant_b_angular_shadow.hpp"
 #include "imu_dead_reckoning.hpp"
 
 #include <deque>
@@ -2816,6 +2817,7 @@ int main(int argc,char** argv){
           static std::ofstream causal_metric35_csv;
           static bool causal_metric35_header=false;
           metric_shadow::Step causal_metric35_step{};
+          variant_b_angular_shadow::Step angular_b_shadow{};
           bool causal_metric35_ready=false;
           double causal_metric35_anchor_recv_age_ms=-1.0;
           double causal_metric35_anchor_sample_age_ms=-1.0;
@@ -2842,6 +2844,13 @@ int main(int argc,char** argv){
                 causal_metric35_step=
                   metric_shadow::estimateWithRotations(mi,R0c,R1c);
                 causal_metric35_ready=causal_metric35_step.valid;
+
+                // VARIANT_B_ANGULAR_SHADOW_V1: range-independent candidate.
+                // Diagnostic only: never writes causal35_publish_flow_*,
+                // flow_send_*, WORKED5 state, or MAVLink.
+                angular_b_shadow=variant_b_angular_shadow::estimate(
+                  mi.px0,mi.px1,mi.K,mi.D,mi.body_R_camera_frd,
+                  R0c,R1c,(ts-prev_ts)*1e-9);
 
                 // Production-format Variant B candidate. Keep SENSOR-centric
                 // camera displacement; EKF FLOW_POS handles the lever arm.
@@ -2875,6 +2884,42 @@ int main(int argc,char** argv){
               }
             }
           }
+          // VARIANT_B_ANGULAR_SHADOW_V1: keep OLD-B and NEW-B on the
+          // same camera interval. Range is logged only as an explanatory input;
+          // it is not consumed by angular_b_shadow.
+          static std::ofstream angular_b_csv;
+          static bool angular_b_header=false;
+          if(!angular_b_csv.is_open()){
+            const std::filesystem::path production_csv_path(csvpath);
+            angular_b_csv.open(
+              production_csv_path.parent_path()/"variant_b_angular_shadow.csv",
+              std::ios::out|std::ios::trunc);
+          }
+          if(angular_b_csv.is_open()){
+            if(!angular_b_header){
+              angular_b_csv
+                <<"frame,t0_ns,t1_ns,dt_s,new_valid,new_points,"
+                <<"new_du_norm,new_dv_norm,new_scale_rate,new_residual_rotation_rate,"
+                <<"new_flow_x,new_flow_y,new_rms_norm,"
+                <<"old_valid,old_flow_x,old_flow_y,"
+                <<"range0_valid,range1_valid,range0_m,range1_m,delta_range_m\\n";
+              angular_b_header=true;
+            }
+            angular_b_csv
+              <<frame<<','<<prev_ts<<','<<ts<<','<<((ts-prev_ts)*1e-9)<<','
+              <<(angular_b_shadow.valid?1:0)<<','<<angular_b_shadow.points<<','
+              <<angular_b_shadow.du_norm<<','<<angular_b_shadow.dv_norm<<','
+              <<angular_b_shadow.scale_rate<<','<<angular_b_shadow.residual_rotation_rate<<','
+              <<angular_b_shadow.flow_x<<','<<angular_b_shadow.flow_y<<','
+              <<angular_b_shadow.rms_norm<<','
+              <<(causal35_publish_valid?1:0)<<','
+              <<causal35_publish_flow_x<<','<<causal35_publish_flow_y<<','
+              <<(r0.valid?1:0)<<','<<(r1.valid?1:0)<<','
+              <<r0.distance_m<<','<<r1.distance_m<<','
+              <<(r1.distance_m-r0.distance_m)<<'\\n';
+            angular_b_csv.flush();
+          }
+
           if(!causal_metric35_csv.is_open()){
             const std::filesystem::path production_csv_path(csvpath);
             causal_metric35_csv.open(
