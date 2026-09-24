@@ -438,9 +438,9 @@ def start_recovery_watchdog():
             with _lock:
                 sample=dict(_live_latest) if isinstance(_live_latest,dict) else None
                 age=(now-_live_last_wall) if _live_last_wall else 999.0
-            healthy=(sample is not None and age < 0.35
-                     and bool(sample.get("worked5_valid",False))
-                     and bool(sample.get("ekf_valid",False)))
+            # Process recovery watches transport freshness.  EKF validity
+            # is estimator state and must not restart an otherwise live runtime.
+            healthy=(sample is not None and age < 0.35)
             if healthy:
                 if _recovery_state in ("ACQUIRING","NOT_READY"):
                     _recovery_state="READY"
