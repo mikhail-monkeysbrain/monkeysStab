@@ -62,7 +62,9 @@ if [[ -z "${MAVLINK_ROOT:-}" ]]; then
 fi
 export MAVLINK_ROOT
 RUN_ROOT="${MONKEYS_RUN_ROOT:-$HOME/monkeysStab_runs}"
-mkdir -p "$RUN_ROOT"
+CACHE_DIR="${MONKEYS_RUNTIME_CACHE_DIR:-$ROOT/build/runtime_cache}"
+CACHED_BIN="$CACHE_DIR/monkeysstab_optical_flow"
+mkdir -p "$RUN_ROOT" "$CACHE_DIR"
 
 # Bound total storage used by automatically-created production runs before
 # starting another logger. Named Web recordings/forensic datasets are excluded.
@@ -79,17 +81,19 @@ elif (( FREE_MB < 1024 )); then
   echo "CSV будет автоматически остановлен при достижении лимита." >&2
 fi
 
-bash "$ROOT/scripts/audit_geometry.sh"
-if [[ "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "1" || "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "true" || "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "yes" ]]; then
-  if [[ "${MONKEYS_RAW_UNIFIED_PUBLISH:-0}" == "1" || "${MONKEYS_RAW_UNIFIED_PUBLISH:-0}" == "true" || "${MONKEYS_RAW_UNIFIED_PUBLISH:-0}" == "yes" ]]; then
-    echo "ОШИБКА: MONKEYS_STABILISED_UNIFIED_PUBLISH и MONKEYS_RAW_UNIFIED_PUBLISH взаимоисключающие" >&2
-    exit 2
+if [[ "${MONKEYS_FAST_RESTART:-0}" != "1" ]]; then
+  bash "$ROOT/scripts/audit_geometry.sh"
+  if [[ "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "1" || "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "true" || "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "yes" ]]; then
+    if [[ "${MONKEYS_RAW_UNIFIED_PUBLISH:-0}" == "1" || "${MONKEYS_RAW_UNIFIED_PUBLISH:-0}" == "true" || "${MONKEYS_RAW_UNIFIED_PUBLISH:-0}" == "yes" ]]; then
+      echo "ОШИБКА: MONKEYS_STABILISED_UNIFIED_PUBLISH и MONKEYS_RAW_UNIFIED_PUBLISH взаимоисключающие" >&2
+      exit 2
+    fi
+    export MONKEYS_FLOW_OPTIONS_EXPECTED=1
+  else
+    export MONKEYS_FLOW_OPTIONS_EXPECTED=0
   fi
-  export MONKEYS_FLOW_OPTIONS_EXPECTED=1
-else
-  export MONKEYS_FLOW_OPTIONS_EXPECTED=0
+  bash "$ROOT/scripts/audit_fc_params.sh"
 fi
-bash "$ROOT/scripts/audit_fc_params.sh"
 
 [[ -e "$CAMERA" ]] || { echo "ОШИБКА: камера не найдена: $CAMERA" >&2; exit 2; }
 [[ -e "$LUNA" ]] || { echo "ОШИБКА: TF-Luna не найден: $LUNA" >&2; exit 2; }
@@ -165,13 +169,24 @@ fi
 
 read -r RX0 RY0 RX1 RY1 <<< "$FEATURE_ROI"
 
-if ! g++ -std=c++17 -O2 -DNDEBUG -pthread -Wno-address-of-packed-member \
-  $(pkg-config --cflags opencv4) -I"$MAVLINK_ROOT" -I"$ROOT/src" \
-  "$ROOT/src/optical_flow_mavlink.cpp" -o "$BIN" \
-  $(pkg-config --libs opencv4) -lpthread >"$BUILD_LOG" 2>&1; then
-  echo "ОШИБКА СБОРКИ. Последние 80 строк:"
-  tail -80 "$BUILD_LOG"
-  exit 1
+if [[ "${MONKEYS_FAST_RESTART:-0}" == "1" ]]; then
+  if [[ ! -x "$CACHED_BIN" ]]; then
+    echo "ОШИБКА: быстрый restart запрошен, но проверенный runtime ещё не собран: $CACHED_BIN" >&2
+    exit 4
+  fi
+  cp "$CACHED_BIN" "$BIN"
+  echo "FAST RESTART: использую уже проверенный runtime $CACHED_BIN"
+else
+  if ! g++ -std=c++17 -O2 -DNDEBUG -pthread -Wno-address-of-packed-member \
+    $(pkg-config --cflags opencv4) -I"$MAVLINK_ROOT" -I"$ROOT/src" \
+    "$ROOT/src/optical_flow_mavlink.cpp" -o "$BIN" \
+    $(pkg-config --libs opencv4) -lpthread >"$BUILD_LOG" 2>&1; then
+    echo "ОШИБКА СБОРКИ. Последние 80 строк:"
+    tail -80 "$BUILD_LOG"
+    exit 1
+  fi
+  cp "$BIN" "$CACHED_BIN"
+  chmod +x "$CACHED_BIN"
 fi
 
 cat <<EOF
