@@ -1005,8 +1005,37 @@ def fast_restart_runtime():
         else:
             os.environ["MONKEYS_FAST_RESTART"]=old
     result["restart_ms"]=round((time.monotonic()-t0)*1000.0,1)
-    log_runtime_forensic("RUNTIME_FAST_RESTART_OK",result.get("pid"),
-                         f"restart_ms={result['restart_ms']}")
+
+    # Recovery is READY only after the new process has produced fresh,
+    # internally usable telemetry.  Do not confuse "process spawned" with
+    # "estimator reacquired".
+    ready_deadline=time.monotonic()+3.0
+    ready=False
+    ready_sample=None
+    while time.monotonic()<ready_deadline:
+        if not running():
+            break
+        with _lock:
+            sample=dict(_live_latest) if isinstance(_live_latest,dict) else None
+            sample_wall=_live_last_wall
+        if (sample is not None
+                and sample_wall >= _runtime_started_wall
+                and (time.time()-sample_wall) < 0.25
+                and bool(sample.get("worked5_valid",False))
+                and bool(sample.get("ekf_valid",False))):
+            ready=True
+            ready_sample=sample
+            break
+        time.sleep(0.02)
+
+    result["ready"]=ready
+    result["reacquire_ms"]=round((time.monotonic()-t0)*1000.0,1)
+    if ready:
+        log_runtime_forensic("RUNTIME_FAST_RESTART_READY",result.get("pid"),
+                             f"restart_ms={result['restart_ms']};reacquire_ms={result['reacquire_ms']}")
+    else:
+        log_runtime_forensic("RUNTIME_FAST_RESTART_NOT_READY",result.get("pid"),
+                             f"restart_ms={result['restart_ms']};timeout_ms={result['reacquire_ms']}")
     return result
 
 def stop_runtime():
