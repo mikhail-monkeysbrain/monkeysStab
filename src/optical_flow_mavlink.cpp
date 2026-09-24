@@ -1750,6 +1750,7 @@ int main(int argc,char** argv){
   bool rotation_gui=false;
   bool return_manual_target=false;
   bool stabilised_unified_publish=false;
+  bool raw_unified_publish=false;
   std::string dataset_dir;
   std::string dataset_surface;
   double dataset_duration_sec=0.0;
@@ -1777,6 +1778,7 @@ int main(int argc,char** argv){
     else if(a=="--rotation-gui") rotation_gui=true;
     else if(a=="--return-manual-target") return_manual_target=true;
     else if(a=="--stabilised-unified-publish") stabilised_unified_publish=true;
+    else if(a=="--raw-unified-publish") raw_unified_publish=true;
     else if(a=="--dataset-dir" && i+1<argc) dataset_dir=argv[++i];
     else if(a=="--dataset-surface" && i+1<argc) dataset_surface=argv[++i];
     else if(a=="--dataset-duration-sec" && i+1<argc) dataset_duration_sec=std::stod(argv[++i]);
@@ -1805,9 +1807,17 @@ int main(int argc,char** argv){
       g_obs_shadow_enabled=false;
     }
   }
+  if(stabilised_unified_publish && raw_unified_publish){
+    std::cerr<<"ОШИБКА: --stabilised-unified-publish и --raw-unified-publish взаимоисключающие\n";
+    return 2;
+  }
   if(stabilised_unified_publish){
     std::cerr<<"STABILISED UNIFIED PUBLISH: ENABLED (experimental Variant B)\n"
              <<"REQUIRES FC FLOW_OPTIONS=1 (Stabilised). No parameter is changed automatically.\n";
+  }
+  if(raw_unified_publish){
+    std::cerr<<"RAW UNIFIED PUBLISH: ENABLED (experimental causal35 raw-sensor contract)\n"
+             <<"REQUIRES FC FLOW_OPTIONS=0. No parameter is changed automatically.\n";
   }
 
   if(continuous_guided && (continuous_legs<2 || continuous_legs>30)){
@@ -2562,6 +2572,11 @@ int main(int argc,char** argv){
         bool causal35_publish_valid=false;
         double causal35_publish_flow_x=0.0;
         double causal35_publish_flow_y=0.0;
+        // RAW_OF_CONTRACT_V1: same causal35 translational measurement, with
+        // rotation over the exact camera interval restored for FLOW_OPTIONS=0.
+        bool causal35_raw_publish_valid=false;
+        double causal35_raw_publish_flow_x=0.0;
+        double causal35_raw_publish_flow_y=0.0;
         // PIXEL_ROTATION_SHADOW_V1: diagnostic only. Compare measured LK px1
         // with px1 predicted from px0 by HIGHRES delta-R. No range, lever arm,
         // ground-plane reconstruction, EKF, or production flow is involved.
@@ -2908,6 +2923,37 @@ int main(int argc,char** argv){
                       if(causal35_publish_valid){
                         causal35_publish_flow_x=fx;
                         causal35_publish_flow_y=fy;
+
+                        // d01.delta_R is composed from corrected HIGHRES body-FRD
+                        // rates over exactly [prev_ts,ts]. log(dR)/dt therefore
+                        // has the same x/y sign convention as the FC body gyro.
+                        const cv::Matx33d& dR=d01.delta_R;
+                        double cc=(dR(0,0)+dR(1,1)+dR(2,2)-1.0)*0.5;
+                        cc=std::max(-1.0,std::min(1.0,cc));
+                        const double th=std::acos(cc);
+                        cv::Vec3d rv(0,0,0);
+                        if(th<1e-7){
+                          rv=cv::Vec3d(
+                            0.5*(dR(2,1)-dR(1,2)),
+                            0.5*(dR(0,2)-dR(2,0)),
+                            0.5*(dR(1,0)-dR(0,1)));
+                        } else if(th<3.0){
+                          const double k=th/(2.0*std::sin(th));
+                          rv=cv::Vec3d(
+                            k*(dR(2,1)-dR(1,2)),
+                            k*(dR(0,2)-dR(2,0)),
+                            k*(dR(1,0)-dR(0,1)));
+                        }
+                        const double raw_wx=rv[0]/causal_metric35_step.dt;
+                        const double raw_wy=rv[1]/causal_metric35_step.dt;
+                        const double raw_fx=raw_wx+fx;
+                        const double raw_fy=raw_wy+fy;
+                        if(std::isfinite(raw_fx) && std::isfinite(raw_fy) &&
+                           std::hypot(raw_fx,raw_fy)<4.0){
+                          causal35_raw_publish_valid=true;
+                          causal35_raw_publish_flow_x=raw_fx;
+                          causal35_raw_publish_flow_y=raw_fy;
+                        }
                       }
                     }
                   }
@@ -3702,11 +3748,15 @@ int main(int argc,char** argv){
         // Variant B production path: strict camera-dequeue-causal35 only.
         // If unavailable, suppress the interval rather than mixing Variant A
         // raw semantics into FLOW_OPTIONS=Stabilised.
-        const bool stabilised_publish_ready =
-          !stabilised_unified_publish || causal35_publish_valid;
+        const bool unified_publish_ready =
+          (!stabilised_unified_publish || causal35_publish_valid) &&
+          (!raw_unified_publish || causal35_raw_publish_valid);
         if(stabilised_unified_publish && causal35_publish_valid){
           flow_send_x=causal35_publish_flow_x;
           flow_send_y=causal35_publish_flow_y;
+        } else if(raw_unified_publish && causal35_raw_publish_valid){
+          flow_send_x=causal35_raw_publish_flow_x;
+          flow_send_y=causal35_raw_publish_flow_y;
         }
 
         int64_t flow_send_ns=monoNs();
@@ -3727,7 +3777,7 @@ int main(int argc,char** argv){
           s.valid &&
           flow_fresh &&
           !terrain_step_guard &&
-          stabilised_publish_ready &&
+          unified_publish_ready &&
           dt>0.0 && dt<0.2 &&
           std::isfinite(flow_send_x) &&
           std::isfinite(flow_send_y);
