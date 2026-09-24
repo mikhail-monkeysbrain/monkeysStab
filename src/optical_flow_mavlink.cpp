@@ -3979,10 +3979,11 @@ int main(int argc,char** argv){
           }
         }
 
-        // HIGH_DYNAMIC_RECOVERY_SHADOW_V1
+        // HIGH_DYNAMIC_RECOVERY_SHADOW_V2
         // Shadow-only A/B diagnostic. Normal WORKED5 steps are copied exactly.
-        // A reason=6 interval is NOT promoted to production: its already-computed
-        // body flow is only converted to a metric N/E shadow step for logging.
+        // A reason=6 interval is NOT promoted to production: the exact frozen
+        // WORKED5 estimator is run on its retained RANSAC metric point pairs
+        // and the resulting metric step is accumulated for logging only.
         bool highdyn_active=false;
         bool highdyn_reason6=false;
         double highdyn_raw_dx=0.0,highdyn_raw_dy=0.0;
@@ -4000,30 +4001,35 @@ int main(int argc,char** argv){
           double highdyn_hcam=0.0;
           if(bench_true_camera_height>0.0) highdyn_hcam=bench_true_camera_height;
           else if(current_camera_height_valid) highdyn_hcam=current_camera_height_m;
-          if(highdyn_hcam>0.02 && std::isfinite(highdyn_hcam) &&
-             std::isfinite(s.flow_body_x) && std::isfinite(s.flow_body_y)){
-            highdyn_active=true;
-            highdyn_reason6=true;
-            ++highdyn_reason6_total;
-            // Inverse of production body-flow convention:
-            // flow_x=-Vy/H, flow_y=+Vx/H.
-            highdyn_raw_dx=s.flow_body_y*highdyn_hcam*dt;
-            highdyn_raw_dy=-s.flow_body_x*highdyn_hcam*dt;
-            const double cr=std::cos(fg.roll),  sr=std::sin(fg.roll);
-            const double cp=std::cos(fg.pitch), sp=std::sin(fg.pitch);
-            const double cy=std::cos(fg.yaw),   sy=std::sin(fg.yaw);
-            const double r00=cy*cp;
-            const double r01=cy*sp*sr-sy*cr;
-            const double r10=sy*cp;
-            const double r11=sy*sp*sr+cy*cr;
-            highdyn_raw_dN=r00*highdyn_raw_dx+r01*highdyn_raw_dy;
-            highdyn_raw_dE=r10*highdyn_raw_dx+r11*highdyn_raw_dy;
-            highdyn_shadow_n+=highdyn_raw_dN;
-            highdyn_shadow_e+=highdyn_raw_dE;
-            // Diagnostic confidence only; never gates or rescales the shadow.
-            // Keep it continuous so the next blind run can test whether quality
-            // predicts error without fitting a threshold to known GT.
-            highdyn_confidence=std::clamp(s.inlier_ratio,0.0,1.0);
+          if(highdyn_hcam>0.02 && std::isfinite(highdyn_hcam)){
+            // reason=6 is assigned only after RANSAC has already populated
+            // metric_prev_points/metric_curr_points.  Run the exact frozen
+            // WORKED5 estimator on those points in SHADOW only.  This bypasses
+            // the outer 4 rad/s validity gate for diagnostics, without changing
+            // normal WORKED5, MAVLink publication, causal35 or EKF.
+            const auto highdyn_w5=worked5::estimate(
+              s.metric_prev_points,s.metric_curr_points,
+              calib.K,focal_scale,calib.D,highdyn_hcam,dt);
+            if(highdyn_w5.valid){
+              highdyn_active=true;
+              highdyn_reason6=true;
+              ++highdyn_reason6_total;
+              highdyn_raw_dx=highdyn_w5.dx_m;
+              highdyn_raw_dy=highdyn_w5.dy_m;
+              const double cr=std::cos(fg.roll),  sr=std::sin(fg.roll);
+              const double cp=std::cos(fg.pitch), sp=std::sin(fg.pitch);
+              const double cy=std::cos(fg.yaw),   sy=std::sin(fg.yaw);
+              const double r00=cy*cp;
+              const double r01=cy*sp*sr-sy*cr;
+              const double r10=sy*cp;
+              const double r11=sy*sp*sr+cy*cr;
+              highdyn_raw_dN=r00*highdyn_raw_dx+r01*highdyn_raw_dy;
+              highdyn_raw_dE=r10*highdyn_raw_dx+r11*highdyn_raw_dy;
+              highdyn_shadow_n+=highdyn_raw_dN;
+              highdyn_shadow_e+=highdyn_raw_dE;
+              // Diagnostic metadata only; never gates or rescales the shadow.
+              highdyn_confidence=std::clamp(s.inlier_ratio,0.0,1.0);
+            }
           }
         }
 
