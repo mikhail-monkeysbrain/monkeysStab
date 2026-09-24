@@ -1448,6 +1448,7 @@ button{cursor:pointer}
    <div id="saveMsg" style="font-size:11px;color:#7798ae;margin-top:5px"></div>
    <button class="startBig" onclick="start()">▶ ЗАПУСТИТЬ СИСТЕМУ</button>
    <button class="stopBig" onclick="stop()">■ ОСТАНОВИТЬ</button>
+   <button id="restartEstimatorBtn" class="btn" style="width:100%;margin-top:8px" onclick="restartEstimator()">↻ ПЕРЕЗАПУСТИТЬ ОЦЕНКУ / НОВЫЙ НОЛЬ</button>
    <button id="runRecordBtn" class="btn blue" style="width:100%;margin-top:8px" onclick="toggleRunRecord()">● ЗАПИСЬ ПРОГОНА</button>
    <div id="runtimeError" style="display:none;margin-top:8px;padding:8px;border:1px solid #8b3038;border-radius:5px;background:#271018;color:#ff7b86;font:11px/1.35 ui-monospace,monospace;white-space:pre-wrap;max-height:180px;overflow:auto"></div>
   </div>
@@ -1911,6 +1912,19 @@ async function start(){
  }
 }
 async function stop(){try{await api('/api/stop',{method:'POST'});setTimeout(refreshRuntimeStatus,150);}catch(e){alert(e.message)}}
+async function restartEstimator(){
+ const b=$('restartEstimatorBtn');if(!b)return;
+ if(!confirm('Перезапустить оценку и принять текущую точку за новый локальный ноль?'))return;
+ const old=b.textContent;b.disabled=true;b.textContent='↻ ПЕРЕЗАПУСК…';
+ try{
+  const j=await api('/api/restart-fast',{method:'POST'});
+  wsHistory=[];wsTrail=[];wsT0=null;resetMotionCompare();
+  b.textContent=j.ready?'✓ ОЦЕНКА ГОТОВА · НОВЫЙ НОЛЬ':'⚠ ПЕРЕЗАПУЩЕНО · ОЖИДАНИЕ ОЦЕНКИ';
+  setTimeout(()=>{b.textContent=old;b.disabled=false;refreshRuntimeStatus()},1400);
+ }catch(e){
+  b.textContent=old;b.disabled=false;alert(e.message);
+ }
+}
 async function zero(){try{
  await api('/api/zero',{method:'POST'});
  wsHistory=[];wsTrail=[];wsT0=null;resetMotionCompare();
