@@ -9,7 +9,7 @@ monkeysStab MAVLink byte router.
 TCP-клиент monkeysStab получает полный поток FC и может отправлять MAVLink обратно.
 UDP GCS получает телеметрию; любой пакет, пришедший на UDP 14550, передаётся FC.
 """
-import argparse, os, select, socket, termios, time, subprocess
+import argparse, os, select, socket, termios, time, subprocess, errno
 
 BAUD={460800:termios.B460800,115200:termios.B115200,57600:termios.B57600}
 
@@ -41,7 +41,7 @@ def main():
     udp.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
     udp.bind(("0.0.0.0",a.udp_port)); udp.setblocking(False)
 
-    clients=[]; gcs=set()
+    clients=[]; client_tx={}; gcs=set()
     if a.gcs_ip: gcs.add((a.gcs_ip,a.udp_port))
     def local_ipv4_addresses():
         addrs=[]
@@ -90,17 +90,42 @@ def main():
                     if not data: continue
                     dead=[]
                     for c in clients:
-                        try: c.sendall(data)
-                        except OSError: dead.append(c)
+                        try:
+                            # Clients are non-blocking. sendall() is the wrong
+                            # primitive here: a temporary EAGAIN used to eject
+                            # a healthy client from the fan-out.  A MAVLink
+                            # consumer must either receive the complete serial
+                            # chunk or be disconnected explicitly.
+                            n=c.send(data)
+                            if n != len(data):
+                                raise OSError(errno.ENOBUFS,
+                                              f"short nonblocking send {n}/{len(data)}")
+                            st=client_tx.setdefault(c,{"bytes":0,"drops":0})
+                            st["bytes"]+=n
+                        except (BlockingIOError,InterruptedError):
+                            st=client_tx.setdefault(c,{"bytes":0,"drops":0})
+                            st["drops"]+=1
+                            # Do not silently remove a client on transient
+                            # backpressure.  Its TCP receive buffer can recover.
+                            continue
+                        except OSError:
+                            dead.append(c)
                     for c in dead:
                         try:c.close()
                         except:pass
+                        client_tx.pop(c,None)
                         if c in clients: clients.remove(c)
                     for peer in list(gcs):
                         try: udp.sendto(data,peer)
                         except OSError: pass
                 elif x==srv:
-                    c,addr=srv.accept(); c.setblocking(False); clients.append(c)
+                    c,addr=srv.accept()
+                    c.setblocking(False)
+                    # Give short FC bursts room even if a consumer is briefly
+                    # busy; this is still bounded kernel buffering.
+                    c.setsockopt(socket.SOL_SOCKET,socket.SO_SNDBUF,262144)
+                    clients.append(c)
+                    client_tx[c]={"bytes":0,"drops":0}
                     print(f"local client connected: {addr}",flush=True)
                 elif x==udp:
                     try: data,peer=udp.recvfrom(65536)
@@ -117,6 +142,7 @@ def main():
                     if not data:
                         try:c.close()
                         except:pass
+                        client_tx.pop(c,None)
                         if c in clients: clients.remove(c)
                         continue
                     try: os.write(ser,data)
