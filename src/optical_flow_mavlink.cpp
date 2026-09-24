@@ -4374,7 +4374,7 @@ int main(int argc,char** argv){
            <<(s.obs_shadow_valid?1:0)<<','<<s.obs_flow_body_x<<','<<s.obs_flow_body_y<<','<<s.obs_median_ratio<<','<<s.obs_mean_weight<<','<<s.obs_downweighted<<','
            <<(int)quality<<','<<lm<<','<<lage<<','<<range_to_fc<<','<<flow_send_x<<','<<flow_send_y<<','<<(flow_sent?1:0)<<','
            <<flow_tx_x<<','<<flow_tx_y<<','<<flow_tx_dt_s<<','<<flow_tx_inputs<<','
-           <<(stabilised_unified_publish?1:0)<<','<<(stabilised_publish_ready?1:0)<<','
+           <<(stabilised_unified_publish?1:0)<<','<<(unified_publish_ready?1:0)<<','
            <<stabilised_unified_shadow_source<<','<<(range_sent?1:0)<<','
            <<(arm_ok?(arm_now?1:0):-1)<<','
            <<(efresh?1:0)<<','<<ep.x<<','<<ep.y<<','<<ep.z<<','<<ep.vx<<','<<ep.vy<<','<<ep.vz<<','<<eage<<','<<ec<<','
