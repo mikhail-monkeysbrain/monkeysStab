@@ -64,6 +64,12 @@ _live_udp_thread=None
 _live_udp_stop=threading.Event()
 _live_udp_rx=0
 _live_udp_bad=0
+_recovery_state="RUNNING"
+_recovery_lock=threading.Lock()
+_recovery_thread=None
+_recovery_fault_since=0.0
+_recovery_armed=True
+_recovery_last_restart_wall=0.0
 _camera_jpeg=None
 _camera_last_wall=0.0
 _last_rc_zero_seq=None
@@ -412,6 +418,62 @@ def live_payload(raw):
         _live_last_wall=time.time()
     _record_sample(out)
     return out
+
+def start_recovery_watchdog():
+    """Автовосстановление RAW runtime при устойчивой потере свежих данных FC."""
+    global _recovery_thread,_recovery_state,_recovery_fault_since
+    if _recovery_thread and _recovery_thread.is_alive():
+        return
+    def run():
+        global _recovery_state,_recovery_fault_since,_recovery_armed,_recovery_last_restart_wall
+        while True:
+            time.sleep(0.10)
+            if not running():
+                _recovery_fault_since=0.0
+                continue
+            # Автоматика относится только к экспериментальному RAW-контракту.
+            if str(os.environ.get("MONKEYS_RAW_UNIFIED_PUBLISH","0")).lower() not in ("1","true","yes"):
+                continue
+            now=time.time()
+            with _lock:
+                sample=dict(_live_latest) if isinstance(_live_latest,dict) else None
+                age=(now-_live_last_wall) if _live_last_wall else 999.0
+            healthy=(sample is not None and age < 0.35
+                     and bool(sample.get("worked5_valid",False))
+                     and bool(sample.get("ekf_valid",False)))
+            if healthy:
+                if _recovery_state in ("ACQUIRING","NOT_READY"):
+                    _recovery_state="READY"
+                elif _recovery_state not in ("RESTARTING",):
+                    _recovery_state="RUNNING"
+                _recovery_fault_since=0.0
+                # Rearm only after a healthy interval following a restart.
+                if now-_recovery_last_restart_wall > 2.0:
+                    _recovery_armed=True
+                continue
+            if now-_runtime_started_wall < 3.5:
+                continue
+            if _recovery_fault_since == 0.0:
+                _recovery_fault_since=now
+                continue
+            if now-_recovery_fault_since < 1.0 or not _recovery_armed:
+                continue
+            _recovery_armed=False
+            _recovery_state="FAULT"
+            log_runtime_forensic("RECOVERY_FAULT",detail=f"telemetry_age_s={age:.3f}")
+            try:
+                _recovery_state="RESTARTING"
+                result=fast_restart_runtime()
+                _recovery_last_restart_wall=time.time()
+                _recovery_state="READY" if result.get("ready") else "NOT_READY"
+            except Exception as e:
+                _recovery_last_restart_wall=time.time()
+                _recovery_state="NOT_READY"
+                log_runtime_forensic("RECOVERY_RESTART_FAIL",detail=str(e))
+            finally:
+                _recovery_fault_since=0.0
+    _recovery_thread=threading.Thread(target=run,name="recovery-watchdog",daemon=True)
+    _recovery_thread.start()
 
 def start_live_udp_listener():
     global _live_udp_thread,_live_udp_rx,_live_udp_bad
@@ -2303,6 +2365,7 @@ if __name__=="__main__":
             probe.close()
         ensure_router()
         start_live_udp_listener()
+    start_recovery_watchdog()
         start_statustext_monitor()
         start_fc_blackbox()
         log_event("INFO","Web UI запущен")
