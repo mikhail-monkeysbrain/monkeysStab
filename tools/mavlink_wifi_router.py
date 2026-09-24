@@ -16,6 +16,52 @@ BAUD={460800:termios.B460800,115200:termios.B115200,57600:termios.B57600}
 
 # Passive MAVLink v1/v2 framing counter.  It never writes to FC and is used
 # only to prove what message rates already exist at the physical UART.
+class MavCommandSpy:
+    """Диагностика команд, которыми TCP/UDP-клиенты меняют MAVLink stream rates."""
+    def __init__(self, label):
+        self.label=label
+        self.buf=bytearray()
+
+    def feed(self, data):
+        self.buf.extend(data)
+        while self.buf:
+            try:
+                i=next(i for i,b in enumerate(self.buf) if b in (0xFE,0xFD))
+            except StopIteration:
+                self.buf.clear(); return
+            if i: del self.buf[:i]
+            if len(self.buf)<2: return
+            magic=self.buf[0]; plen=self.buf[1]
+            if magic==0xFE:
+                total=plen+8
+                if len(self.buf)<total: return
+                msgid=self.buf[5]; sysid=self.buf[3]; compid=self.buf[4]
+                payload=bytes(self.buf[6:6+plen])
+            else:
+                if len(self.buf)<10: return
+                incompat=self.buf[2]
+                total=plen+12+(13 if (incompat & 0x01) else 0)
+                if len(self.buf)<total: return
+                msgid=self.buf[7] | (self.buf[8]<<8) | (self.buf[9]<<16)
+                sysid=self.buf[5]; compid=self.buf[6]
+                payload=bytes(self.buf[10:10+plen])
+            if msgid==76 and len(payload)>=33:  # COMMAND_LONG
+                command=struct.unpack_from("<H",payload,28)[0]
+                if command==511:  # MAV_CMD_SET_MESSAGE_INTERVAL
+                    message_id=struct.unpack_from("<f",payload,0)[0]
+                    interval_us=struct.unpack_from("<f",payload,4)[0]
+                    print(f"FC_TX_RATE_CMD source={self.label} sys={sysid} comp={compid} "
+                          f"SET_MESSAGE_INTERVAL msgid={message_id:.0f} interval_us={interval_us:.0f}",
+                          flush=True)
+            elif msgid==66 and len(payload)>=6:  # REQUEST_DATA_STREAM
+                rate=struct.unpack_from("<H",payload,0)[0]
+                stream_id=payload[4]; start_stop=payload[5]
+                print(f"FC_TX_RATE_CMD source={self.label} sys={sysid} comp={compid} "
+                      f"REQUEST_DATA_STREAM stream={stream_id} rate_hz={rate} start={start_stop}",
+                      flush=True)
+            del self.buf[:total]
+
+
 class MavRxCounter:
     def __init__(self):
         self.buf=bytearray()
@@ -75,7 +121,7 @@ def main():
     udp.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
     udp.bind(("0.0.0.0",a.udp_port)); udp.setblocking(False)
 
-    clients=[]; client_tx={}; gcs=set()
+    clients=[]; client_tx={}; client_spy={}; gcs=set(); udp_spy={}
     rx_counter=MavRxCounter()
     rx_stat_t=time.monotonic()
     rx_stat_counts=Counter()
@@ -165,6 +211,7 @@ def main():
                         try:c.close()
                         except:pass
                         client_tx.pop(c,None)
+                        client_spy.pop(c,None)
                         if c in clients: clients.remove(c)
                     for peer in list(gcs):
                         try: udp.sendto(data,peer)
@@ -177,12 +224,15 @@ def main():
                     c.setsockopt(socket.SOL_SOCKET,socket.SO_SNDBUF,262144)
                     clients.append(c)
                     client_tx[c]={"bytes":0,"drops":0}
+                    client_spy[c]=MavCommandSpy(f"tcp:{addr[0]}:{addr[1]}")
                     print(f"local client connected: {addr}",flush=True)
                 elif x==udp:
                     try: data,peer=udp.recvfrom(65536)
                     except BlockingIOError: continue
                     gcs.add(peer)
                     if data:
+                        spy=udp_spy.setdefault(peer,MavCommandSpy(f"udp:{peer[0]}:{peer[1]}"))
+                        spy.feed(data)
                         try: os.write(ser,data)
                         except BlockingIOError: pass
                 else:
@@ -196,6 +246,8 @@ def main():
                         client_tx.pop(c,None)
                         if c in clients: clients.remove(c)
                         continue
+                    spy=client_spy.get(c)
+                    if spy is not None: spy.feed(data)
                     try: os.write(ser,data)
                     except BlockingIOError: pass
     finally:
