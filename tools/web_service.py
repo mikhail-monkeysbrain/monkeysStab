@@ -1053,10 +1053,26 @@ def start_runtime(fast_start=False):
     return {"ok":True,"pid":pid}
 
 def fast_restart_runtime():
-    """Перезапустить только flight runtime без router/Web и без повторной сборки."""
+    """Перезапустить flight runtime и начать новый локальный сегмент от текущей точки."""
     global _proc,_log_handle,_runtime_started_wall,_active_csv
+    global _yaw_zero_deg,_last_rc_zero_seq
     t0=time.monotonic()
     stop_runtime()
+
+    # Recovery starts a NEW local navigation segment.  Do not reset ArduPilot
+    # EKF itself: only forget Web/diagnostic origins so the first valid sample
+    # from the restarted estimator becomes local (0,0,0).
+    with _lock:
+        _zero["x"]=_zero["y"]=_zero["z"]=None
+        _raw_zero["n"]=_raw_zero["e"]=None
+        _imu_zero["n"]=_imu_zero["e"]=_imu_zero["d"]=None
+        _fused_zero["n"]=_fused_zero["e"]=None
+        _camvc_zero["n"]=_camvc_zero["e"]=None
+        _yaw_zero_deg=None
+        _last_rc_zero_seq=None
+    ws_broadcast({"type":"recovery_segment_reset"})
+    log_runtime_forensic("RECOVERY_LOCAL_ZERO_RESET")
+
     old=os.environ.get("MONKEYS_FAST_RESTART")
     os.environ["MONKEYS_FAST_RESTART"]="1"
     try:
