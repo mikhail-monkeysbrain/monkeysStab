@@ -699,10 +699,13 @@ struct FlowFc {
       if(!sys){std::cerr<<"FC: ArduPilot HEARTBEAT timeout\n";g_running=false;return;}
       target_sys=sys; target_comp=comp;
       std::cerr<<"FC: ArduPilot heartbeat sys="<<(int)sys<<" comp="<<(int)comp<<"\n";
+      // Request HIGHRES first and ATTITUDE last.  Some ArduPilot telemetry
+      // configurations clamp/override selected streams; repeat critical
+      // requests after the rest of the subscriptions have been installed.
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_LOCAL_POSITION_NED,20);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_EKF_STATUS_REPORT,5);
-      requestRate(fd,sys,comp,MAVLINK_MSG_ID_ATTITUDE,100);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_HIGHRES_IMU,100);
+      requestRate(fd,sys,comp,MAVLINK_MSG_ID_ATTITUDE,100);
       // AHRS omegaI is ArduPilot's gyro drift correction.  Capture it only
       // for shadow diagnostics; production optical flow is unchanged.
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_AHRS,20);
@@ -710,6 +713,13 @@ struct FlowFc {
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_ATTITUDE_TARGET,20);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_SERVO_OUTPUT_RAW,20);
       requestRate(fd,sys,comp,MAVLINK_MSG_ID_RC_CHANNELS,20);
+      // Reassert the two streams required by the metric/RAW contract after
+      // all auxiliary subscriptions.  This is intentionally one-shot: it
+      // avoids a request storm while proving whether another subscription
+      // overwrites the FC scheduler.
+      requestRate(fd,sys,comp,MAVLINK_MSG_ID_HIGHRES_IMU,100);
+      requestRate(fd,sys,comp,MAVLINK_MSG_ID_ATTITUDE,100);
+      requestRate(fd,sys,comp,MAVLINK_MSG_ID_LOCAL_POSITION_NED,20);
 
       while(g_running){
         pollfd p{fd,POLLIN,0};
