@@ -2367,7 +2367,17 @@ if __name__=="__main__":
         start_live_udp_listener()
         start_recovery_watchdog()
         start_statustext_monitor()
-        start_fc_blackbox()
+        try:
+            start_fc_blackbox()
+        except RuntimeError as e:
+            # continuous_fc.csv is diagnostic only.  An orphan logger may
+            # legitimately still own its flock after a previous Web process
+            # was interrupted; do not make the flight runtime unavailable.
+            if "code 3" in str(e):
+                log_event("WARN","FC blackbox уже запущен; продолжаю без второго экземпляра")
+                print("FC blackbox: УЖЕ ЗАПУЩЕН (использую существующий)",flush=True)
+            else:
+                raise
         log_event("INFO","Web UI запущен")
         print("MAVLink router: ГОТОВ, Mission Planner UDP 14550",flush=True)
         # Normal operating mode: starting the Web UI also starts the flight
