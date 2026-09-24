@@ -9,9 +9,43 @@ monkeysStab MAVLink byte router.
 TCP-клиент monkeysStab получает полный поток FC и может отправлять MAVLink обратно.
 UDP GCS получает телеметрию; любой пакет, пришедший на UDP 14550, передаётся FC.
 """
-import argparse, os, select, socket, termios, time, subprocess, errno
+import argparse, os, select, socket, termios, time, subprocess, errno, struct
+from collections import Counter
 
 BAUD={460800:termios.B460800,115200:termios.B115200,57600:termios.B57600}
+
+# Passive MAVLink v1/v2 framing counter.  It never writes to FC and is used
+# only to prove what message rates already exist at the physical UART.
+class MavRxCounter:
+    def __init__(self):
+        self.buf=bytearray()
+        self.counts=Counter()
+        self.bad_prefix=0
+
+    def feed(self,data):
+        self.buf.extend(data)
+        while self.buf:
+            try:
+                i=next(i for i,b in enumerate(self.buf) if b in (0xFE,0xFD))
+            except StopIteration:
+                self.bad_prefix+=len(self.buf); self.buf.clear(); return
+            if i:
+                self.bad_prefix+=i; del self.buf[:i]
+            if len(self.buf)<2: return
+            magic=self.buf[0]; payload=self.buf[1]
+            if magic==0xFE:
+                total=payload+8
+                if len(self.buf)<total: return
+                msgid=self.buf[5]
+            else:
+                if len(self.buf)<10: return
+                incompat=self.buf[2]
+                total=payload+12+(13 if (incompat & 0x01) else 0)
+                if len(self.buf)<total: return
+                msgid=self.buf[7] | (self.buf[8]<<8) | (self.buf[9]<<16)
+            self.counts[msgid]+=1
+            del self.buf[:total]
+
 
 def serial_open(path,baud):
     fd=os.open(path,os.O_RDWR|os.O_NOCTTY|os.O_NONBLOCK)
@@ -42,6 +76,9 @@ def main():
     udp.bind(("0.0.0.0",a.udp_port)); udp.setblocking(False)
 
     clients=[]; client_tx={}; gcs=set()
+    rx_counter=MavRxCounter()
+    rx_stat_t=time.monotonic()
+    rx_stat_counts=Counter()
     if a.gcs_ip: gcs.add((a.gcs_ip,a.udp_port))
     def local_ipv4_addresses():
         addrs=[]
@@ -88,6 +125,20 @@ def main():
                     try: data=os.read(ser,65536)
                     except BlockingIOError: data=b""
                     if not data: continue
+                    rx_counter.feed(data)
+                    now=time.monotonic()
+                    if now-rx_stat_t >= 5.0:
+                        dt=now-rx_stat_t
+                        ids=((30,"ATTITUDE"),(105,"HIGHRES_IMU"),
+                             (32,"LOCAL_POSITION_NED"),(193,"EKF_STATUS_REPORT"))
+                        parts=[]
+                        for mid,name in ids:
+                            n=rx_counter.counts[mid]-rx_stat_counts[mid]
+                            parts.append(f"{name}={n/dt:.1f}Hz({n})")
+                        print("FC_RX_RATE " + " ".join(parts) +
+                              f" clients={len(clients)}",flush=True)
+                        rx_stat_counts=rx_counter.counts.copy()
+                        rx_stat_t=now
                     dead=[]
                     for c in clients:
                         try:
