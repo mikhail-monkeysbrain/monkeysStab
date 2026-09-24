@@ -3844,7 +3844,7 @@ int main(int argc,char** argv){
         double worked5_diag_dN=0.0,worked5_diag_dE=0.0;
         web_raw_step_valid=false;
         web_raw_vn=web_raw_ve=0.0;
-        if(s.valid && fg_ok && dt>0.0 && dt<0.2){
+        if((s.valid || s.invalid_reason==6) && fg_ok && dt>0.0 && dt<0.2){
           double hcam=0.0;
           if(bench_true_camera_height>0.0){
             hcam=bench_true_camera_height;
