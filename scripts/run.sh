@@ -81,6 +81,10 @@ fi
 
 bash "$ROOT/scripts/audit_geometry.sh"
 if [[ "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "1" || "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "true" || "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "yes" ]]; then
+  if [[ "${MONKEYS_RAW_UNIFIED_PUBLISH:-0}" == "1" || "${MONKEYS_RAW_UNIFIED_PUBLISH:-0}" == "true" || "${MONKEYS_RAW_UNIFIED_PUBLISH:-0}" == "yes" ]]; then
+    echo "ОШИБКА: MONKEYS_STABILISED_UNIFIED_PUBLISH и MONKEYS_RAW_UNIFIED_PUBLISH взаимоисключающие" >&2
+    exit 2
+  fi
   export MONKEYS_FLOW_OPTIONS_EXPECTED=1
 else
   export MONKEYS_FLOW_OPTIONS_EXPECTED=0
@@ -216,6 +220,9 @@ if [[ "${MONKEYS_RETURN_MANUAL_TARGET:-0}" == "1" || "${MONKEYS_RETURN_MANUAL_TA
 fi
 if [[ "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "1" || "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "true" || "${MONKEYS_STABILISED_UNIFIED_PUBLISH:-0}" == "yes" ]]; then
   ARGS+=(--stabilised-unified-publish)
+fi
+if [[ "${MONKEYS_RAW_UNIFIED_PUBLISH:-0}" == "1" || "${MONKEYS_RAW_UNIFIED_PUBLISH:-0}" == "true" || "${MONKEYS_RAW_UNIFIED_PUBLISH:-0}" == "yes" ]]; then
+  ARGS+=(--raw-unified-publish)
 fi
 if [[ -n "${MONKEYS_DATASET_DIR:-}" ]]; then
   ARGS+=(--dataset-dir "$MONKEYS_DATASET_DIR")
