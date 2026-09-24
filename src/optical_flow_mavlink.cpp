@@ -2881,7 +2881,16 @@ int main(int argc,char** argv){
                     const double h0=down.dot(R0c*(
                       mi.range_pos_body_frd-mi.camera_pos_body_frd+
                       mi.range0_m*lidar_ray_body));
-                    if(h0>0.03 && std::isfinite(h0)){
+                    const double optical_axis_down=R0c(2,2);
+                    const double optical_depth=
+                      (optical_axis_down>0.08)?(h0/optical_axis_down):0.0;
+                    if(h0>0.03 && std::isfinite(h0) &&
+                       optical_depth>0.03 && std::isfinite(optical_depth)){
+                      // ASTRA_DEPTH_FIX_V1: h0 is vertical camera-to-plane height.
+                      // Synthetic central-ray angular flow requires optical-axis
+                      // depth rho=h0/(local_down dot camera_optical_axis).
+                      // This change intentionally does not alter FLOW_OPTIONS,
+                      // FLOW_POS, WORKED5, or the SENSOR-centric reference point.
                       // STABILISED_SENSOR_CENTRIC_V1: FLOW_OPTIONS=1 tells ArduPilot
                       // that image roll/pitch rotation is already stabilised. Keep
                       // the measurement tied to the physical optical-flow sensor:
@@ -2891,8 +2900,8 @@ int main(int argc,char** argv){
                         causal_metric35_step.delta_camera_local_m*
                         (1.0/causal_metric35_step.dt);
                       const cv::Vec3d sensor_v_body=R0c.t()*sensor_v_local;
-                      const double fx=-sensor_v_body[1]/h0;
-                      const double fy= sensor_v_body[0]/h0;
+                      const double fx=-sensor_v_body[1]/optical_depth;
+                      const double fy= sensor_v_body[0]/optical_depth;
                       causal35_publish_valid=
                         std::isfinite(fx) && std::isfinite(fy) &&
                         std::hypot(fx,fy)<4.0;
