@@ -1936,6 +1936,14 @@ int main(int argc,char** argv){
     constexpr double kTerrainStepRatio=1.50;
     constexpr int64_t kTerrainGuardNs=400000000LL; // 0.4 s
     constexpr double kMaxFlowPipelineAgeMs=80.0;
+    // TEMPORAL_OF_AGGREGATE_V1
+    // Preserve angular displacement across short causal35 intervals and publish
+    // one mean flow rate over the complete contiguous accumulation window.
+    constexpr double kTemporalOfPublishMinDtS=0.060;
+    double temporal_of_angle_x=0.0;
+    double temporal_of_angle_y=0.0;
+    double temporal_of_dt_s=0.0;
+    uint64_t temporal_of_inputs=0;
 
     // Flight-only readiness gate. It does not arm or inhibit ArduPilot; it is an
     // explicit operator indication that the same signals used by the EKF are healthy.
@@ -3677,14 +3685,58 @@ int main(int argc,char** argv){
           (ts>0) ? (flow_send_ns-ts)*1e-6 : -1.0;
         const bool flow_fresh = frame_pipeline_latency_ms>=0.0 &&
                                 frame_pipeline_latency_ms<=kMaxFlowPipelineAgeMs;
-        if(s.valid && flow_fresh && !terrain_step_guard && stabilised_publish_ready){
-          quality=255;
-          // AP_OpticalFlow_MAV currently timestamps measurement by RECEIVE time,
-          // not packet.time_usec, so low pipeline latency is mandatory.
-          flow_sent=sendOpticalFlow(fc.fd,(uint64_t)(flow_send_ns/1000),
-            (float)flow_send_x,(float)flow_send_y,quality);
-          if(flow_sent)++flow_sent_total;
+
+        const bool temporal_of_input =
+          s.valid &&
+          flow_fresh &&
+          !terrain_step_guard &&
+          stabilised_publish_ready &&
+          dt>0.0 && dt<0.2 &&
+          std::isfinite(flow_send_x) &&
+          std::isfinite(flow_send_y);
+
+        if(temporal_of_input){
+          // flow_send_* is a rate over this camera interval.
+          // Integrate it back to angular displacement so no valid interval
+          // is lost when the FC consumes optical flow more slowly.
+          temporal_of_angle_x += flow_send_x*dt;
+          temporal_of_angle_y += flow_send_y*dt;
+          temporal_of_dt_s += dt;
+          ++temporal_of_inputs;
+
+          if(temporal_of_dt_s >= kTemporalOfPublishMinDtS){
+            const double temporal_flow_x =
+              temporal_of_angle_x/temporal_of_dt_s;
+            const double temporal_flow_y =
+              temporal_of_angle_y/temporal_of_dt_s;
+
+            quality=255;
+            flow_sent=sendOpticalFlow(
+              fc.fd,
+              (uint64_t)(flow_send_ns/1000),
+              (float)temporal_flow_x,
+              (float)temporal_flow_y,
+              quality);
+
+            if(flow_sent){
+              ++flow_sent_total;
+
+              // Consume the accumulator only after successful transmission.
+              temporal_of_angle_x=0.0;
+              temporal_of_angle_y=0.0;
+              temporal_of_dt_s=0.0;
+              temporal_of_inputs=0;
+            }
+          }
         } else {
+          // Never aggregate across a discontinuity. A missing/invalid interval
+          // means that the accumulated angular displacement is no longer
+          // guaranteed to describe one contiguous observation.
+          temporal_of_angle_x=0.0;
+          temporal_of_angle_y=0.0;
+          temporal_of_dt_s=0.0;
+          temporal_of_inputs=0;
+
           if(!prev.empty() && !s.valid) ++flow_invalid_total;
           if(s.valid && !flow_fresh) ++stale_flow_rejected_total;
           if(s.valid && flow_fresh && terrain_step_guard) ++terrain_step_reject_total;
