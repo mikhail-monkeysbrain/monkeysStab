@@ -5,7 +5,7 @@
     "AHRS_EKF_TYPE": 3,
     "EK3_ENABLE": 1,
     "FLOW_TYPE": 5,
-    "FLOW_OPTIONS": 0,
+    "FLOW_OPTIONS": 1,
     "FLOW_ORIENT_YAW": 0,
     "FLOW_FXSCALER": 0,
     "FLOW_FYSCALER": 0,

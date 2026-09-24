@@ -3522,7 +3522,7 @@ int main(int argc,char** argv){
         // WORKED5_MAG_SHADOW_V1
         // Diagnostic B arm only. Production s.valid, MAVLink and WORKED5-A are untouched.
         // Reuse the exact production RANSAC correspondences before the mag<4 gate.
-        {
+        if(false){  // PERF_AB: disable WORKED5_MAG_SHADOW_V1
           static double mag_shadow_n=0.0, mag_shadow_e=0.0;
           static uint64_t mag_shadow_attempts=0, mag_shadow_valid=0;
           static std::ofstream mag_shadow_csv;
@@ -3917,7 +3917,7 @@ int main(int argc,char** argv){
         //       body rates and then lever-arm corrected.
         // This block is logging only. It never changes WORKED5, OPTICAL_FLOW,
         // ArduPilot output, FUSED-V1/V2, or any production state.
-        {
+        if(false){  // PERF_AB: disable DELTAR_ROTATION_SHADOW_V1
           static std::ofstream dr_csv;
           static bool dr_header=false;
           if(!dr_csv.is_open()){
