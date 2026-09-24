@@ -111,6 +111,7 @@ def main():
     p.add_argument("--tcp-port",type=int,default=5760)
     p.add_argument("--udp-port",type=int,default=14550)
     p.add_argument("--gcs-ip",default="",help="необязательно: IP ПК для немедленной отправки телеметрии")
+    p.add_argument("--allow-gcs-rate-control",action="store_true",help="разрешить UDP GCS менять частоты MAVLink FC")
     a=p.parse_args()
     if a.baud not in BAUD: raise SystemExit(f"baud {a.baud} не поддержан")
 
@@ -233,8 +234,38 @@ def main():
                     if data:
                         spy=udp_spy.setdefault(peer,MavCommandSpy(f"udp:{peer[0]}:{peer[1]}"))
                         spy.feed(data)
-                        try: os.write(ser,data)
-                        except BlockingIOError: pass
+                        # Mission Planner periodically sends REQUEST_DATA_STREAM
+                        # (sys=255/comp=190).  Those legacy requests overwrite
+                        # the higher SET_MESSAGE_INTERVAL rates required by the
+                        # flight runtime (ATTITUDE 100 Hz, LOCAL_POSITION_NED
+                        # 20 Hz, EKF_STATUS_REPORT 5 Hz).  Keep all other GCS
+                        # MAVLink traffic transparent, but consume rate-control
+                        # frames here unless explicitly allowed for diagnostics.
+                        block_rate=False
+                        if not a.allow_gcs_rate_control:
+                            probe=MavCommandSpy("filter")
+                            # Parse only a complete single MAVLink frame. UDP
+                            # datagrams from Mission Planner are one frame in
+                            # the observed path.
+                            b=data
+                            if len(b)>=8 and b[0] in (0xFE,0xFD):
+                                plen=b[1]
+                                if b[0]==0xFE and len(b)>=plen+8:
+                                    mid=b[5]; payload=b[6:6+plen]
+                                elif b[0]==0xFD and len(b)>=plen+12:
+                                    mid=b[7] | (b[8]<<8) | (b[9]<<16); payload=b[10:10+plen]
+                                else:
+                                    mid=-1; payload=b""
+                                if mid==66:
+                                    block_rate=True
+                                elif mid==76 and len(payload)>=30:
+                                    command=struct.unpack_from("<H",payload,28)[0]
+                                    block_rate=(command==511)
+                        if block_rate:
+                            print(f"FC_TX_RATE_BLOCK source=udp:{peer[0]}:{peer[1]} bytes={len(data)}",flush=True)
+                        else:
+                            try: os.write(ser,data)
+                            except BlockingIOError: pass
                 else:
                     c=x
                     try: data=c.recv(65536)
