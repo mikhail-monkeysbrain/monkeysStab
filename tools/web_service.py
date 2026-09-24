@@ -987,6 +987,25 @@ def start_runtime():
     log_runtime_forensic("RUNTIME_START_OK",pid)
     return {"ok":True,"pid":pid}
 
+def fast_restart_runtime():
+    """Перезапустить только flight runtime без router/Web и без повторной сборки."""
+    global _proc,_log_handle,_runtime_started_wall,_active_csv
+    t0=time.monotonic()
+    stop_runtime()
+    old=os.environ.get("MONKEYS_FAST_RESTART")
+    os.environ["MONKEYS_FAST_RESTART"]="1"
+    try:
+        result=start_runtime()
+    finally:
+        if old is None:
+            os.environ.pop("MONKEYS_FAST_RESTART",None)
+        else:
+            os.environ["MONKEYS_FAST_RESTART"]=old
+    result["restart_ms"]=round((time.monotonic()-t0)*1000.0,1)
+    log_runtime_forensic("RUNTIME_FAST_RESTART_OK",result.get("pid"),
+                         f"restart_ms={result['restart_ms']}")
+    return result
+
 def stop_runtime():
     global _proc,_log_handle,_active_csv,_live_latest,_live_last_wall
     with _lock:
@@ -2184,6 +2203,7 @@ class H(BaseHTTPRequestHandler):
                 if running(): raise RuntimeError("Остановите flight runtime перед изменением стартовых параметров")
                 self.send_json({"ok":True,"runtime":save_config(self.body_json())})
             elif p=="/api/start": self.send_json(start_runtime())
+            elif p=="/api/restart-fast": self.send_json(fast_restart_runtime())
             elif p=="/api/stop": self.send_json(stop_runtime())
             elif p=="/api/zero": set_zero();self.send_json({"ok":True})
             elif p=="/api/run-record/start": self.send_json(start_run_record())
