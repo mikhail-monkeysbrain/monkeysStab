@@ -2365,7 +2365,7 @@ if __name__=="__main__":
             probe.close()
         ensure_router()
         start_live_udp_listener()
-    start_recovery_watchdog()
+        start_recovery_watchdog()
         start_statustext_monitor()
         start_fc_blackbox()
         log_event("INFO","Web UI запущен")
