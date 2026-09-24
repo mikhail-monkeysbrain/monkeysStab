@@ -793,7 +793,10 @@ struct FlowFc {
                   <<mapped_transport_ms<<','<<(map_valid?1:0)<<','
                   <<q.roll<<','<<q.pitch<<','<<q.yaw<<','
                   <<q.rollspeed<<','<<q.pitchspeed<<','<<q.yawspeed<<'\n';
-                attitude_shadow_ofs.flush();
+                // Do not flush every 100 Hz ATTITUDE sample. std::ofstream
+                // buffers the diagnostic shadow and flushes on close; forcing a
+                // flush here can stall the single MAVLink RX thread and age all
+                // FC measurements seen by causal35.
               }
 
               attitude_history.push_back(gyro);
@@ -858,7 +861,8 @@ struct FlowFc {
                   <<(q.xgyro+(drift_fresh?ahrs_omega_i_x:0.0))<<','
                   <<(q.ygyro+(drift_fresh?ahrs_omega_i_y:0.0))<<','
                   <<(q.zgyro+(drift_fresh?ahrs_omega_i_z:0.0))<<'\n';
-                highres_gyro_shadow_ofs.flush();
+                // Same rule for HIGHRES_IMU: diagnostic logging must never
+                // block the single MAVLink RX thread at 100 Hz.
               }
 
               // Diagnostic only: compare FC timestamps and RPi receive timing.
