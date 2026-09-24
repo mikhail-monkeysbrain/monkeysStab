@@ -920,7 +920,7 @@ def log_runtime_forensic(event,pid=None,detail=""):
         if new:w.writerow(["mono_ns","wall_ns","event","pid","detail"])
         w.writerow([time.monotonic_ns(),time.time_ns(),event,pid if pid is not None else "",detail])
 
-def start_runtime():
+def start_runtime(fast_start=False):
     global _proc,_log_handle,_runtime_started_wall,_active_csv
     with _lock:
         if running():
@@ -968,9 +968,12 @@ def start_runtime():
         )
         pid=_proc.pid
         log_runtime_forensic("RUNTIME_PROCESS_CREATED",pid)
-    # Let fast preflight/audit failures surface to the caller instead of
-    # silently returning to "Остановлен".
-    deadline=time.time()+1.2
+    # Cold start keeps the historical 1.2 s guard so audit/preflight failures
+    # surface synchronously. Recovery already uses a verified cached binary:
+    # only keep a short spawn guard here; readiness is established separately
+    # from fresh runtime telemetry, not by sleeping for 1.2 seconds.
+    startup_guard_s=0.12 if fast_start else 1.2
+    deadline=time.time()+startup_guard_s
     while time.time()<deadline:
         if _proc.poll() is not None:
             info=runtime_exit_info() or {}
@@ -995,7 +998,7 @@ def fast_restart_runtime():
     old=os.environ.get("MONKEYS_FAST_RESTART")
     os.environ["MONKEYS_FAST_RESTART"]="1"
     try:
-        result=start_runtime()
+        result=start_runtime(fast_start=True)
     finally:
         if old is None:
             os.environ.pop("MONKEYS_FAST_RESTART",None)
