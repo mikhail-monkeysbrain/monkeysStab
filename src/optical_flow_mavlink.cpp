@@ -2837,6 +2837,7 @@ int main(int argc,char** argv){
           double causal_metric35_anchor_recv_age_ms=-1.0;
           double causal_metric35_anchor_sample_age_ms=-1.0;
           double causal_metric35_deltar_hold_ms=-1.0;
+          double causal_metric35_deltar_angle_deg=0.0;
           if(causal_att_anchor_valid){
             causal_metric35_anchor_recv_age_ms=
               (selected_dq_mono_ns-causal_att_anchor.recv_ns)*1e-6;
@@ -2851,6 +2852,7 @@ int main(int argc,char** argv){
               const auto d01=metric_shadow::integrateBodyRatesCausalHold(
                 hgh_corr_causal,prev_ts,ts,25.0);
               causal_metric35_deltar_hold_ms=d01.max_bracket_gap_ms;
+              causal_metric35_deltar_angle_deg=d01.integrated_angle_deg;
               if(anchor_to_t1.valid && d01.valid){
                 const cv::Matx33d Ra=metric_shadow::bodyToLocal(
                   causal_att_anchor.roll,causal_att_anchor.pitch,causal_att_anchor.yaw);
@@ -2950,7 +2952,8 @@ int main(int argc,char** argv){
             if(!causal_metric35_header){
               causal_metric35_csv
                 <<"frame,t0_ns,t1_ns,ready,anchor_recv_age_ms,anchor_sample_age_ms,"
-                <<"deltar_hold_ms,camera_dN_m,camera_dE_m,residual_median_m\n";
+                <<"deltar_hold_ms,deltar_angle_deg,camera_dN_m,camera_dE_m,"
+                <<"lever_dN_m,lever_dE_m,imu_dN_m,imu_dE_m,residual_median_m\n";
               causal_metric35_header=true;
             }
             causal_metric35_csv
@@ -2958,8 +2961,13 @@ int main(int argc,char** argv){
               <<causal_metric35_anchor_recv_age_ms<<','
               <<causal_metric35_anchor_sample_age_ms<<','
               <<causal_metric35_deltar_hold_ms<<','
+              <<causal_metric35_deltar_angle_deg<<','
               <<causal_metric35_step.delta_camera_local_m[0]<<','
               <<causal_metric35_step.delta_camera_local_m[1]<<','
+              <<causal_metric35_step.lever_local_m[0]<<','
+              <<causal_metric35_step.lever_local_m[1]<<','
+              <<causal_metric35_step.delta_local_m[0]<<','
+              <<causal_metric35_step.delta_local_m[1]<<','
               <<causal_metric35_step.residual_median_m<<'\n';
             causal_metric35_csv.flush();
           }
