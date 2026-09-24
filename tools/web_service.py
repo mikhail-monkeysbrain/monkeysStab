@@ -1104,9 +1104,16 @@ def stop_runtime():
     global _proc,_log_handle,_active_csv,_live_latest,_live_last_wall
     with _lock:
         if not running():
-            log_runtime_forensic("RUNTIME_STOP_ALREADY_STOPPED")
-            return {"ok":True,"already_stopped":True}
-        pid=_proc.pid
+            # Popen may already have exited while run_system.sh left its
+            # process group alive.  Keep the last pid and still terminate the
+            # whole group instead of abandoning the flight binary.
+            if _proc is None:
+                log_runtime_forensic("RUNTIME_STOP_ALREADY_STOPPED")
+                return {"ok":True,"already_stopped":True}
+            pid=_proc.pid
+            log_runtime_forensic("RUNTIME_STOP_STALE_GROUP",pid)
+        else:
+            pid=_proc.pid
         log_runtime_forensic("RUNTIME_STOP_REQUEST",pid)
         try:
             os.killpg(pid, signal.SIGTERM)
