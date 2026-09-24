@@ -2882,13 +2882,13 @@ int main(int argc,char** argv){
                       mi.range_pos_body_frd-mi.camera_pos_body_frd+
                       mi.range0_m*lidar_ray_body));
                     if(h0>0.03 && std::isfinite(h0)){
-                      // STABILISED_IMU_CENTRIC_AB_V1: FLOW_OPTIONS=1 tells ArduPilot
-                      // that roll/pitch rotation is already stabilised. Publish the
-                      // rotation- and lever-arm-compensated FC/IMU displacement
-                      // instead of the SENSOR-centric camera arc. Keep the causal35
-                      // validity/timing/range contract unchanged.
+                      // STABILISED_SENSOR_CENTRIC_V1: FLOW_OPTIONS=1 tells ArduPilot
+                      // that image roll/pitch rotation is already stabilised. Keep
+                      // the measurement tied to the physical optical-flow sensor:
+                      // publish the camera optical-centre displacement. FLOW_POS
+                      // remains the sensor offset supplied separately to EKF3.
                       const cv::Vec3d sensor_v_local=
-                        causal_metric35_step.delta_local_m*
+                        causal_metric35_step.delta_camera_local_m*
                         (1.0/causal_metric35_step.dt);
                       const cv::Vec3d sensor_v_body=R0c.t()*sensor_v_local;
                       const double fx=-sensor_v_body[1]/h0;
