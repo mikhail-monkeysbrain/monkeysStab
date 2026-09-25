@@ -98,6 +98,21 @@ static std::string jsonNumber(double v){
   return o.str();
 }
 
+// FORENSIC_SHADOW_FLUSH_AB_V1
+// Default preserves the frozen baseline. Set MONKEYS_SHADOW_FLUSH=0 only for
+// the controlled A/B test: shadow CSV rows are still written, but per-frame
+// forced flushes are suppressed. Production optical_flow_mavlink.csv and the
+// RAW causal35 publication path are not changed by this switch.
+bool shadowFlushEnabled(){
+  static const bool enabled=[]{
+    const char* e=std::getenv("MONKEYS_SHADOW_FLUSH");
+    if(!e || !*e) return true;
+    const std::string v(e);
+    return !(v=="0" || v=="false" || v=="FALSE" || v=="off" || v=="OFF");
+  }();
+  return enabled;
+}
+
 struct FeatureRoi {
   double x0=0.20;
   double y0=0.20;
@@ -455,7 +470,7 @@ struct FlowFc {
        <<(production_valid?1:0)<<','<<invalid_reason<<','
        <<tracked<<','<<inliers<<','<<inlier_ratio<<','<<dt_s<<','
        <<best->pos_n<<','<<best->pos_e<<','<<best->vel_n<<','<<best->vel_e<<'\n';
-    out.flush();
+    if(shadowFlushEnabled()) out.flush();
   }
 
   // FUSED_V2_REALTIME_SHADOW_V1
@@ -589,7 +604,7 @@ struct FlowFc {
        <<(cam_ns-imu_it->recv_ns)*1e-6<<','
        <<fused_v2_rt_n<<','<<fused_v2_rt_e<<','
        <<std::hypot(fused_v2_rt_n,fused_v2_rt_e)<<'\n';
-    out.flush();
+    if(shadowFlushEnabled()) out.flush();
   }
 
   ~FlowFc(){ stop(); }
@@ -2767,7 +2782,7 @@ int main(int argc,char** argv){
                   <<','<<ps.residual_median_m;
               }
               highres_phase_csv<<'\n';
-              highres_phase_csv.flush();
+              if(shadowFlushEnabled()) highres_phase_csv.flush();
             }
           }
 
@@ -3042,7 +3057,7 @@ int main(int argc,char** argv){
               <<(r0.valid?1:0)<<','<<(r1.valid?1:0)<<','
               <<r0.distance_m<<','<<r1.distance_m<<','
               <<(r1.distance_m-r0.distance_m)<<'\n';
-            angular_b_csv.flush();
+            if(shadowFlushEnabled()) angular_b_csv.flush();
           }
 
           if(!causal_metric35_csv.is_open()){
@@ -3072,7 +3087,7 @@ int main(int argc,char** argv){
               <<causal_metric35_step.delta_local_m[0]<<','
               <<causal_metric35_step.delta_local_m[1]<<','
               <<causal_metric35_step.residual_median_m<<'\n';
-            causal_metric35_csv.flush();
+            if(shadowFlushEnabled()) causal_metric35_csv.flush();
           }
 
           // HIGHRES_CAUSAL15_SHADOW_V1: evaluate the same corrected HIGHRES
@@ -3536,7 +3551,7 @@ int main(int argc,char** argv){
               <<metric_step.residual_median_m
               <<'\n';
 
-            metric_shadow_csv.flush();
+            if(shadowFlushEnabled()) metric_shadow_csv.flush();
           }
 
           if(metric_shadow_last_print_ns==0 || now-metric_shadow_last_print_ns>=500000000LL){
@@ -3646,7 +3661,7 @@ int main(int argc,char** argv){
                   <<(v15?1:0)<<','<<n15<<','<<e15<<','<<c15_n<<','<<c15_e<<','
                   <<(v10?1:0)<<','<<n10<<','<<e10<<','<<c10_n<<','<<c10_e<<','
                   <<(v7?1:0)<<','<<n7<<','<<e7<<','<<c7_n<<','<<c7_e<<'\n';
-            r5_csv.flush();
+            if(shadowFlushEnabled()) r5_csv.flush();
           }
         }
 
@@ -3720,7 +3735,7 @@ int main(int argc,char** argv){
               <<mag_shadow_n<<','<<mag_shadow_e<<','
               <<shadow_w5.du_norm<<','<<shadow_w5.dv_norm<<','
               <<shadow_w5.dx_m<<','<<shadow_w5.dy_m<<'\n';
-            mag_shadow_csv.flush();
+            if(shadowFlushEnabled()) mag_shadow_csv.flush();
           }
         }
 
@@ -4044,7 +4059,7 @@ int main(int argc,char** argv){
                       <<(v2_cam_ns-best->recv_ns)*1e-6<<','
                       <<best->pos_n<<','<<best->pos_e<<','<<best->vel_n<<','<<best->vel_e<<','
                       <<dN<<','<<dE<<','<<dt<<'\n';
-                    v2_capture_csv.flush();
+                    if(shadowFlushEnabled()) v2_capture_csv.flush();
                   }
                 }
 
