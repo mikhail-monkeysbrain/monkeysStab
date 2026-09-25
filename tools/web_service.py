@@ -64,6 +64,9 @@ _live_udp_thread=None
 _live_udp_stop=threading.Event()
 _live_udp_rx=0
 _live_udp_bad=0
+# LIVE_UDP_FORENSIC_V1
+_live_udp_last_datagram_wall=0.0
+_live_udp_last_telemetry_wall=0.0
 _recovery_state="RUNNING"
 _recovery_lock=threading.Lock()
 _recovery_thread=None
@@ -268,6 +271,16 @@ def live_payload(raw):
         if _zero["x"] is None and bool(raw.get("ekf_valid",False)):
             _zero["x"],_zero["y"],_zero["z"]=x,y,z
             _yaw_zero_deg=raw_yaw_deg
+            # WEB_HOME_CAPTURE_FORENSIC_V1
+            # Diagnostic only: record the exact FC sample selected as Web HOME.
+            log_event(
+                "INFO",
+                "WEB HOME capture: "
+                f"frame={int(raw.get('frame',0) or 0)} "
+                f"x={x:.6f} y={y:.6f} z={z:.6f} "
+                f"range_m={raw.get('range_m')} "
+                f"ekf_valid={bool(raw.get('ekf_valid',False))}"
+            )
         zx,zy,zz=_zero["x"],_zero["y"],_zero["z"]
         if raw_n is not None and raw_e is not None and _raw_zero["n"] is None:
             _raw_zero["n"],_raw_zero["e"]=raw_n,raw_e
@@ -420,7 +433,7 @@ def live_payload(raw):
     return out
 
 def start_recovery_watchdog():
-    """Автовосстановление RAW runtime при устойчивой потере свежих данных FC."""
+    """Мониторинг свежести RAW runtime без автоматического перезапуска."""
     global _recovery_thread,_recovery_state,_recovery_fault_since
     if _recovery_thread and _recovery_thread.is_alive():
         return
@@ -453,25 +466,40 @@ def start_recovery_watchdog():
                 continue
             if now-_runtime_started_wall < 3.5:
                 continue
+
+            # WEB_WATCHDOG_MONITOR_ONLY_V1
+            # Web telemetry is diagnostic and must never restart the
+            # flight-critical Optical Flow runtime.
+            #
+            # Before the first telemetry sample there is nothing to recover:
+            # stay in ACQUIRING instead of generating the old age=999 fault.
+            if sample is None:
+                _recovery_state="ACQUIRING"
+                _recovery_fault_since=0.0
+                continue
+
             if _recovery_fault_since == 0.0:
                 _recovery_fault_since=now
                 continue
-            if now-_recovery_fault_since < 1.0 or not _recovery_armed:
+
+            if now-_recovery_fault_since < 1.0:
                 continue
-            _recovery_armed=False
-            _recovery_state="FAULT"
-            log_runtime_forensic("RECOVERY_FAULT",detail=f"telemetry_age_s={age:.3f}")
-            try:
-                _recovery_state="RESTARTING"
-                result=fast_restart_runtime()
-                _recovery_last_restart_wall=time.time()
-                _recovery_state="READY" if result.get("ready") else "NOT_READY"
-            except Exception as e:
-                _recovery_last_restart_wall=time.time()
-                _recovery_state="NOT_READY"
-                log_runtime_forensic("RECOVERY_RESTART_FAIL",detail=str(e))
-            finally:
-                _recovery_fault_since=0.0
+
+            # Log one event for this outage, but DO NOT stop/restart runtime.
+            if _recovery_state != "FAULT":
+                _recovery_state="FAULT"
+                datagram_age=(now-_live_udp_last_datagram_wall) if _live_udp_last_datagram_wall else 999.0
+                telemetry_rx_age=(now-_live_udp_last_telemetry_wall) if _live_udp_last_telemetry_wall else 999.0
+                log_runtime_forensic(
+                    "RECOVERY_FAULT_MONITOR_ONLY",
+                    detail=(
+                        f"processed_age_s={age:.3f} "
+                        f"udp_datagram_age_s={datagram_age:.3f} "
+                        f"udp_telemetry_age_s={telemetry_rx_age:.3f} "
+                        f"udp_rx={_live_udp_rx} "
+                        f"udp_bad={_live_udp_bad}"
+                    )
+                )
     _recovery_thread=threading.Thread(target=run,name="recovery-watchdog",daemon=True)
     _recovery_thread.start()
 
@@ -482,6 +510,7 @@ def start_live_udp_listener():
     _live_udp_stop.clear()
     def run():
         global _live_udp_rx,_live_udp_bad,_camera_jpeg,_camera_last_wall
+        global _live_udp_last_datagram_wall,_live_udp_last_telemetry_wall
         sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
         try:
@@ -497,6 +526,7 @@ def start_live_udp_listener():
             while not _live_udp_stop.is_set():
                 try:
                     data,_=sock.recvfrom(65535)
+                    _live_udp_last_datagram_wall=time.time()
                 except socket.timeout:
                     continue
                 except OSError:
@@ -511,6 +541,7 @@ def start_live_udp_listener():
                         continue
                     raw=json.loads(data.decode("utf-8"))
                     if raw.get("type")!="telemetry":continue
+                    _live_udp_last_telemetry_wall=time.time()
                     _live_udp_rx+=1
                     ws_broadcast(live_payload(raw))
                 except Exception as e:
@@ -1490,7 +1521,7 @@ button{cursor:pointer}
    <div class="metric"><span>Y · FC EKF</span><b id="my">—</b></div>
    <div class="metric"><span>Z · FC EKF</span><b id="mz">—</b></div>
    <div class="metric"><span>TF-Luna</span><b id="mr">—</b></div>
-   <div class="metric"><span>Flow quality</span><b id="mq">—</b></div>
+   <div class="metric"><span>RAW OF</span><b id="mq">—</b></div>
   </div>
   <div class="metrics">
    <div class="metric"><span>X · IMU DR</span><b id="imuX">—</b></div>
@@ -1999,7 +2030,7 @@ function updateHud(t){
    return;
  }
  $('runState').textContent=t.running?'Работает':'Остановлен';$('footerRuntime').textContent=t.running?'работает':'остановлен';$('footerRuntime').style.color=t.running?'#15d876':'#8aa5b8';
- $('mx').textContent=fmt(t.x_mm,0)+' мм';$('my').textContent=fmt(t.y_mm,0)+' мм';$('mz').textContent=fmt(t.z_mm,0)+' мм';$('mr').textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';$('mq').textContent=t.quality??'—';
+ $('mx').textContent=fmt(t.x_mm,0)+' мм';$('my').textContent=fmt(t.y_mm,0)+' мм';$('mz').textContent=fmt(t.z_mm,0)+' мм';$('mr').textContent=t.range_m==null?'—':fmt(t.range_m*1000,0)+' мм';$('mq').textContent=t.raw_of_valid?'VALID':'INVALID';
  if($('imuX'))$('imuX').textContent=fmt(t.imu_dr_n_mm,0)+' мм';
  if($('imuY'))$('imuY').textContent=fmt(t.imu_dr_e_mm,0)+' мм';
  if($('imuZ'))$('imuZ').textContent=fmt(t.imu_dr_d_mm,0)+' мм';

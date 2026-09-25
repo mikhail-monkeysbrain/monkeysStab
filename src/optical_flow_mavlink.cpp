@@ -2546,7 +2546,19 @@ int main(int argc,char** argv){
           lkfc_ring.clear();
         }
 
-        web_live.sendPreview(now,gray,s.inlier_points,g_feature_roi);
+        // WEB_PREVIEW_AB_V1: diagnostic-only A/B switch.
+        // Default ON preserves the existing web contour. MONKEYS_WEB_PREVIEW=0
+        // skips all preview JPEG work without changing live JSON telemetry or OF.
+        {
+          const char* e=std::getenv("MONKEYS_WEB_PREVIEW");
+          const bool preview_enabled=
+            !e || !*e ||
+            !(std::string(e)=="0" || std::string(e)=="false" ||
+              std::string(e)=="FALSE" || std::string(e)=="off" ||
+              std::string(e)=="OFF");
+          if(preview_enabled)
+            web_live.sendPreview(now,gray,s.inlier_points,g_feature_roi);
+        }
 
         // Metric odometry shadow. This path is diagnostic only: it consumes
         // the exact production RANSAC correspondences but never changes
