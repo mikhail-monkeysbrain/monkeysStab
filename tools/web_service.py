@@ -1462,9 +1462,13 @@ button{cursor:pointer}
    <div class="btnrow3">
     <button id="mStab" class="btn" onclick="setMode('stabilize','Stabilize')">STABILIZE</button>
     <button id="mPos" class="btn" onclick="setMode('poshold','PosHold')">POSHOLD</button>
-    <button id="mLoi" class="btn" onclick="setMode('loiter','Loiter')">LOITER</button>
    </div>
-   <div id="fcMsg" style="margin-top:8px;color:#7798ae;font-size:11px">Команды подтверждаются FC.</div>
+   <div class="field" style="margin-top:9px"><span>Высота TAKEOFF, м</span><input id="takeoffAlt" type="number" min="0.10" max="10.0" step="0.05" value="0.30"></div>
+   <div class="btnrow">
+    <button id="takeoffBtn" class="btn green" onclick="takeoffFc()">▲ TAKEOFF</button>
+    <button id="landBtn" class="btn red" onclick="landFc()">▼ LAND</button>
+   </div>
+   <div id="fcMsg" style="margin-top:8px;color:#7798ae;font-size:11px">TAKEOFF: Guided + относительная высота. LAND: режим Land.</div>
   </div>
 
   <div class="card">
@@ -1793,10 +1797,9 @@ function showSettingsTab(id,btn){
 function fmt(v,d=1){return v==null||!Number.isFinite(Number(v))?'—':Number(v).toFixed(d)}
 function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
 function setActiveMode(mode){
- ['mStab','mPos','mLoi'].forEach(id=>$(id).classList.remove('blue'));
- if(mode==='Stabilize')$('mStab').classList.add('blue');
- if(mode==='PosHold')$('mPos').classList.add('blue');
- if(mode==='Loiter')$('mLoi').classList.add('blue');
+ ['mStab','mPos'].forEach(id=>{if($(id))$(id).classList.remove('blue')});
+ if(mode==='Stabilize'&&$('mStab'))$('mStab').classList.add('blue');
+ if(mode==='PosHold'&&$('mPos'))$('mPos').classList.add('blue');
 }
 async function loadConfig(){
  let j=await api('/api/config'),c=j.runtime;
@@ -1963,6 +1966,16 @@ async function zero(){try{
 async function armFc(){if(!confirm('ARM: разрешить запуск моторов?'))return;try{showFc(await api('/api/fc/arm',{method:'POST'}))}catch(e){alert(e.message)}}
 async function disarmFc(){if(!confirm('DISARM: отключить моторы?'))return;try{showFc(await api('/api/fc/disarm',{method:'POST'}))}catch(e){alert(e.message)}}
 async function setMode(id,name){if(!confirm('Переключить режим на '+name+'?'))return;try{showFc(await api('/api/fc/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:id})}))}catch(e){alert(e.message)}}
+async function takeoffFc(){
+ const alt=Number(String($('takeoffAlt').value).replace(',','.'));
+ if(!Number.isFinite(alt)||alt<0.10||alt>10.0){alert('Высота TAKEOFF должна быть 0.10..10.0 м');return}
+ if(!confirm('TAKEOFF: перейти в Guided и подняться на +'+alt.toFixed(2)+' м относительно точки старта?'))return;
+ try{showFc(await api('/api/fc/takeoff',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({alt_m:alt})}))}catch(e){alert(e.message)}
+}
+async function landFc(){
+ if(!confirm('LAND: перевести FC в режим посадки?'))return;
+ try{showFc(await api('/api/fc/land',{method:'POST'}))}catch(e){alert(e.message)}
+}
 function showFc(j){
  fcLatest=j;$('linkDot').classList.remove('baddot');$('linkText').textContent='OK';$('fcDotBig').classList.remove('baddot');
  $('fcState').textContent=j.armed?'ARMED':'DISARMED';$('fcState').style.color=j.armed?'#ff5967':'#e9f3fb';$('fcMode').textContent=j.mode;$('arm').textContent=j.armed?'ARMED':'DISARMED';setActiveMode(j.mode);
@@ -2377,9 +2390,20 @@ class H(BaseHTTPRequestHandler):
                 out=fc_control("disarm");log_event("INFO","DISARM подтверждён FC");self.send_json(out)
             elif p=="/api/fc/mode":
                 mode=str(self.body_json().get("mode","")).lower()
-                if mode not in ("stabilize","poshold","loiter"):
-                    raise ValueError("Разрешены только Stabilize, PosHold и Loiter")
+                if mode not in ("stabilize","poshold"):
+                    raise ValueError("Разрешены только Stabilize и PosHold")
                 out=fc_control("mode",mode);log_event("INFO","Режим FC -> "+mode);self.send_json(out)
+            elif p=="/api/fc/takeoff":
+                alt=float(self.body_json().get("alt_m",0.0))
+                if not (0.10 <= alt <= 10.0):
+                    raise ValueError("Высота TAKEOFF должна быть 0.10..10.0 м")
+                out=fc_control("takeoff",f"{alt:.3f}")
+                log_event("WARN",f"TAKEOFF принят FC: +{alt:.2f} м")
+                self.send_json(out)
+            elif p=="/api/fc/land":
+                out=fc_control("mode","land")
+                log_event("WARN","LAND подтверждён FC")
+                self.send_json(out)
             elif p=="/api/fc/params":
                 self.send_json({"ok":True,"values":set_profile_params(self.body_json().get("values",{}))})
             elif p=="/api/geometry":
