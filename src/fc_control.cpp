@@ -163,7 +163,7 @@ int main(int argc,char** argv){
     if(argc<4) die("для takeoff укажите относительную высоту в метрах");
     char* endp=nullptr;
     const double alt=std::strtod(argv[3],&endp);
-    if(endp==argv[3] || *endp!='\\0' || alt<0.10 || alt>10.0)
+    if(endp==argv[3] || *endp!='\0' || alt<0.10 || alt>10.0)
       die("высота takeoff должна быть числом 0.10..10.0 м");
     const bool armed=(h.base_mode&MAV_MODE_FLAG_SAFETY_ARMED)!=0;
     if(!armed) die("TAKEOFF запрещён: FC должен быть ARMED");
