@@ -870,13 +870,15 @@ struct FlowFc {
                   std::ios::out|std::ios::trunc);
                 if(highres_gyro_shadow_ofs.is_open())
                   highres_gyro_shadow_ofs
-                    <<"seq,fc_time_usec,recv_ns,gx_rad_s,gy_rad_s,gz_rad_s,"
+                    <<"seq,fc_time_usec,recv_ns,fields_updated,ax_mps2,ay_mps2,az_mps2,gx_rad_s,gy_rad_s,gz_rad_s,"
                     <<"ahrs_omegaIx,ahrs_omegaIy,ahrs_omegaIz,ahrs_drift_age_ms,"
                     <<"corr_gx_rad_s,corr_gy_rad_s,corr_gz_rad_s\n";
               }
               if(highres_gyro_shadow_ofs.is_open()){
                 highres_gyro_shadow_ofs
                   <<imu_count<<','<<q.time_usec<<','<<imu.recv_ns<<','
+                  <<q.fields_updated<<','
+                  <<q.xacc<<','<<q.yacc<<','<<q.zacc<<','
                   <<q.xgyro<<','<<q.ygyro<<','<<q.zgyro<<',';
                 highres_gyro_shadow_ofs
                   <<(drift_fresh?ahrs_omega_i_x:0.0)<<','
