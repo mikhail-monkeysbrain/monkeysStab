@@ -1,5 +1,5 @@
 // monkeysStab — web FC control helper.
-// Commands: status | arm | disarm | mode stabilize|loiter|poshold
+// Commands: status | arm | disarm | mode stabilize|poshold|guided|land | takeoff <relative_alt_m>
 #include "ardupilotmega/mavlink.h"
 #include <fcntl.h>
 #include <poll.h>
@@ -83,7 +83,8 @@ static bool waitHb(int fd,Hb* out,int timeout_ms){
 static const char* modeName(uint32_t m){
   switch(m){
     case 0:return "Stabilize";
-    case 5:return "Loiter";
+    case 4:return "Guided";
+    case 9:return "Land";
     case 16:return "PosHold";
     default:return "Other";
   }
@@ -101,7 +102,7 @@ static void printStatus(const Hb& h){
 }
 int main(int argc,char** argv){
   if(argc<3){
-    std::cerr<<"Использование: "<<argv[0]<<" tcp://host:port status|arm|disarm|mode [stabilize|loiter|poshold]\n";
+    std::cerr<<"Использование: "<<argv[0]<<" tcp://host:port status|arm|disarm|mode [stabilize|poshold|guided|land] | takeoff <relative_alt_m>\n";
     return 2;
   }
   std::string ep=argv[1],cmd=argv[2];
@@ -135,13 +136,14 @@ int main(int argc,char** argv){
   }
 
   if(cmd=="mode"){
-    if(argc<4) die("для mode укажите stabilize|loiter|poshold");
+    if(argc<4) die("для mode укажите stabilize|poshold|guided|land");
     std::string name=argv[3];
     uint32_t mode=0;
     if(name=="stabilize") mode=0;
-    else if(name=="loiter") mode=5;
+    else if(name=="guided") mode=4;
+    else if(name=="land") mode=9;
     else if(name=="poshold") mode=16;
-    else die("разрешены только stabilize|loiter|poshold");
+    else die("разрешены только stabilize|poshold|guided|land");
 
     mavlink_message_t m{};
     mavlink_msg_set_mode_pack(191,199,&m,h.sys,MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,mode);
@@ -155,6 +157,64 @@ int main(int argc,char** argv){
       if(q.custom_mode==mode){ printStatus(q); ::close(fd); return 0; }
     }
     die("FC не подтвердил смену режима");
+  }
+
+  if(cmd=="takeoff"){
+    if(argc<4) die("для takeoff укажите относительную высоту в метрах");
+    char* endp=nullptr;
+    const double alt=std::strtod(argv[3],&endp);
+    if(endp==argv[3] || *endp!='\\0' || alt<0.10 || alt>10.0)
+      die("высота takeoff должна быть числом 0.10..10.0 м");
+    const bool armed=(h.base_mode&MAV_MODE_FLAG_SAFETY_ARMED)!=0;
+    if(!armed) die("TAKEOFF запрещён: FC должен быть ARMED");
+
+    // Automated takeoff is a Guided command. Switch and confirm Guided first.
+    {
+      mavlink_message_t m{};
+      mavlink_msg_set_mode_pack(191,199,&m,h.sys,MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,4);
+      uint8_t b[MAVLINK_MAX_PACKET_LEN];
+      auto n=mavlink_msg_to_send_buffer(b,&m); writeAll(fd,b,n);
+      bool guided=false;
+      int64_t end=nowMs()+5000;
+      while(nowMs()<end){
+        Hb q{};
+        if(!waitHb(fd,&q,700))continue;
+        if(q.custom_mode==4){ h=q; guided=true; break; }
+      }
+      if(!guided) die("FC не подтвердил переход в Guided");
+    }
+
+    mavlink_message_t m{};
+    mavlink_msg_command_long_pack(
+      191,199,&m,h.sys,h.comp,
+      MAV_CMD_NAV_TAKEOFF,0,
+      0,0,0,0,0,0,(float)alt);
+    uint8_t b[MAVLINK_MAX_PACKET_LEN];
+    auto n=mavlink_msg_to_send_buffer(b,&m); writeAll(fd,b,n);
+
+    mavlink_status_t st{}; mavlink_message_t rx{}; uint8_t buf[2048];
+    int64_t end=nowMs()+5000;
+    while(nowMs()<end){
+      pollfd p{fd,POLLIN,0};
+      int pr=poll(&p,1,100);
+      if(pr<0&&errno==EINTR)continue;
+      if(pr<=0)continue;
+      for(;;){
+        ssize_t nr=::read(fd,buf,sizeof(buf));
+        if(nr<0&&(errno==EAGAIN||errno==EWOULDBLOCK))break;
+        if(nr<=0)break;
+        for(ssize_t i=0;i<nr;i++){
+          if(!mavlink_parse_char(MAVLINK_COMM_0,buf[i],&rx,&st))continue;
+          if(rx.msgid!=MAVLINK_MSG_ID_COMMAND_ACK)continue;
+          mavlink_command_ack_t ack{}; mavlink_msg_command_ack_decode(&rx,&ack);
+          if(ack.command!=MAV_CMD_NAV_TAKEOFF)continue;
+          if(ack.result!=MAV_RESULT_ACCEPTED)
+            die("FC отклонил MAV_CMD_NAV_TAKEOFF, result="+std::to_string((int)ack.result));
+          printStatus(h); ::close(fd); return 0;
+        }
+      }
+    }
+    die("FC не прислал COMMAND_ACK для MAV_CMD_NAV_TAKEOFF");
   }
 
   die("неизвестная команда");
