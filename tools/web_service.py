@@ -40,6 +40,9 @@ _lock=threading.RLock()
 _proc=None
 _log_handle=None
 _runtime_started_wall=0.0
+_runtime_test_duration_s=0.0
+_runtime_test_deadline_mono=0.0
+_runtime_test_timer_token=0
 _active_csv=None
 _router_proc=None
 _router_log_handle=None
@@ -1013,8 +1016,37 @@ def log_runtime_forensic(event,pid=None,detail=""):
         if new:w.writerow(["mono_ns","wall_ns","event","pid","detail"])
         w.writerow([time.monotonic_ns(),time.time_ns(),event,pid if pid is not None else "",detail])
 
+def _arm_runtime_test_timer(pid):
+    """Остановить тот же runtime по истечении тестового лимита."""
+    global _runtime_test_timer_token
+    with _lock:
+        duration=_runtime_test_duration_s
+        deadline=_runtime_test_deadline_mono
+        _runtime_test_timer_token+=1
+        token=_runtime_test_timer_token
+    if duration <= 0.0 or deadline <= 0.0:
+        return
+    def timer():
+        while True:
+            remaining=deadline-time.monotonic()
+            if remaining <= 0.0:
+                break
+            time.sleep(min(0.25,remaining))
+        with _lock:
+            same=(token==_runtime_test_timer_token and running() and _proc is not None and _proc.pid==pid)
+        if not same:
+            return
+        log_event("WARN",f"Тестовый таймер истёк: {duration:.0f} с — flight runtime останавливается")
+        log_runtime_forensic("RUNTIME_TEST_TIMEOUT",pid,f"duration_s={duration:.3f}")
+        try:
+            stop_runtime()
+        except Exception as e:
+            log_event("ERROR","Ошибка автоостановки теста: "+str(e))
+    threading.Thread(target=timer,name="runtime-test-timer",daemon=True).start()
+
 def start_runtime(fast_start=False):
     global _proc,_log_handle,_runtime_started_wall,_active_csv
+    global _runtime_test_duration_s,_runtime_test_deadline_mono
     with _lock:
         if running():
             log_runtime_forensic("RUNTIME_START_ALREADY_RUNNING",_proc.pid)
@@ -1052,6 +1084,15 @@ def start_runtime(fast_start=False):
             _yaw_zero_deg=None
             _raw_zero["n"]=_raw_zero["e"]=None
         _runtime_started_wall=time.time()
+        # Optional bounded test run.  Zero/unset keeps normal unlimited runtime.
+        # A fast recovery restart inherits the original deadline instead of
+        # silently granting the test another full interval.
+        if not fast_start or _runtime_test_deadline_mono <= 0.0:
+            try:
+                _runtime_test_duration_s=max(0.0,float(os.environ.get("MONKEYS_TEST_DURATION_SEC","0") or 0))
+            except (TypeError,ValueError):
+                _runtime_test_duration_s=0.0
+            _runtime_test_deadline_mono=(time.monotonic()+_runtime_test_duration_s) if _runtime_test_duration_s>0.0 else 0.0
         _active_csv=None
         _proc=subprocess.Popen(
             ["bash",str(ROOT/"scripts"/"run_system.sh")],
@@ -1081,6 +1122,7 @@ def start_runtime(fast_start=False):
         time.sleep(0.08)
     log_event("INFO","Flight runtime запущен")
     log_runtime_forensic("RUNTIME_START_OK",pid)
+    _arm_runtime_test_timer(pid)
     return {"ok":True,"pid":pid}
 
 def fast_restart_runtime():
@@ -1149,6 +1191,7 @@ def fast_restart_runtime():
 
 def stop_runtime():
     global _proc,_log_handle,_active_csv,_live_latest,_live_last_wall
+    global _runtime_test_duration_s,_runtime_test_deadline_mono,_runtime_test_timer_token
     with _lock:
         if not running():
             # Popen may already have exited while run_system.sh left its
@@ -1179,6 +1222,9 @@ def stop_runtime():
         _active_csv=None
         _live_latest=None
         _live_last_wall=0.0
+        _runtime_test_duration_s=0.0
+        _runtime_test_deadline_mono=0.0
+        _runtime_test_timer_token+=1
         ws_broadcast({"type":"runtime","running":False})
         log_event("INFO","Flight runtime остановлен")
         log_runtime_forensic("RUNTIME_STOP_OK",pid)
@@ -1634,6 +1680,10 @@ button{cursor:pointer}
     <span>Inliers</span><span id="inl">—</span>
     <span>Frame</span><span id="frame">—</span>
     <span>EKF</span><span id="ekf">—</span>
+   </div>
+   <div id="testTimerBox" style="display:none;margin-top:14px">
+    <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:6px"><span>Тест 30 минут</span><strong id="testTimerText">30:00</strong></div>
+    <div style="height:10px;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:#07111b"><div id="testTimerBar" style="height:100%;width:0%;background:var(--blue);transition:width .25s linear"></div></div>
    </div>
   </div>
  </div>
@@ -2233,6 +2283,16 @@ async function refreshRuntimeStatus(){
  try{
    const st=await api('/api/status');
    $('runState').textContent=st.running?'Работает':'Остановлен';
+   const timerBox=$('testTimerBox'),timerText=$('testTimerText'),timerBar=$('testTimerBar');
+   if(st.running && st.test_duration_s && st.test_remaining_s!=null){
+     const dur=Math.max(1,Number(st.test_duration_s)),rem=Math.max(0,Number(st.test_remaining_s));
+     const sec=Math.ceil(rem),mm=Math.floor(sec/60),ss=sec%60;
+     timerBox.style.display='block';
+     timerText.textContent=String(mm).padStart(2,'0')+':'+String(ss).padStart(2,'0');
+     timerBar.style.width=(100*Math.min(1,Math.max(0,(dur-rem)/dur))).toFixed(2)+'%';
+   }else{
+     timerBox.style.display='none';
+   }
    $('footerRuntime').textContent=st.running?'работает':'остановлен';
    $('footerRuntime').style.color=st.running?'#15d876':'#8aa5b8';
    if(!st.running){
@@ -2328,7 +2388,10 @@ class H(BaseHTTPRequestHandler):
             elif p=="/api/status":
                 with _lock:
                     age_ms=(time.time()-_live_last_wall)*1000.0 if _live_last_wall else None
-                self.send_json({"running":running(),"pid":_proc.pid if running() else None,"transport":"websocket","live_age_ms":age_ms,"ws_clients":len(_ws_clients),"udp_rx":_live_udp_rx,"udp_bad":_live_udp_bad,"runtime_exit":runtime_exit_info()})
+                with _lock:
+                    test_duration_s=_runtime_test_duration_s
+                    test_remaining_s=max(0.0,_runtime_test_deadline_mono-time.monotonic()) if running() and _runtime_test_deadline_mono>0.0 else None
+                self.send_json({"running":running(),"pid":_proc.pid if running() else None,"transport":"websocket","live_age_ms":age_ms,"ws_clients":len(_ws_clients),"udp_rx":_live_udp_rx,"udp_bad":_live_udp_bad,"runtime_exit":runtime_exit_info(),"test_duration_s":test_duration_s or None,"test_remaining_s":test_remaining_s})
             elif p=="/api/telemetry":
                 self.send_json(telemetry())
             elif p=="/api/log":
