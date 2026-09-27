@@ -2472,6 +2472,16 @@ int main(int argc,char** argv){
                    <<" selected_dt_mean_ms="<<(fps_dt_n?fps_dt_sum_ms/fps_dt_n:0.0)
                    <<" selected_dt_max_ms="<<fps_dt_max_ms
                    <<"\n";
+          // Start a fresh forensic window. Without this reset the condition
+          // remains true forever after the first 2 s and stderr is written on
+          // every camera frame (~100 Hz). Under web_service stderr is a regular
+          // file, so that accidental log flood can block the main camera loop.
+          fps_dqbuf=fps_selected=fps_queue_drop=fps_decoded=0;
+          fps_w5_attempt=fps_w5_valid=0;
+          fps_dt_n=0;
+          fps_dt_sum_ms=0.0;
+          fps_dt_max_ms=0.0;
+          fps_t0_ns=now;
         }
 
         double lm=0; int strength=0; int64_t lns=0;
