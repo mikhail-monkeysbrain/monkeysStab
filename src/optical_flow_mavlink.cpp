@@ -440,7 +440,7 @@ struct FlowFc {
                                 int inliers,
                                 double inlier_ratio,
                                 double dt_s){
-    std::lock_guard<std::mutex> l(mu);
+    std::unique_lock<std::mutex> l(mu);
     if(fused_v2_imu_history.empty()) return;
     // FUSED_V2_CAUSAL_CAPTURE_V1
     // Realtime-causal lookup: never use an IMU sample newer than this camera frame.
@@ -452,6 +452,10 @@ struct FlowFc {
       }
     }
     if(best==fused_v2_imu_history.end()) return;
+    const int64_t log_imu_recv_ns=best->recv_ns;
+    const double log_pos_n=best->pos_n,log_pos_e=best->pos_e;
+    const double log_vel_n=best->vel_n,log_vel_e=best->vel_e;
+    l.unlock();
     static std::ofstream out;
     static bool header=false;
     if(!out.is_open()){
@@ -465,11 +469,11 @@ struct FlowFc {
            "tracked,inliers,inlier_ratio,dt_s,imu_n_m,imu_e_m,imu_vn,imu_ve\n";
       header=true;
     }
-    out<<frame<<','<<cam_ns<<','<<best->recv_ns<<','
-       <<(cam_ns-best->recv_ns)*1e-6<<','
+    out<<frame<<','<<cam_ns<<','<<log_imu_recv_ns<<','
+       <<(cam_ns-log_imu_recv_ns)*1e-6<<','
        <<(production_valid?1:0)<<','<<invalid_reason<<','
        <<tracked<<','<<inliers<<','<<inlier_ratio<<','<<dt_s<<','
-       <<best->pos_n<<','<<best->pos_e<<','<<best->vel_n<<','<<best->vel_e<<'\n';
+       <<log_pos_n<<','<<log_pos_e<<','<<log_vel_n<<','<<log_vel_e<<'\n';
     if(shadowFlushEnabled()) out.flush();
   }
 
@@ -506,7 +510,7 @@ struct FlowFc {
                                    int inliers,
                                    double inlier_ratio,
                                    double dt_s){
-    std::lock_guard<std::mutex> l(mu);
+    std::unique_lock<std::mutex> l(mu);
     if(fused_v2_imu_history.empty()) return;
 
     // Strictly causal IMU lookup: never use a sample from the future.
@@ -582,6 +586,13 @@ struct FlowFc {
           cam_ns-fused_v2_rt_history.front().cam_ns>500000000LL)
       fused_v2_rt_history.pop_front();
 
+    const int64_t log_imu_recv_ns=imu_it->recv_ns;
+    const bool log_bridge=fused_v2_rt_bridge;
+    const uint64_t log_events=fused_v2_rt_events;
+    const uint64_t log_anchor=fused_v2_rt_anchor_frame,log_bad=fused_v2_rt_bad_frame;
+    const double log_n=fused_v2_rt_n,log_e=fused_v2_rt_e;
+    l.unlock();
+
     static std::ofstream out;
     static bool header=false;
     if(!out.is_open()){
@@ -599,11 +610,11 @@ struct FlowFc {
     out<<frame<<','<<cam_ns<<','<<(production_valid?1:0)<<','<<invalid_reason<<','
        <<tracked<<','<<inliers<<','<<inlier_ratio<<','<<dt_s<<','
        <<(new_w5?1:0)<<','<<w5_dn<<','<<w5_de<<','
-       <<(fused_v2_rt_bridge?1:0)<<','<<fused_v2_rt_events<<','
-       <<fused_v2_rt_anchor_frame<<','<<fused_v2_rt_bad_frame<<','
-       <<(cam_ns-imu_it->recv_ns)*1e-6<<','
-       <<fused_v2_rt_n<<','<<fused_v2_rt_e<<','
-       <<std::hypot(fused_v2_rt_n,fused_v2_rt_e)<<'\n';
+       <<(log_bridge?1:0)<<','<<log_events<<','
+       <<log_anchor<<','<<log_bad<<','
+       <<(cam_ns-log_imu_recv_ns)*1e-6<<','
+       <<log_n<<','<<log_e<<','
+       <<std::hypot(log_n,log_e)<<'\n';
     if(shadowFlushEnabled()) out.flush();
   }
 
