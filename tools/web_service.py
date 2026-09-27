@@ -1032,6 +1032,9 @@ def _start_console_test_statusbar(pid, token, duration, deadline):
     if duration <= 0.0 or deadline <= 0.0:
         return
     def statusbar():
+        # start_runtime() returns immediately after arming us; give its
+        # "АВТОЗАПУСК ГОТОВ" line time to finish before taking one console line.
+        time.sleep(0.25)
         last_len=0
         while True:
             with _lock:
@@ -1046,7 +1049,15 @@ def _start_console_test_statusbar(pid, token, duration, deadline):
             if remaining <= 0.0:
                 break
             time.sleep(min(1.0,remaining))
-        print("",flush=True)
+        # The timer thread can call stop_runtime() and invalidate our token
+        # a few milliseconds before this thread renders its final tick.
+        # Render 00:00 only when the real deadline has actually elapsed;
+        # an early/manual stop must not be presented as a completed test.
+        if time.monotonic() >= deadline:
+            line=_format_console_test_bar(duration,duration)+" | ЗАВЕРШЁН"
+            print("\r"+line+" "*max(0,last_len-len(line)),flush=True)
+        else:
+            print("",flush=True)
     threading.Thread(target=statusbar,name="runtime-console-statusbar",daemon=True).start()
 
 def _arm_runtime_test_timer(pid):
