@@ -1016,6 +1016,39 @@ def log_runtime_forensic(event,pid=None,detail=""):
         if new:w.writerow(["mono_ns","wall_ns","event","pid","detail"])
         w.writerow([time.monotonic_ns(),time.time_ns(),event,pid if pid is not None else "",detail])
 
+def _format_console_test_bar(elapsed, duration, width=24):
+    elapsed=max(0.0,min(float(duration),float(elapsed)))
+    duration=max(0.001,float(duration))
+    ratio=elapsed/duration
+    filled=max(0,min(width,int(round(width*ratio))))
+    bar="█"*filled+"░"*(width-filled)
+    def mmss(sec):
+        sec=max(0,int(round(sec)))
+        return f"{sec//60:02d}:{sec%60:02d}"
+    return f"ТЕСТ [{bar}] {mmss(elapsed)} / {mmss(duration)} | осталось {mmss(duration-elapsed)}"
+
+def _start_console_test_statusbar(pid, token, duration, deadline):
+    """Показывать реальный таймер bounded-run в консоли Web service, не в OF runtime."""
+    if duration <= 0.0 or deadline <= 0.0:
+        return
+    def statusbar():
+        last_len=0
+        while True:
+            with _lock:
+                same=(token==_runtime_test_timer_token and running() and _proc is not None and _proc.pid==pid)
+            if not same:
+                break
+            remaining=max(0.0,deadline-time.monotonic())
+            elapsed=max(0.0,duration-remaining)
+            line=_format_console_test_bar(elapsed,duration)
+            print("\r"+line+" "*max(0,last_len-len(line)),end="",flush=True)
+            last_len=len(line)
+            if remaining <= 0.0:
+                break
+            time.sleep(min(1.0,remaining))
+        print("",flush=True)
+    threading.Thread(target=statusbar,name="runtime-console-statusbar",daemon=True).start()
+
 def _arm_runtime_test_timer(pid):
     """Остановить тот же runtime по истечении тестового лимита."""
     global _runtime_test_timer_token
@@ -1026,6 +1059,7 @@ def _arm_runtime_test_timer(pid):
         token=_runtime_test_timer_token
     if duration <= 0.0 or deadline <= 0.0:
         return
+    _start_console_test_statusbar(pid,token,duration,deadline)
     def timer():
         while True:
             remaining=deadline-time.monotonic()
