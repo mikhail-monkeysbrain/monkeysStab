@@ -4039,6 +4039,11 @@ int main(int argc,char** argv){
               web_raw_vn=dN/dt;
               web_raw_ve=dE/dt;
               web_raw_step_valid=true;
+              bool v2_capture_ready=false;
+              uint64_t v2_capture_cam_seq=0;
+              int64_t v2_capture_cam_ns=0,v2_capture_imu_ns=0;
+              double v2_capture_imu_n=0.0,v2_capture_imu_e=0.0;
+              double v2_capture_imu_vn=0.0,v2_capture_imu_ve=0.0;
               {
                 std::lock_guard<std::mutex> l(fc.mu);
                 fc.imu_cam_vn=web_raw_vn;
@@ -4050,9 +4055,8 @@ int main(int argc,char** argv){
                 fc.imu_cam_recv_ns=monoNs();
                 fc.imu_cam_valid=true;
 
-                // FUSED_V2_CAPTURE_V1
-                // Capture-only probe: nearest IMU state to this visual event.
-                // This intentionally does NOT alter WORKED5/FUSED-V1.
+                // Snapshot diagnostic data under fc.mu; filesystem I/O is
+                // deliberately deferred until after the critical section.
                 if(!fc.fused_v2_imu_history.empty()){
                   const int64_t v2_cam_ns=fc.imu_cam_recv_ns;
                   auto best=fc.fused_v2_imu_history.begin();
@@ -4061,24 +4065,14 @@ int main(int argc,char** argv){
                     const int64_t d=std::llabs(it->recv_ns-v2_cam_ns);
                     if(d<best_abs){best=it;best_abs=d;}
                   }
-                  static std::ofstream v2_capture_csv;
-                  static bool v2_capture_header=false;
-                  if(!v2_capture_csv.is_open()){
-                    const std::filesystem::path production_csv_path(csvpath);
-                    v2_capture_csv.open(production_csv_path.parent_path()/"fused_v2_capture.csv",
-                                        std::ios::out|std::ios::trunc);
-                  }
-                  if(v2_capture_csv.is_open()){
-                    if(!v2_capture_header){
-                      v2_capture_csv<<"cam_seq,cam_recv_ns,imu_recv_ns,age_ms,imu_n_m,imu_e_m,imu_vn,imu_ve,dN_m,dE_m,dt_s\n";
-                      v2_capture_header=true;
-                    }
-                    v2_capture_csv<<fc.imu_cam_seq<<','<<v2_cam_ns<<','<<best->recv_ns<<','
-                      <<(v2_cam_ns-best->recv_ns)*1e-6<<','
-                      <<best->pos_n<<','<<best->pos_e<<','<<best->vel_n<<','<<best->vel_e<<','
-                      <<dN<<','<<dE<<','<<dt<<'\n';
-                    if(shadowFlushEnabled()) v2_capture_csv.flush();
-                  }
+                  v2_capture_ready=true;
+                  v2_capture_cam_seq=fc.imu_cam_seq;
+                  v2_capture_cam_ns=v2_cam_ns;
+                  v2_capture_imu_ns=best->recv_ns;
+                  v2_capture_imu_n=best->pos_n;
+                  v2_capture_imu_e=best->pos_e;
+                  v2_capture_imu_vn=best->vel_n;
+                  v2_capture_imu_ve=best->vel_e;
                 }
 
                 // FUSED-V1 visual update happens HERE, once per unique WORKED5
@@ -4126,6 +4120,29 @@ int main(int argc,char** argv){
                 }else{
                   fc.fused_v1_vn=fused_sn/fc.fused_v1_vhist_count;
                   fc.fused_v1_ve=fused_se/fc.fused_v1_vhist_count;
+                }
+              }
+
+              // FUSED_V2_CAPTURE_V1 diagnostic write: never hold fc.mu here.
+              if(v2_capture_ready){
+                static std::ofstream v2_capture_csv;
+                static bool v2_capture_header=false;
+                if(!v2_capture_csv.is_open()){
+                  const std::filesystem::path production_csv_path(csvpath);
+                  v2_capture_csv.open(production_csv_path.parent_path()/"fused_v2_capture.csv",
+                                      std::ios::out|std::ios::trunc);
+                }
+                if(v2_capture_csv.is_open()){
+                  if(!v2_capture_header){
+                    v2_capture_csv<<"cam_seq,cam_recv_ns,imu_recv_ns,age_ms,imu_n_m,imu_e_m,imu_vn,imu_ve,dN_m,dE_m,dt_s\n";
+                    v2_capture_header=true;
+                  }
+                  v2_capture_csv<<v2_capture_cam_seq<<','<<v2_capture_cam_ns<<','<<v2_capture_imu_ns<<','
+                    <<(v2_capture_cam_ns-v2_capture_imu_ns)*1e-6<<','
+                    <<v2_capture_imu_n<<','<<v2_capture_imu_e<<','
+                    <<v2_capture_imu_vn<<','<<v2_capture_imu_ve<<','
+                    <<dN<<','<<dE<<','<<dt<<'\n';
+                  if(shadowFlushEnabled()) v2_capture_csv.flush();
                 }
               }
             }
