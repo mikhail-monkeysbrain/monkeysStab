@@ -777,7 +777,7 @@ struct FlowFc {
               }
             } else if(m.msgid==MAVLINK_MSG_ID_ATTITUDE){
               mavlink_attitude_t q{}; mavlink_msg_attitude_decode(&m,&q);
-              std::lock_guard<std::mutex> l(mu);
+              std::unique_lock<std::mutex> l(mu);
               gyro.roll=q.roll; gyro.pitch=q.pitch; gyro.yaw=q.yaw;
               gyro.x=q.rollspeed; gyro.y=q.pitchspeed; gyro.z=q.yawspeed;
               gyro.recv_ns=monoNs(); gyro.time_boot_ms=q.time_boot_ms;
@@ -791,11 +791,9 @@ struct FlowFc {
                 ? mapHighresFcToMono(attitude_fc_sample_ns) : 0;
               gyro.valid=true; ++gyro_count;
 
-              // ATTITUDE_CAUSAL_LOG_V1. ATTITUDE.time_boot_ms is the FC
-              // measurement timestamp; recv_ns is when this process actually
-              // received the MAVLink packet. Map the FC timestamp through the
-              // same affine HIGHRES clock model when it is available. This is
-              // diagnostic only and does not change attitude_history semantics.
+              // Diagnostic filesystem I/O must never run while fc.mu is held.
+              const auto attitude_log_gyro=gyro;
+              l.unlock();
               if(!attitude_shadow_ofs.is_open()){
                 attitude_shadow_ofs.open(
                   "/home/vio/Desktop/monkeysStab/attitude_shadow_latest.csv",
@@ -808,13 +806,13 @@ struct FlowFc {
               }
               if(attitude_shadow_ofs.is_open()){
                 const int64_t fc_sample_ns=attitude_fc_sample_ns;
-                const bool map_valid=gyro.mapped_sample_ns>0;
-                const int64_t mapped_sample_ns=gyro.mapped_sample_ns;
+                const bool map_valid=attitude_log_gyro.mapped_sample_ns>0;
+                const int64_t mapped_sample_ns=attitude_log_gyro.mapped_sample_ns;
                 const double mapped_transport_ms=
-                  map_valid?(gyro.recv_ns-mapped_sample_ns)*1e-6:-1.0;
+                  map_valid?(attitude_log_gyro.recv_ns-mapped_sample_ns)*1e-6:-1.0;
                 attitude_shadow_ofs
                   <<(++attitude_shadow_seq)<<','<<q.time_boot_ms<<','
-                  <<fc_sample_ns<<','<<gyro.recv_ns<<','<<mapped_sample_ns<<','
+                  <<fc_sample_ns<<','<<attitude_log_gyro.recv_ns<<','<<mapped_sample_ns<<','
                   <<mapped_transport_ms<<','<<(map_valid?1:0)<<','
                   <<q.roll<<','<<q.pitch<<','<<q.yaw<<','
                   <<q.rollspeed<<','<<q.pitchspeed<<','<<q.yawspeed<<'\n';
@@ -823,6 +821,7 @@ struct FlowFc {
                 // flush here can stall the single MAVLink RX thread and age all
                 // FC measurements seen by causal35.
               }
+              l.lock();
 
               attitude_history.push_back(gyro);
               while(attitude_history.size()>2 &&
@@ -840,7 +839,7 @@ struct FlowFc {
               ahrs_omega_i_valid=true;
             } else if(m.msgid==MAVLINK_MSG_ID_HIGHRES_IMU){
               mavlink_highres_imu_t q{}; mavlink_msg_highres_imu_decode(&m,&q);
-              std::lock_guard<std::mutex> l(mu);
+              std::unique_lock<std::mutex> l(mu);
               imu.ax=q.xacc; imu.ay=q.yacc; imu.az=q.zacc;
               imu.gx=q.xgyro; imu.gy=q.ygyro; imu.gz=q.zgyro;
               imu.time_usec=q.time_usec; imu.recv_ns=monoNs(); imu.valid=true; ++imu_count;
@@ -864,6 +863,10 @@ struct FlowFc {
                     imu.recv_ns-highres_gyro_history.front().recv_ns>3000000000LL)
                 highres_gyro_history.pop_front();
 
+              const auto highres_log_imu=imu;
+              const auto highres_log_gyro=gyro;
+              const uint64_t highres_log_count=imu_count;
+              l.unlock();
               if(!highres_gyro_shadow_ofs.is_open()){
                 highres_gyro_shadow_ofs.open(
                   "/home/vio/Desktop/monkeysStab/highres_gyro_shadow_latest.csv",
@@ -876,7 +879,7 @@ struct FlowFc {
               }
               if(highres_gyro_shadow_ofs.is_open()){
                 highres_gyro_shadow_ofs
-                  <<imu_count<<','<<q.time_usec<<','<<imu.recv_ns<<','
+                  <<highres_log_count<<','<<q.time_usec<<','<<highres_log_imu.recv_ns<<','
                   <<q.fields_updated<<','
                   <<q.xacc<<','<<q.yacc<<','<<q.zacc<<','
                   <<q.xgyro<<','<<q.ygyro<<','<<q.zgyro<<',';
@@ -894,18 +897,18 @@ struct FlowFc {
 
               // Diagnostic only: compare FC timestamps and RPi receive timing.
               // Does not change IMU DR inputs or integration.
-              if(gyro.valid && (imu_count % 25u)==0u) {
+              if(highres_log_gyro.valid && (highres_log_count % 25u)==0u) {
                 const double highres_ms=static_cast<double>(q.time_usec)*1e-3;
                 const double fc_delta_ms=
-                    highres_ms-static_cast<double>(gyro.time_boot_ms);
+                    highres_ms-static_cast<double>(highres_log_gyro.time_boot_ms);
                 const double recv_delta_ms=
-                    (imu.recv_ns-gyro.recv_ns)*1e-6;
+                    (highres_log_imu.recv_ns-highres_log_gyro.recv_ns)*1e-6;
 
                 const double dt_s=fc_delta_ms*1e-3;
                 const double droll_deg=
-                    gyro.x*dt_s*180.0/M_PI;
+                    highres_log_gyro.x*dt_s*180.0/M_PI;
                 const double dpitch_deg=
-                    gyro.y*dt_s*180.0/M_PI;
+                    highres_log_gyro.y*dt_s*180.0/M_PI;
 
                 // First-order gravity projection caused by attitude age.
                 const double g_roll_mps2=
@@ -917,8 +920,8 @@ struct FlowFc {
                          <<" fc_dt_ms="<<fc_delta_ms
                          <<" recv_dt_ms="<<recv_delta_ms
                          <<" rateRP_deg_s=["
-                         <<gyro.x*180.0/M_PI<<","
-                         <<gyro.y*180.0/M_PI<<"]"
+                         <<highres_log_gyro.x*180.0/M_PI<<","
+                         <<highres_log_gyro.y*180.0/M_PI<<"]"
                          <<" dRP_deg=["
                          <<droll_deg<<","
                          <<dpitch_deg<<"]"
@@ -926,6 +929,7 @@ struct FlowFc {
                          <<g_roll_mps2<<","
                          <<g_pitch_mps2<<"]\\n";
               }
+              l.lock();
 
               if(gyro.valid) {
                 imu_dr::update(imu_dr_state,q.xacc,q.yacc,q.zacc,q.xgyro,q.ygyro,q.zgyro,
