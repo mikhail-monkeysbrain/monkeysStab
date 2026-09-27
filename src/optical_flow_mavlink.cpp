@@ -113,6 +113,26 @@ bool shadowFlushEnabled(){
   return enabled;
 }
 
+bool csvLiveFlushEnabled(){
+  static const bool enabled=[]{
+    const char* e=std::getenv("MONKEYS_CSV_LIVE_FLUSH");
+    if(!e || !*e) return true;
+    const std::string v(e);
+    return !(v=="0" || v=="false" || v=="FALSE" || v=="off" || v=="OFF");
+  }();
+  return enabled;
+}
+
+bool hotPathDiagnosticIoEnabled(){
+  static const bool enabled=[]{
+    const char* e=std::getenv("MONKEYS_HOTPATH_DIAG_IO");
+    if(!e || !*e) return true;
+    const std::string v(e);
+    return !(v=="0" || v=="false" || v=="FALSE" || v=="off" || v=="OFF");
+  }();
+  return enabled;
+}
+
 struct FeatureRoi {
   double x0=0.20;
   double y0=0.20;
@@ -2444,7 +2464,7 @@ int main(int argc,char** argv){
 
         if(now-w5w_t0_ns>=250000000LL){
           const double wsec=(now-w5w_t0_ns)*1e-9;
-          std::cerr<<"W5_WINDOW"
+          if(hotPathDiagnosticIoEnabled()) std::cerr<<"W5_WINDOW"
                    <<" dqbuf_hz="<<(w5w_dqbuf/wsec)
                    <<" selected_hz="<<(w5w_selected/wsec)
                    <<" dropped_hz="<<(w5w_drop/wsec)
@@ -2462,7 +2482,7 @@ int main(int argc,char** argv){
 
         if(now-fps_t0_ns>=2000000000LL){
           const double sec=(now-fps_t0_ns)*1e-9;
-          std::cerr<<"FPS_FORENSIC"
+          if(hotPathDiagnosticIoEnabled()) std::cerr<<"FPS_FORENSIC"
                    <<" dqbuf_hz="<<(fps_dqbuf/sec)
                    <<" selected_hz="<<(fps_selected/sec)
                    <<" dropped_hz="<<(fps_queue_drop/sec)
@@ -4531,7 +4551,7 @@ int main(int argc,char** argv){
         // rows, which creates seconds of apparent telemetry lag.  Flush the
         // userspace stream at 20 Hz; this is flush(), not fsync(), so we avoid
         // forcing physical storage on every camera frame.
-        if(now-last_csv_flush_ns>=kCsvLiveFlushNs){
+        if(csvLiveFlushEnabled() && now-last_csv_flush_ns>=kCsvLiveFlushNs){
           csv.flush();
           last_csv_flush_ns=now;
         }
