@@ -3625,7 +3625,8 @@ int main(int argc,char** argv){
             if(shadowFlushEnabled()) metric_shadow_csv.flush();
           }
 
-          if(diagnosticFileIoEnabled() && metric_shadow_last_print_ns==0 || diagnosticFileIoEnabled() && now-metric_shadow_last_print_ns>=500000000LL){
+          if(diagnosticFileIoEnabled() &&
+             (metric_shadow_last_print_ns==0 || now-metric_shadow_last_print_ns>=500000000LL)){
             metric_shadow_last_print_ns=now;
             const auto& mp=metric_shadow_integrator.position_m;
             std::cerr<<"METRIC_SHADOW interval="<<metric_shadow_interval_id
