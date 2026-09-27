@@ -1495,7 +1495,13 @@ button{cursor:pointer}
  <div class="nav">
   <button class="active" onclick="showView('flight',this)">▲ ПОЛЁТ</button><button onclick="showView('settings',this)">⚙ НАСТРОЙКИ</button><button onclick="showView('telemetry',this)">∿ ТЕЛЕМЕТРИЯ</button><button onclick="showView('journal',this)">▤ ЖУРНАЛ</button><button onclick="showView('system',this)">⚙ СИСТЕМА</button>
  </div>
- <div class="topStatus"><span><i id="linkDot" class="okdot baddot"></i>СВЯЗЬ: <b id="linkText">НЕТ</b></span><span id="clock">--:--:--</span></div>
+ <div class="topStatus">
+  <div id="testTimerBox" style="display:none;min-width:220px">
+   <div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:3px;font-size:11px"><b>ТЕСТ 30 МИН</b><strong id="testTimerText">30:00</strong></div>
+   <div style="height:7px;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:#07111b"><div id="testTimerBar" style="height:100%;width:0%;background:var(--blue);transition:width .25s linear"></div></div>
+  </div>
+  <span><i id="linkDot" class="okdot baddot"></i>СВЯЗЬ: <b id="linkText">НЕТ</b></span><span id="clock">--:--:--</span>
+ </div>
 </div>
 
 <section id="view-flight" class="appView activeView"><div class="main">
@@ -1680,10 +1686,6 @@ button{cursor:pointer}
     <span>Inliers</span><span id="inl">—</span>
     <span>Frame</span><span id="frame">—</span>
     <span>EKF</span><span id="ekf">—</span>
-   </div>
-   <div id="testTimerBox" style="display:none;margin-top:14px">
-    <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:6px"><span>Тест 30 минут</span><strong id="testTimerText">30:00</strong></div>
-    <div style="height:10px;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:#07111b"><div id="testTimerBar" style="height:100%;width:0%;background:var(--blue);transition:width .25s linear"></div></div>
    </div>
   </div>
  </div>
