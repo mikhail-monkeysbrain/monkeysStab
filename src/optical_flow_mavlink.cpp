@@ -133,6 +133,16 @@ bool hotPathDiagnosticIoEnabled(){
   return enabled;
 }
 
+bool diagnosticFileIoEnabled(){
+  static const bool enabled=[]{
+    const char* e=std::getenv("MONKEYS_DIAG_FILE_IO");
+    if(!e || !*e) return true;
+    const std::string v(e);
+    return !(v=="0" || v=="false" || v=="FALSE" || v=="off" || v=="OFF");
+  }();
+  return enabled;
+}
+
 struct FeatureRoi {
   double x0=0.20;
   double y0=0.20;
@@ -460,6 +470,7 @@ struct FlowFc {
                                 int inliers,
                                 double inlier_ratio,
                                 double dt_s){
+    if(!diagnosticFileIoEnabled()) return;
     std::unique_lock<std::mutex> l(mu);
     if(fused_v2_imu_history.empty()) return;
     // FUSED_V2_CAUSAL_CAPTURE_V1
@@ -530,6 +541,7 @@ struct FlowFc {
                                    int inliers,
                                    double inlier_ratio,
                                    double dt_s){
+    if(!diagnosticFileIoEnabled()) return;
     std::unique_lock<std::mutex> l(mu);
     if(fused_v2_imu_history.empty()) return;
 
@@ -825,17 +837,17 @@ struct FlowFc {
               // Diagnostic filesystem I/O must never run while fc.mu is held.
               const auto attitude_log_gyro=gyro;
               l.unlock();
-              if(!attitude_shadow_ofs.is_open()){
+              if(diagnosticFileIoEnabled() && !attitude_shadow_ofs.is_open()){
                 attitude_shadow_ofs.open(
                   "/home/vio/Desktop/monkeysStab/attitude_shadow_latest.csv",
                   std::ios::out|std::ios::trunc);
-                if(attitude_shadow_ofs.is_open())
+                if(diagnosticFileIoEnabled() && attitude_shadow_ofs.is_open())
                   attitude_shadow_ofs
                     <<"seq,time_boot_ms,fc_sample_ns,recv_ns,mapped_sample_ns,"
                     <<"mapped_transport_ms,clock_map_valid,roll_rad,pitch_rad,yaw_rad,"
                     <<"rollspeed_rad_s,pitchspeed_rad_s,yawspeed_rad_s\n";
               }
-              if(attitude_shadow_ofs.is_open()){
+              if(diagnosticFileIoEnabled() && attitude_shadow_ofs.is_open()){
                 const int64_t fc_sample_ns=attitude_fc_sample_ns;
                 const bool map_valid=attitude_log_gyro.mapped_sample_ns>0;
                 const int64_t mapped_sample_ns=attitude_log_gyro.mapped_sample_ns;
@@ -898,17 +910,17 @@ struct FlowFc {
               const auto highres_log_gyro=gyro;
               const uint64_t highres_log_count=imu_count;
               l.unlock();
-              if(!highres_gyro_shadow_ofs.is_open()){
+              if(diagnosticFileIoEnabled() && !highres_gyro_shadow_ofs.is_open()){
                 highres_gyro_shadow_ofs.open(
                   "/home/vio/Desktop/monkeysStab/highres_gyro_shadow_latest.csv",
                   std::ios::out|std::ios::trunc);
-                if(highres_gyro_shadow_ofs.is_open())
+                if(diagnosticFileIoEnabled() && highres_gyro_shadow_ofs.is_open())
                   highres_gyro_shadow_ofs
                     <<"seq,fc_time_usec,recv_ns,fields_updated,ax_mps2,ay_mps2,az_mps2,gx_rad_s,gy_rad_s,gz_rad_s,"
                     <<"ahrs_omegaIx,ahrs_omegaIy,ahrs_omegaIz,ahrs_drift_age_ms,"
                     <<"corr_gx_rad_s,corr_gy_rad_s,corr_gz_rad_s\n";
               }
-              if(highres_gyro_shadow_ofs.is_open()){
+              if(diagnosticFileIoEnabled() && highres_gyro_shadow_ofs.is_open()){
                 highres_gyro_shadow_ofs
                   <<highres_log_count<<','<<q.time_usec<<','<<highres_log_imu.recv_ns<<','
                   <<q.fields_updated<<','
@@ -947,7 +959,7 @@ struct FlowFc {
                 const double g_pitch_mps2=
                     9.80665*std::sin(std::abs(dpitch_deg)*M_PI/180.0);
 
-                std::cerr<<"IMU_TIME"
+                if(hotPathDiagnosticIoEnabled() && diagnosticFileIoEnabled()) std::cerr<<"IMU_TIME"
                          <<" fc_dt_ms="<<fc_delta_ms
                          <<" recv_dt_ms="<<recv_delta_ms
                          <<" rateRP_deg_s=["
@@ -2800,13 +2812,13 @@ int main(int argc,char** argv){
           // cannot be evaluated causally at t1 because those gyro samples do
           // not exist yet. Wait 30 ms, then evaluate every offset on the same
           // stored camera correspondences and geometry.
-          if(!highres_phase_csv.is_open()){
+          if(diagnosticFileIoEnabled() && !highres_phase_csv.is_open()){
             const std::filesystem::path production_csv_path(csvpath);
             highres_phase_csv.open(
               production_csv_path.parent_path()/"highres_phase_sweep_v2.csv",
               std::ios::out|std::ios::trunc);
           }
-          if(highres_phase_csv.is_open() && !highres_phase_header){
+          if(diagnosticFileIoEnabled() && highres_phase_csv.is_open() && !highres_phase_header){
             highres_phase_csv<<"frame,t0_ns,t1_ns";
             for(int pi=0;pi<kHighresPhaseN;++pi){
               highres_phase_csv<<",phase_"<<kHighresPhaseOffsetMs[pi]<<"ms_valid"
@@ -2822,7 +2834,7 @@ int main(int argc,char** argv){
                 ts-highres_phase_pending.front().t1_ns>=30000000LL){
             const auto q=highres_phase_pending.front();
             highres_phase_pending.pop_front();
-            if(highres_phase_csv.is_open()){
+            if(diagnosticFileIoEnabled() && highres_phase_csv.is_open()){
               highres_phase_csv<<q.frame<<','<<q.t0_ns<<','<<q.t1_ns;
               for(int pi=0;pi<kHighresPhaseN;++pi){
                 const int64_t off_ns=
@@ -3088,13 +3100,13 @@ int main(int argc,char** argv){
           // it is not consumed by angular_b_shadow.
           static std::ofstream angular_b_csv;
           static bool angular_b_header=false;
-          if(!angular_b_csv.is_open()){
+          if(diagnosticFileIoEnabled() && !angular_b_csv.is_open()){
             const std::filesystem::path production_csv_path(csvpath);
             angular_b_csv.open(
               production_csv_path.parent_path()/"variant_b_angular_shadow.csv",
               std::ios::out|std::ios::trunc);
           }
-          if(angular_b_csv.is_open()){
+          if(diagnosticFileIoEnabled() && angular_b_csv.is_open()){
             if(!angular_b_header){
               angular_b_csv
                 <<"frame,t0_ns,t1_ns,dt_s,new_valid,new_points,"
@@ -3119,13 +3131,13 @@ int main(int argc,char** argv){
             if(shadowFlushEnabled()) angular_b_csv.flush();
           }
 
-          if(!causal_metric35_csv.is_open()){
+          if(diagnosticFileIoEnabled() && !causal_metric35_csv.is_open()){
             const std::filesystem::path production_csv_path(csvpath);
             causal_metric35_csv.open(
               production_csv_path.parent_path()/"causal_metric35_shadow.csv",
               std::ios::out|std::ios::trunc);
           }
-          if(causal_metric35_csv.is_open()){
+          if(diagnosticFileIoEnabled() && causal_metric35_csv.is_open()){
             if(!causal_metric35_header){
               causal_metric35_csv
                 <<"frame,t0_ns,t1_ns,ready,anchor_recv_age_ms,anchor_sample_age_ms,"
@@ -3167,13 +3179,13 @@ int main(int argc,char** argv){
               mi,causal_R0,causal_R1);
           }
 
-          if(!highres_causal15_csv.is_open()){
+          if(diagnosticFileIoEnabled() && !highres_causal15_csv.is_open()){
             const std::filesystem::path production_csv_path(csvpath);
             highres_causal15_csv.open(
               production_csv_path.parent_path()/"highres_causal15_shadow.csv",
               std::ios::out|std::ios::trunc);
           }
-          if(highres_causal15_csv.is_open() && !highres_causal15_header){
+          if(diagnosticFileIoEnabled() && highres_causal15_csv.is_open() && !highres_causal15_header){
             highres_causal15_csv
               <<"frame,t0_ns,t1_ns,strict_valid,causal15_valid,"
               <<"causal15_max_hold_ms,strict_segments,causal15_segments,"
@@ -3183,7 +3195,7 @@ int main(int argc,char** argv){
               <<"sensor_delta_diff_m\n";
             highres_causal15_header=true;
           }
-          if(highres_causal15_csv.is_open()){
+          if(diagnosticFileIoEnabled() && highres_causal15_csv.is_open()){
             double dr_diff_deg=-1.0;
             if(metric_highres_corr_gyro_delta.valid &&
                metric_highres_causal15_delta.valid){
@@ -3562,7 +3574,7 @@ int main(int argc,char** argv){
           static std::ofstream metric_shadow_csv;
           static bool metric_shadow_csv_header=false;
 
-          if(!metric_shadow_csv.is_open()){
+          if(diagnosticFileIoEnabled() && !metric_shadow_csv.is_open()){
             const std::filesystem::path production_csv_path(csvpath);
             const auto metric_shadow_path =
                 production_csv_path.parent_path() / "metric_shadow.csv";
@@ -3571,7 +3583,7 @@ int main(int argc,char** argv){
                 std::ios::out | std::ios::trunc);
           }
 
-          if(metric_shadow_csv.is_open()){
+          if(diagnosticFileIoEnabled() && metric_shadow_csv.is_open()){
             if(!metric_shadow_csv_header){
               metric_shadow_csv
                 <<"interval_id,t0_ns,t1_ns,started,startup_wait,"
@@ -3613,7 +3625,7 @@ int main(int argc,char** argv){
             if(shadowFlushEnabled()) metric_shadow_csv.flush();
           }
 
-          if(metric_shadow_last_print_ns==0 || now-metric_shadow_last_print_ns>=500000000LL){
+          if(diagnosticFileIoEnabled() && metric_shadow_last_print_ns==0 || diagnosticFileIoEnabled() && now-metric_shadow_last_print_ns>=500000000LL){
             metric_shadow_last_print_ns=now;
             const auto& mp=metric_shadow_integrator.position_m;
             std::cerr<<"METRIC_SHADOW interval="<<metric_shadow_interval_id
@@ -3648,12 +3660,12 @@ int main(int argc,char** argv){
           static std::ofstream r5_csv;
           static bool r5_header=false;
           static double c15_n=0.0,c15_e=0.0,c10_n=0.0,c10_e=0.0,c7_n=0.0,c7_e=0.0;
-          if(!r5_csv.is_open()){
+          if(diagnosticFileIoEnabled() && !r5_csv.is_open()){
             const std::filesystem::path production_csv_path(csvpath);
             r5_csv.open(production_csv_path.parent_path()/"worked5_reason5_shadow.csv",
                         std::ios::out|std::ios::trunc);
           }
-          if(r5_csv.is_open() && !r5_header){
+          if(diagnosticFileIoEnabled() && r5_csv.is_open() && !r5_header){
             r5_csv<<"frame,mono_ns,production_valid,invalid_reason,pairs,dt_s,hcam_m,"
                      "c15_valid,c15_dN_m,c15_dE_m,c15_pN_m,c15_pE_m,"
                      "c10_valid,c10_dN_m,c10_dE_m,c10_pN_m,c10_pE_m,"
@@ -3714,7 +3726,7 @@ int main(int argc,char** argv){
           if(v10){c10_n+=n10;c10_e+=e10;}
           if(v7 ){c7_n +=n7; c7_e +=e7;}
 
-          if(r5_csv.is_open()){
+          if(diagnosticFileIoEnabled() && r5_csv.is_open()){
             r5_csv<<frame<<','<<ts<<','<<(s.valid?1:0)<<','<<s.invalid_reason<<','
                   <<np<<','<<dt<<','<<h<<','
                   <<(v15?1:0)<<','<<n15<<','<<e15<<','<<c15_n<<','<<c15_e<<','
@@ -3733,13 +3745,13 @@ int main(int argc,char** argv){
           static std::ofstream mag_shadow_csv;
           static bool mag_shadow_header=false;
 
-          if(!mag_shadow_csv.is_open()){
+          if(diagnosticFileIoEnabled() && !mag_shadow_csv.is_open()){
             const std::filesystem::path production_csv_path(csvpath);
             mag_shadow_csv.open(
               production_csv_path.parent_path() / "worked5_mag_shadow.csv",
               std::ios::out | std::ios::trunc);
           }
-          if(mag_shadow_csv.is_open() && !mag_shadow_header){
+          if(diagnosticFileIoEnabled() && mag_shadow_csv.is_open() && !mag_shadow_header){
             mag_shadow_csv
               <<"frame,mono_ns,production_valid,invalid_reason,pairs,dt_s,hcam_m,"
               <<"shadow_attempted,shadow_valid,dN_m,dE_m,pN_m,pE_m,"
@@ -3785,7 +3797,7 @@ int main(int argc,char** argv){
             }
           }
 
-          if(mag_shadow_csv.is_open()){
+          if(diagnosticFileIoEnabled() && mag_shadow_csv.is_open()){
             mag_shadow_csv
               <<frame<<','<<ts<<','<<(s.valid?1:0)<<','<<s.invalid_reason<<','
               <<shadow_pairs<<','<<dt<<','<<shadow_hcam<<','
@@ -4168,12 +4180,12 @@ int main(int argc,char** argv){
               if(v2_capture_ready){
                 static std::ofstream v2_capture_csv;
                 static bool v2_capture_header=false;
-                if(!v2_capture_csv.is_open()){
+                if(diagnosticFileIoEnabled() && !v2_capture_csv.is_open()){
                   const std::filesystem::path production_csv_path(csvpath);
                   v2_capture_csv.open(production_csv_path.parent_path()/"fused_v2_capture.csv",
                                       std::ios::out|std::ios::trunc);
                 }
-                if(v2_capture_csv.is_open()){
+                if(diagnosticFileIoEnabled() && v2_capture_csv.is_open()){
                   if(!v2_capture_header){
                     v2_capture_csv<<"cam_seq,cam_recv_ns,imu_recv_ns,age_ms,imu_n_m,imu_e_m,imu_vn,imu_ve,dN_m,dE_m,dt_s\n";
                     v2_capture_header=true;
