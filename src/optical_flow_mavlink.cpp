@@ -1993,7 +1993,7 @@ int main(int argc,char** argv){
     constexpr std::streamoff kCsvMaxBytes=250LL*1024LL*1024LL;
     bool csv_logging_enabled=true;
     bool csv_limit_reported=false;
-    csv<<"mono_ns,camera_ts_ns,v4l2_timestamp_ns,camera_dequeue_ns,v4l2_flags,v4l2_to_dequeue_ms,camera_poll_enter_ns,camera_poll_exit_ns,camera_poll_ms,camera_dq_enter_ns,camera_dq_exit_ns,camera_dq_ioctl_ms,camera_dq_batch_ms,camera_dq_count,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,lever_valid,lever_production_applied,lever_flow_body_x,lever_flow_body_y,lever_pred_flow_x,lever_pred_flow_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,flow_tx_x,flow_tx_y,flow_tx_dt_s,flow_tx_inputs,raw_publish_mode,causal35_translation_valid,causal35_translation_x,causal35_translation_y,causal35_raw_gyro_x,causal35_raw_gyro_y,causal35_raw_valid,causal35_raw_x,causal35_raw_y,causal35_optical_depth_m,causal35_reject_reason,causal35_anchor_recv_age_ms,causal35_anchor_sample_age_ms,causal35_deltar_hold_ms,stabilised_publish_mode,stabilised_publish_ready,stabilised_publish_source,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,rc_zero_seq,worked5_valid,worked5_points,worked5_hcam_m,worked5_du_norm,worked5_dv_norm,worked5_dx_m,worked5_dy_m,worked5_dN_m,worked5_dE_m,worked5_acc_n_m,worked5_acc_e_m,highdyn_active,highdyn_reason6,highdyn_raw_dx_m,highdyn_raw_dy_m,highdyn_raw_dN_m,highdyn_raw_dE_m,highdyn_acc_n_m,highdyn_acc_e_m,highdyn_confidence,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
+    csv<<"mono_ns,camera_ts_ns,v4l2_timestamp_ns,camera_dequeue_ns,v4l2_flags,v4l2_to_dequeue_ms,camera_poll_enter_ns,camera_poll_exit_ns,camera_poll_ms,camera_dq_enter_ns,camera_dq_exit_ns,camera_dq_ioctl_ms,camera_dq_batch_ms,camera_dq_count,loop_tail_to_poll_ms,prev_send_to_csv_ms,prev_csv_block_ms,prev_web_block_ms,prev_postweb_ms,prev_anchor_ms,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,lever_valid,lever_production_applied,lever_flow_body_x,lever_flow_body_y,lever_pred_flow_x,lever_pred_flow_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,flow_tx_x,flow_tx_y,flow_tx_dt_s,flow_tx_inputs,raw_publish_mode,causal35_translation_valid,causal35_translation_x,causal35_translation_y,causal35_raw_gyro_x,causal35_raw_gyro_y,causal35_raw_valid,causal35_raw_x,causal35_raw_y,causal35_optical_depth_m,causal35_reject_reason,causal35_anchor_recv_age_ms,causal35_anchor_sample_age_ms,causal35_deltar_hold_ms,stabilised_publish_mode,stabilised_publish_ready,stabilised_publish_source,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,rc_zero_seq,worked5_valid,worked5_points,worked5_hcam_m,worked5_du_norm,worked5_dv_norm,worked5_dx_m,worked5_dy_m,worked5_dN_m,worked5_dE_m,worked5_acc_n_m,worked5_acc_e_m,highdyn_active,highdyn_reason6,highdyn_raw_dx_m,highdyn_raw_dy_m,highdyn_raw_dN_m,highdyn_raw_dE_m,highdyn_acc_n_m,highdyn_acc_e_m,highdyn_confidence,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
 
     if(g_fb_shadow_max_px>0.0){
       std::cerr<<(g_obs_shadow_enabled?"A/B/C/D SHADOW: ":"A/B/C SHADOW: ")
@@ -2322,6 +2322,15 @@ int main(int argc,char** argv){
     // Переводим AP_OpticalFlow_MAV в high-precision flow_rate mode.
     // quality=0: это не валидное aiding measurement.
     sendOpticalFlow(fc.fd,(uint64_t)(monoNs()/1000),1.0e-6f,0.0f,0);
+
+    // MAIN_LOOP_STAGE_FORENSIC_V1: carry previous-iteration timings into
+    // the next CSV row so stages after the CSV write can also be measured.
+    double prev_send_to_csv_ms=-1.0;
+    double prev_csv_block_ms=-1.0;
+    double prev_web_block_ms=-1.0;
+    double prev_postweb_ms=-1.0;
+    double prev_anchor_ms=-1.0;
+    int64_t prev_loop_end_ns=0;
 
     while(g_running){
       pollfd p{cam.fd,POLLIN,0};
@@ -4497,6 +4506,7 @@ int main(int argc,char** argv){
           dr_csv.flush();
         }
 
+        const int64_t stage_csv_enter_ns=monoNs();
         FlowFcTarget csv_ct{}; FlowFcAttTarget csv_ca{}; FlowFcOutputs csv_co{};
         double csv_ct_age=1e9,csv_ca_age=1e9,csv_co_age=1e9;
         fc.latestControl(&csv_ct,&csv_ca,&csv_co,&csv_ct_age,&csv_ca_age,&csv_co_age);
@@ -4533,6 +4543,9 @@ int main(int argc,char** argv){
            <<camera_poll_enter_ns<<','<<camera_poll_exit_ns<<','<<camera_poll_ms<<','
            <<camera_dq_first_enter_ns<<','<<camera_dq_last_exit_ns<<','
            <<camera_dq_ioctl_ms<<','<<camera_dq_batch_ms<<','<<camera_dq_count<<','
+           <<(prev_loop_end_ns>0?(camera_poll_enter_ns-prev_loop_end_ns)*1e-6:-1.0)<<','
+           <<prev_send_to_csv_ms<<','<<prev_csv_block_ms<<','<<prev_web_block_ms<<','
+           <<prev_postweb_ms<<','<<prev_anchor_ms<<','
            <<flow_send_ns<<','<<frame_pipeline_latency_ms<<','
            <<camera_queue_dropped<<','<<camera_queue_dropped_total<<','
            <<frame<<','<<guide_leg.load()<<','<<guide_stage.load()<<','<<(s.valid?1:0)<<','<<s.invalid_reason<<','<<(bridge_pending?1:0)<<','<<dt<<','
@@ -4606,6 +4619,7 @@ int main(int argc,char** argv){
           }
         }
         }
+        const int64_t stage_csv_exit_ns=monoNs();
 
         {
           std::ostringstream js;
@@ -4701,6 +4715,7 @@ int main(int argc,char** argv){
             <<"}";
           web_live.send(now,js.str());
         }
+        const int64_t stage_web_exit_ns=monoNs();
         const bool blind4_final_event_written =
           blind4_cli && blind4_state>=8 && pending_return_event==18;
         pending_return_event=0;
@@ -5565,6 +5580,8 @@ int main(int argc,char** argv){
           std::cerr<<"\r"<<std::flush;
         }
 
+        const int64_t stage_anchor_enter_ns=monoNs();
+
         // Anchor policy: always advance to the newest decoded frame.
         //
         // The experimental bridge policy was removed after stress testing:
@@ -5577,6 +5594,14 @@ int main(int argc,char** argv){
         prev_camera_height_m=current_camera_height_m;
         prev_camera_height_valid=current_camera_height_valid;
         bridge_pending=false;
+
+        const int64_t stage_anchor_exit_ns=monoNs();
+        prev_send_to_csv_ms=(stage_csv_enter_ns-flow_send_ns)*1e-6;
+        prev_csv_block_ms=(stage_csv_exit_ns-stage_csv_enter_ns)*1e-6;
+        prev_web_block_ms=(stage_web_exit_ns-stage_csv_exit_ns)*1e-6;
+        prev_postweb_ms=(stage_anchor_enter_ns-stage_web_exit_ns)*1e-6;
+        prev_anchor_ms=(stage_anchor_exit_ns-stage_anchor_enter_ns)*1e-6;
+        prev_loop_end_ns=stage_anchor_exit_ns;
     }
 
     g_running=false;
