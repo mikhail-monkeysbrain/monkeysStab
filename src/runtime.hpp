@@ -14,6 +14,7 @@
 #include <opencv2/highgui.hpp>
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cerrno>
 #include <cmath>
 #include <csignal>
