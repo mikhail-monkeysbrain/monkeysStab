@@ -2105,6 +2105,7 @@ int main(int argc,char** argv){
     double temporal_of_angle_y=0.0;
     double temporal_of_dt_s=0.0;
     uint64_t temporal_of_inputs=0;
+    int64_t temporal_of_last_input_ns=0;
 
     // HIGH_DYNAMIC_RECOVERY_SHADOW_V1
     // Diagnostic only. Mirrors accepted WORKED5 N/E steps and, for reason=6,
@@ -4087,6 +4088,7 @@ int main(int argc,char** argv){
           temporal_of_angle_y += flow_send_y*dt;
           temporal_of_dt_s += dt;
           ++temporal_of_inputs;
+          temporal_of_last_input_ns=flow_send_ns;
 
           if(temporal_of_dt_s >= kTemporalOfPublishMinDtS){
             const double temporal_flow_x =
@@ -4114,16 +4116,45 @@ int main(int argc,char** argv){
               temporal_of_angle_y=0.0;
               temporal_of_dt_s=0.0;
               temporal_of_inputs=0;
+              temporal_of_last_input_ns=0;
             }
           }
         } else {
-          // Never aggregate across a discontinuity. A missing/invalid interval
-          // means that the accumulated angular displacement is no longer
-          // guaranteed to describe one contiguous observation.
+          // TEMPORAL_OF_DISCONTINUITY_FLUSH_V1:
+          // Do not bridge across an invalid/missing interval, but also do not
+          // destroy valid angular displacement accumulated immediately before
+          // it. Flush that contiguous prefix as a short packet using the
+          // timestamp of its last valid input, then reset unconditionally.
+          if(temporal_of_inputs>0 &&
+             temporal_of_dt_s>0.0 &&
+             std::isfinite(temporal_of_angle_x) &&
+             std::isfinite(temporal_of_angle_y)){
+            const double temporal_flow_x=
+              temporal_of_angle_x/temporal_of_dt_s;
+            const double temporal_flow_y=
+              temporal_of_angle_y/temporal_of_dt_s;
+            quality=255;
+            flow_sent=sendOpticalFlow(
+              fc.fd,
+              (uint64_t)(std::max<int64_t>(0,temporal_of_last_input_ns)/1000),
+              (float)temporal_flow_x,
+              (float)temporal_flow_y,
+              quality);
+            if(flow_sent){
+              ++flow_sent_total;
+              flow_tx_x=temporal_flow_x;
+              flow_tx_y=temporal_flow_y;
+              flow_tx_dt_s=temporal_of_dt_s;
+              flow_tx_inputs=temporal_of_inputs;
+            }
+          }
+
+          // The discontinuity itself is never integrated or bridged.
           temporal_of_angle_x=0.0;
           temporal_of_angle_y=0.0;
           temporal_of_dt_s=0.0;
           temporal_of_inputs=0;
+          temporal_of_last_input_ns=0;
 
           if(!prev.empty() && !s.valid) ++flow_invalid_total;
           if(s.valid && !flow_fresh) ++stale_flow_rejected_total;
