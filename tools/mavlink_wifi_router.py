@@ -161,6 +161,11 @@ def main():
     rx_counter=MavRxCounter()
     rx_stat_t=time.monotonic()
     rx_stat_counts=Counter()
+    fanout_max_start_lag_ms=0.0
+    fanout_max_send_call_ms=0.0
+    fanout_send_start_gt25=0
+    fanout_blocked=0
+    fanout_short=0
     if a.gcs_ip: gcs.add((a.gcs_ip,a.udp_port))
     def local_ipv4_addresses():
         addrs=[]
@@ -223,25 +228,38 @@ def main():
                         print("FC_RX_RATE " + " ".join(parts) +
                               f" clients={len(clients)}"
                               f" highres_uart_max_gap_ms={rx_counter.highres_max_gap_ms:.3f}"
-                              f" highres_uart_gap_gt25={rx_counter.highres_gap_over_25}",
+                              f" highres_uart_gap_gt25={rx_counter.highres_gap_over_25}"
+                              f" fanout_max_start_lag_ms={fanout_max_start_lag_ms:.3f}"
+                              f" fanout_max_send_call_ms={fanout_max_send_call_ms:.3f}"
+                              f" fanout_send_start_gt25={fanout_send_start_gt25}"
+                              f" fanout_blocked={fanout_blocked}"
+                              f" fanout_short={fanout_short}",
                               flush=True)
                         rx_stat_counts=rx_counter.counts.copy()
                         rx_stat_t=now
                     dead=[]
                     for c in clients:
                         try:
+                            send_start_ns=time.monotonic_ns()
+                            fanout_start_lag_ms=(send_start_ns-uart_recv_ns)*1e-6
+                            fanout_max_start_lag_ms=max(fanout_max_start_lag_ms,fanout_start_lag_ms)
+                            if fanout_start_lag_ms>25.0: fanout_send_start_gt25+=1
                             # Clients are non-blocking. sendall() is the wrong
                             # primitive here: a temporary EAGAIN used to eject
                             # a healthy client from the fan-out.  A MAVLink
                             # consumer must either receive the complete serial
                             # chunk or be disconnected explicitly.
                             n=c.send(data)
+                            send_done_ns=time.monotonic_ns()
+                            fanout_max_send_call_ms=max(fanout_max_send_call_ms,(send_done_ns-send_start_ns)*1e-6)
                             if n != len(data):
+                                fanout_short+=1
                                 raise OSError(errno.ENOBUFS,
                                               f"short nonblocking send {n}/{len(data)}")
                             st=client_tx.setdefault(c,{"bytes":0,"drops":0})
                             st["bytes"]+=n
                         except (BlockingIOError,InterruptedError):
+                            fanout_blocked+=1
                             st=client_tx.setdefault(c,{"bytes":0,"drops":0})
                             st["drops"]+=1
                             # Do not silently remove a client on transient
