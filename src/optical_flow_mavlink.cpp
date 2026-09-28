@@ -436,6 +436,14 @@ struct FlowFc {
   FlowFcRc rc{};
   std::deque<FlowFcGyro> attitude_history; // ATTITUDE, currently keyed by RPi receive time
   std::deque<FlowFcRawGyro> highres_gyro_history; // independent HIGHRES_IMU gyro stream
+
+  // FLOWFC_RX_TIMING_DIAG_V1: shadow-only timing inside the TCP/direct-UART
+  // consumer.  No filesystem I/O and no estimator/publisher dependency.
+  int64_t flowfc_highres_last_read_ns=0;
+  int64_t flowfc_diag_last_report_ns=0;
+  double flowfc_highres_max_read_gap_ms=0.0;
+  double flowfc_highres_max_parse_lag_ms=0.0;
+  uint64_t flowfc_highres_read_gap_gt25=0;
   // HIGHRES_CLOCK_MAP_V2: affine FC->RPi clock map fitted to one-second
   // lower-envelope receive offsets.  FC and RPi clocks measurably run at
   // different rates, so a constant offset is not sufficient.
@@ -857,6 +865,10 @@ struct FlowFc {
           const ssize_t n=read(fd,buf,sizeof(buf));
           if(n<0&&(errno==EAGAIN||errno==EWOULDBLOCK))break;
           if(n<=0)break;
+          // Timestamp the socket/UART read once for every kernel read.  Every
+          // MAVLink frame parsed from this buffer inherits the same boundary
+          // timestamp, which also exposes batched delivery explicitly.
+          const int64_t flowfc_read_ns=monoNs();
           for(ssize_t i=0;i<n;i++){
             if(!mavlink_parse_char(MAVLINK_COMM_0,buf[i],&m,&st))continue;
             if(m.sysid!=sys)continue;
@@ -953,6 +965,43 @@ struct FlowFc {
               ahrs_omega_i_valid=true;
             } else if(m.msgid==MAVLINK_MSG_ID_HIGHRES_IMU){
               mavlink_highres_imu_t q{}; mavlink_msg_highres_imu_decode(&m,&q);
+
+              // Measure where HIGHRES_IMU latency appears after the router:
+              // read_gap = time between kernel reads carrying HIGHRES_IMU;
+              // parse_lag = time spent after this read before this frame is
+              // decoded/handled.  Diagnostic only.
+              const int64_t flowfc_parse_ns=monoNs();
+              const double flowfc_parse_lag_ms=
+                (flowfc_parse_ns-flowfc_read_ns)*1e-6;
+              double flowfc_read_gap_ms=-1.0;
+              if(flowfc_highres_last_read_ns>0)
+                flowfc_read_gap_ms=
+                  (flowfc_read_ns-flowfc_highres_last_read_ns)*1e-6;
+              flowfc_highres_last_read_ns=flowfc_read_ns;
+              if(flowfc_read_gap_ms>=0.0)
+                flowfc_highres_max_read_gap_ms=
+                  std::max(flowfc_highres_max_read_gap_ms,flowfc_read_gap_ms);
+              flowfc_highres_max_parse_lag_ms=
+                std::max(flowfc_highres_max_parse_lag_ms,flowfc_parse_lag_ms);
+              if(flowfc_read_gap_ms>25.0){
+                ++flowfc_highres_read_gap_gt25;
+                std::cerr<<"FLOWFC_HIGHRES_GAP"
+                         <<" fc_time_usec="<<q.time_usec
+                         <<" read_gap_ms="<<flowfc_read_gap_ms
+                         <<" parse_lag_ms="<<flowfc_parse_lag_ms
+                         <<" read_bytes="<<n<<"\n";
+              }
+              if(flowfc_diag_last_report_ns==0)
+                flowfc_diag_last_report_ns=flowfc_parse_ns;
+              if(flowfc_parse_ns-flowfc_diag_last_report_ns>=5000000000LL){
+                std::cerr<<"FLOWFC_RX_RATE_DIAG"
+                         <<" max_read_gap_ms="<<flowfc_highres_max_read_gap_ms
+                         <<" max_parse_lag_ms="<<flowfc_highres_max_parse_lag_ms
+                         <<" read_gap_gt25="<<flowfc_highres_read_gap_gt25
+                         <<"\n";
+                flowfc_diag_last_report_ns=flowfc_parse_ns;
+              }
+
               std::unique_lock<std::mutex> l(mu);
               imu.ax=q.xacc; imu.ay=q.yacc; imu.az=q.zacc;
               imu.gx=q.xgyro; imu.gy=q.ygyro; imu.gz=q.zgyro;
