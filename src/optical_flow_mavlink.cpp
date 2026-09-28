@@ -2553,7 +2553,11 @@ int main(int argc,char** argv){
       // Important for WORKED5: no gain changes, no LK/RANSAC changes, and no
       // per-frame control traffic. At most one V4L2 S_CTRL is issued every
       // 10 decoded frames, only outside the brightness deadband.
-      if((frame%10)==0){
+      // Do not touch UVC controls during the first 5 s of live capture.
+      // This preserves the proven startup/web-preview contour and also makes
+      // any later AE failure distinguishable from camera startup failure.
+      static const int64_t ae_capture_start_ns=monoNs();
+      if((frame%10)==0 && monoNs()-ae_capture_start_ns>=5000000000LL){
         const int ax0=std::clamp((int)std::lround(g_feature_roi.x0*gray.cols),0,gray.cols-1);
         const int ay0=std::clamp((int)std::lround(g_feature_roi.y0*gray.rows),0,gray.rows-1);
         const int ax1=std::clamp((int)std::lround(g_feature_roi.x1*gray.cols),ax0+1,gray.cols);
