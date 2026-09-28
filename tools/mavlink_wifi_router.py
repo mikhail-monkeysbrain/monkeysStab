@@ -279,6 +279,9 @@ def main():
                 elif x==srv:
                     c,addr=srv.accept()
                     c.setblocking(False)
+                    # Low-latency localhost MAVLink: do not let TCP coalesce
+                    # small UART fanout writes before the realtime consumer sees them.
+                    c.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
                     # Give short FC bursts room even if a consumer is briefly
                     # busy; this is still bounded kernel buffering.
                     c.setsockopt(socket.SOL_SOCKET,socket.SO_SNDBUF,262144)
