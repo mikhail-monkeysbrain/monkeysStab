@@ -444,6 +444,13 @@ struct FlowFc {
   double flowfc_highres_max_read_gap_ms=0.0;
   double flowfc_highres_max_parse_lag_ms=0.0;
   uint64_t flowfc_highres_read_gap_gt25=0;
+  // FLOWFC_HANDLER_TIMING_DIAG_V1: distinguish time spent inside HIGHRES
+  // handling from time spent elsewhere before the next kernel read.
+  int64_t flowfc_prev_read_done_ns=0;
+  double flowfc_highres_max_handler_ms=0.0;
+  double flowfc_max_between_reads_ms=0.0;
+  uint64_t flowfc_highres_handler_gt5=0;
+  uint64_t flowfc_between_reads_gt25=0;
   // HIGHRES_CLOCK_MAP_V2: affine FC->RPi clock map fitted to one-second
   // lower-envelope receive offsets.  FC and RPi clocks measurably run at
   // different rates, so a constant offset is not sufficient.
@@ -869,6 +876,13 @@ struct FlowFc {
           // MAVLink frame parsed from this buffer inherits the same boundary
           // timestamp, which also exposes batched delivery explicitly.
           const int64_t flowfc_read_ns=monoNs();
+          if(flowfc_prev_read_done_ns>0){
+            const double between_reads_ms=
+              (flowfc_read_ns-flowfc_prev_read_done_ns)*1e-6;
+            flowfc_max_between_reads_ms=
+              std::max(flowfc_max_between_reads_ms,between_reads_ms);
+            if(between_reads_ms>25.0) ++flowfc_between_reads_gt25;
+          }
           for(ssize_t i=0;i<n;i++){
             if(!mavlink_parse_char(MAVLINK_COMM_0,buf[i],&m,&st))continue;
             if(m.sysid!=sys)continue;
@@ -964,6 +978,7 @@ struct FlowFc {
               ahrs_omega_i_recv_ns=monoNs();
               ahrs_omega_i_valid=true;
             } else if(m.msgid==MAVLINK_MSG_ID_HIGHRES_IMU){
+              const int64_t flowfc_highres_handler_start_ns=monoNs();
               mavlink_highres_imu_t q{}; mavlink_msg_highres_imu_decode(&m,&q);
 
               // Measure where HIGHRES_IMU latency appears after the router:
@@ -992,6 +1007,10 @@ struct FlowFc {
                          <<" max_read_gap_ms="<<flowfc_highres_max_read_gap_ms
                          <<" max_parse_lag_ms="<<flowfc_highres_max_parse_lag_ms
                          <<" read_gap_gt25="<<flowfc_highres_read_gap_gt25
+                         <<" max_handler_ms="<<flowfc_highres_max_handler_ms
+                         <<" handler_gt5="<<flowfc_highres_handler_gt5
+                         <<" max_between_reads_ms="<<flowfc_max_between_reads_ms
+                         <<" between_reads_gt25="<<flowfc_between_reads_gt25
                          <<"\n";
                 flowfc_diag_last_report_ns=flowfc_parse_ns;
               }
@@ -1160,6 +1179,11 @@ struct FlowFc {
                 else ++imu_zupt_shadow_blocks;
               }
               }
+              const double flowfc_highres_handler_ms=
+                (monoNs()-flowfc_highres_handler_start_ns)*1e-6;
+              flowfc_highres_max_handler_ms=
+                std::max(flowfc_highres_max_handler_ms,flowfc_highres_handler_ms);
+              if(flowfc_highres_handler_ms>5.0) ++flowfc_highres_handler_gt5;
             } else if(m.msgid==MAVLINK_MSG_ID_LOCAL_POSITION_NED){
               mavlink_local_position_ned_t q{}; mavlink_msg_local_position_ned_decode(&m,&q);
               std::lock_guard<std::mutex> l(mu);
@@ -1208,6 +1232,7 @@ struct FlowFc {
               ekf.recv_ns=monoNs(); ekf.valid=true; ++ekf_count;
             }
           }
+          flowfc_prev_read_done_ns=monoNs();
         }
       }
     });
