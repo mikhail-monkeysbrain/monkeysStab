@@ -10,7 +10,7 @@ TCP-клиент monkeysStab получает полный поток FC и мо
 UDP GCS получает телеметрию; любой пакет, пришедший на UDP 14550, передаётся FC.
 """
 import argparse, os, select, socket, termios, time, subprocess, errno, struct
-from collections import Counter
+from collections import Counter, deque
 
 BAUD={460800:termios.B460800,115200:termios.B115200,57600:termios.B57600}
 
@@ -67,8 +67,39 @@ class MavRxCounter:
         self.buf=bytearray()
         self.counts=Counter()
         self.bad_prefix=0
+        # UART_HIGHRES_TIMING_DIAG_V1: diagnostic-only timing at the physical
+        # UART boundary. Keep only a small RAM ring; do no per-frame file I/O.
+        self.highres_recent=deque(maxlen=64)
+        self.highres_last_recv_ns=0
+        self.highres_anomalies=deque(maxlen=128)
+        self.highres_max_gap_ms=0.0
+        self.highres_gap_over_25=0
 
-    def feed(self,data):
+    def _observe_highres(self, payload, recv_ns):
+        # MAVLink HIGHRES_IMU starts with uint64 time_usec.
+        if len(payload)<8:
+            return
+        fc_time_usec=struct.unpack_from("<Q",payload,0)[0]
+        gap_ms=-1.0
+        if self.highres_last_recv_ns:
+            gap_ms=(recv_ns-self.highres_last_recv_ns)*1e-6
+            self.highres_max_gap_ms=max(self.highres_max_gap_ms,gap_ms)
+            if gap_ms>25.0:
+                self.highres_gap_over_25+=1
+                self.highres_anomalies.append(
+                    (recv_ns,fc_time_usec,gap_ms,list(self.highres_recent)))
+                print("UART_HIGHRES_GAP"
+                      f" recv_ns={recv_ns}"
+                      f" fc_time_usec={fc_time_usec}"
+                      f" uart_gap_ms={gap_ms:.3f}"
+                      f" recent={len(self.highres_recent)}",
+                      flush=True)
+        self.highres_last_recv_ns=recv_ns
+        self.highres_recent.append((recv_ns,fc_time_usec,gap_ms))
+
+    def feed(self,data,recv_ns=None):
+        if recv_ns is None:
+            recv_ns=time.monotonic_ns()
         self.buf.extend(data)
         while self.buf:
             try:
@@ -83,13 +114,17 @@ class MavRxCounter:
                 total=payload+8
                 if len(self.buf)<total: return
                 msgid=self.buf[5]
+                msg_payload=bytes(self.buf[6:6+payload])
             else:
                 if len(self.buf)<10: return
                 incompat=self.buf[2]
                 total=payload+12+(13 if (incompat & 0x01) else 0)
                 if len(self.buf)<total: return
                 msgid=self.buf[7] | (self.buf[8]<<8) | (self.buf[9]<<16)
+                msg_payload=bytes(self.buf[10:10+payload])
             self.counts[msgid]+=1
+            if msgid==105:
+                self._observe_highres(msg_payload,recv_ns)
             del self.buf[:total]
 
 
@@ -172,7 +207,10 @@ def main():
                     try: data=os.read(ser,65536)
                     except BlockingIOError: data=b""
                     if not data: continue
-                    rx_counter.feed(data)
+                    # Timestamp immediately after the physical UART read,
+                    # before TCP/UDP fan-out and before any downstream runtime work.
+                    uart_recv_ns=time.monotonic_ns()
+                    rx_counter.feed(data,uart_recv_ns)
                     now=time.monotonic()
                     if now-rx_stat_t >= 5.0:
                         dt=now-rx_stat_t
@@ -183,7 +221,10 @@ def main():
                             n=rx_counter.counts[mid]-rx_stat_counts[mid]
                             parts.append(f"{name}={n/dt:.1f}Hz({n})")
                         print("FC_RX_RATE " + " ".join(parts) +
-                              f" clients={len(clients)}",flush=True)
+                              f" clients={len(clients)}"
+                              f" highres_uart_max_gap_ms={rx_counter.highres_max_gap_ms:.3f}"
+                              f" highres_uart_gap_gt25={rx_counter.highres_gap_over_25}",
+                              flush=True)
                         rx_stat_counts=rx_counter.counts.copy()
                         rx_stat_t=now
                     dead=[]
