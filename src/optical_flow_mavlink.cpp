@@ -39,6 +39,7 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 
 #if __has_include(<opencv2/freetype.hpp>)
@@ -789,6 +790,11 @@ struct FlowFc {
       }
       freeaddrinfo(res);
       if(s<0) throw std::runtime_error("FC TCP connect failed: "+dev);
+      // Match the router's low-latency localhost stream in both directions.
+      // This changes transport latency only; MAVLink payloads are untouched.
+      const int one=1;
+      if(setsockopt(s,IPPROTO_TCP,TCP_NODELAY,&one,sizeof(one))<0)
+        std::cerr<<"FC TCP warning: TCP_NODELAY failed: "<<std::strerror(errno)<<"\n";
       const int fl=fcntl(s,F_GETFL,0);
       if(fl>=0) fcntl(s,F_SETFL,fl|O_NONBLOCK);
       std::cerr<<"FC endpoint: "<<dev<<" (через MAVLink router)\n";
