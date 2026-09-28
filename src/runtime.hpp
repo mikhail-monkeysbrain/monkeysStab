@@ -49,6 +49,8 @@ struct CameraBuffer { void* p=nullptr; size_t n=0; };
 
 struct Camera {
   int fd=-1;
+  int exposure_absolute=20;
+  int gain=0;
   std::vector<CameraBuffer> bufs;
   ~Camera(){ close(); }
 
@@ -67,7 +69,7 @@ struct Camera {
     //   GT 465 mm -> WORKED5 455.067 mm (-2.136%)
     // The second run had 2935/2935 valid frames with no reason5/reason6.
     constexpr int kWidth=640, kHeight=480, kCameraFps=100;
-    constexpr int kExposureAbsolute=50, kGain=0;
+    constexpr int kExposureAbsolute=20, kGain=0;
 
     fd=::open(dev.c_str(),O_RDWR|O_NONBLOCK);
     if(fd<0) fail("open camera");
@@ -111,6 +113,8 @@ struct Camera {
     setc(V4L2_CID_EXPOSURE_AUTO_PRIORITY,0);
     setc(V4L2_CID_EXPOSURE_ABSOLUTE,kExposureAbsolute);
     setc(V4L2_CID_GAIN,kGain);
+    exposure_absolute=kExposureAbsolute;
+    gain=kGain;
 
     v4l2_requestbuffers rb{};
     rb.count=8;
@@ -131,6 +135,20 @@ struct Camera {
     v4l2_buf_type t=V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if(xioctl(fd,VIDIOC_STREAMON,&t)<0) fail("VIDIOC_STREAMON");
   }
+
+  bool setExposureAbsolute(int value){
+    if(fd<0) return false;
+    value=std::clamp(value,1,200);
+    if(value==exposure_absolute) return true;
+    v4l2_control c{};
+    c.id=V4L2_CID_EXPOSURE_ABSOLUTE;
+    c.value=value;
+    if(xioctl(fd,VIDIOC_S_CTRL,&c)<0) return false;
+    exposure_absolute=value;
+    return true;
+  }
+
+  int exposureAbsolute() const { return exposure_absolute; }
 
   void close(){
     if(fd<0) return;
