@@ -49,7 +49,7 @@ struct CameraBuffer { void* p=nullptr; size_t n=0; };
 
 struct Camera {
   int fd=-1;
-  int exposure_absolute=20;
+  int exposure_absolute=50;
   int gain=0;
   std::vector<CameraBuffer> bufs;
   ~Camera(){ close(); }
@@ -69,7 +69,7 @@ struct Camera {
     //   GT 465 mm -> WORKED5 455.067 mm (-2.136%)
     // The second run had 2935/2935 valid frames with no reason5/reason6.
     constexpr int kWidth=640, kHeight=480, kCameraFps=100;
-    constexpr int kExposureAbsolute=20, kGain=0;
+    constexpr int kExposureAbsolute=50, kGain=0;
 
     fd=::open(dev.c_str(),O_RDWR|O_NONBLOCK);
     if(fd<0) fail("open camera");
