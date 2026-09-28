@@ -49,9 +49,20 @@ struct CameraBuffer { void* p=nullptr; size_t n=0; };
 
 struct Camera {
   int fd=-1;
-  int exposure_absolute=50;
+  std::atomic<int> exposure_absolute{50};
   int gain=0;
   std::vector<CameraBuffer> bufs;
+
+  // OV9281_ASYNC_AE_V1: VIDIOC_S_CTRL takes ~90 ms on the production OV9281.
+  // Never execute it in the realtime frame/OF thread. Only the newest request
+  // matters; intermediate requests are deliberately coalesced.
+  std::mutex exposure_mu;
+  std::condition_variable exposure_cv;
+  std::thread exposure_worker;
+  bool exposure_stop=false;
+  bool exposure_pending=false;
+  int exposure_requested=50;
+
   ~Camera(){ close(); }
 
   void openDev(const std::string& dev){
@@ -113,7 +124,7 @@ struct Camera {
     setc(V4L2_CID_EXPOSURE_AUTO_PRIORITY,0);
     setc(V4L2_CID_EXPOSURE_ABSOLUTE,kExposureAbsolute);
     setc(V4L2_CID_GAIN,kGain);
-    exposure_absolute=kExposureAbsolute;
+    exposure_absolute.store(kExposureAbsolute,std::memory_order_relaxed);
     gain=kGain;
 
     v4l2_requestbuffers rb{};
@@ -134,23 +145,73 @@ struct Camera {
     }
     v4l2_buf_type t=V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if(xioctl(fd,VIDIOC_STREAMON,&t)<0) fail("VIDIOC_STREAMON");
+
+    {
+      std::lock_guard<std::mutex> lk(exposure_mu);
+      exposure_stop=false;
+      exposure_pending=false;
+      exposure_requested=exposure_absolute.load(std::memory_order_relaxed);
+    }
+    exposure_worker=std::thread([this]{
+      for(;;){
+        int value=0;
+        {
+          std::unique_lock<std::mutex> lk(exposure_mu);
+          exposure_cv.wait(lk,[this]{ return exposure_stop || exposure_pending; });
+          if(exposure_stop) break;
+          value=exposure_requested;
+          exposure_pending=false;
+        }
+
+        v4l2_control c{};
+        c.id=V4L2_CID_EXPOSURE_ABSOLUTE;
+        c.value=value;
+        const int64_t t0=monoNs();
+        const int rc=xioctl(fd,VIDIOC_S_CTRL,&c);
+        const double ms=(monoNs()-t0)*1e-6;
+        if(rc<0){
+          std::cerr<<"OV9281_ASYNC_AE_V1 set failed requested="<<value
+                   <<" errno="<<errno<<" set_ms="<<ms<<"\n";
+        } else {
+          exposure_absolute.store(value,std::memory_order_release);
+          std::cerr<<"OV9281_ASYNC_AE_V1 applied="<<value
+                   <<" set_ms="<<ms<<"\n";
+        }
+      }
+    });
   }
 
-  bool setExposureAbsolute(int value){
+  bool requestExposureAbsolute(int value){
     if(fd<0) return false;
     value=std::clamp(value,1,200);
-    if(value==exposure_absolute) return true;
-    v4l2_control c{};
-    c.id=V4L2_CID_EXPOSURE_ABSOLUTE;
-    c.value=value;
-    if(xioctl(fd,VIDIOC_S_CTRL,&c)<0) return false;
-    exposure_absolute=value;
+    {
+      std::lock_guard<std::mutex> lk(exposure_mu);
+      if(exposure_stop) return false;
+      if(value==exposure_absolute.load(std::memory_order_acquire) &&
+         !exposure_pending) return true;
+      exposure_requested=value;
+      exposure_pending=true;
+    }
+    exposure_cv.notify_one();
     return true;
   }
 
-  int exposureAbsolute() const { return exposure_absolute; }
+  int exposureAbsolute() const {
+    return exposure_absolute.load(std::memory_order_acquire);
+  }
+
+  void stopExposureWorker(){
+    {
+      std::lock_guard<std::mutex> lk(exposure_mu);
+      exposure_stop=true;
+      exposure_pending=false;
+    }
+    exposure_cv.notify_one();
+    if(exposure_worker.joinable()) exposure_worker.join();
+  }
 
   void close(){
+    stopExposureWorker();
     if(fd<0) return;
     v4l2_buf_type t=V4L2_BUF_TYPE_VIDEO_CAPTURE;
     xioctl(fd,VIDIOC_STREAMOFF,&t);
