@@ -3127,6 +3127,13 @@ int main(int argc,char** argv){
           double causal_metric35_anchor_sample_age_ms=-1.0;
           double causal_metric35_deltar_hold_ms=-1.0;
           double causal_metric35_deltar_angle_deg=0.0;
+          // CAUSAL35_REJECT_DIAG_V1: shadow-only explanation of why the
+          // anchor->t1 causal HIGHRES integration (reason=3) was unavailable.
+          // This never changes the production accept/reject decision.
+          int causal35_r3_diag=0;
+          double causal35_r3_start_hold_ms=-1.0;
+          double causal35_r3_end_hold_ms=-1.0;
+          uint64_t causal35_r3_samples=0;
           if(!causal_att_anchor_valid) causal35_reject_reason=1;
           if(causal_att_anchor_valid){
             causal_metric35_anchor_recv_age_ms=
@@ -3146,8 +3153,83 @@ int main(int argc,char** argv){
               causal_metric35_deltar_hold_ms=d01.max_bracket_gap_ms;
               causal35_deltar_hold_diag_ms=causal_metric35_deltar_hold_ms;
               causal_metric35_deltar_angle_deg=d01.integrated_angle_deg;
-              if(!anchor_to_t1.valid) causal35_reject_reason=3;
-              else if(!d01.valid) causal35_reject_reason=4;
+              if(!anchor_to_t1.valid){
+                causal35_reject_reason=3;
+
+                // Mirror only the preconditions of integrateBodyRatesCausalHold
+                // so reason=3 can be split without altering that integrator.
+                // Codes: 1=no causal HIGHRES history, 2=bad interval,
+                // 3=no sample at/before t0, 4=invalid start sample,
+                // 5=start hold >25 ms, 6=bad/non-monotonic internal segment,
+                // 7=end hold >25 ms, 8=no integrated segment, 9=other.
+                causal35_r3_samples=hgh_corr_causal.size();
+                const int64_t r3_t0=causal_att_anchor.mapped_sample_ns;
+                const int64_t r3_t1=ts;
+                if(hgh_corr_causal.empty()){
+                  causal35_r3_diag=1;
+                } else if(r3_t0<=0 || r3_t1<=r3_t0){
+                  causal35_r3_diag=2;
+                } else {
+                  auto r3_first=std::upper_bound(
+                    hgh_corr_causal.begin(),hgh_corr_causal.end(),r3_t0,
+                    [](int64_t t,const metric_shadow::TimedBodyRate& a){
+                      return t<a.sample_ns;
+                    });
+                  if(r3_first==hgh_corr_causal.begin()){
+                    causal35_r3_diag=3;
+                  } else {
+                    auto r3_cur=std::prev(r3_first);
+                    if(!r3_cur->valid || r3_cur->sample_ns<=0){
+                      causal35_r3_diag=4;
+                    } else {
+                      causal35_r3_start_hold_ms=
+                        (r3_t0-r3_cur->sample_ns)*1e-6;
+                      if(!(causal35_r3_start_hold_ms>=0.0 &&
+                           causal35_r3_start_hold_ms<=25.0)){
+                        causal35_r3_diag=5;
+                      } else {
+                        int64_t r3_seg_start=r3_t0;
+                        int64_t r3_rate_sample_ns=r3_cur->sample_ns;
+                        bool r3_bad_segment=false;
+                        int r3_segments=0;
+                        for(auto it=r3_first;
+                            it!=hgh_corr_causal.end() && it->sample_ns<r3_t1;
+                            ++it){
+                          if(!it->valid || it->sample_ns<=r3_seg_start) continue;
+                          const double r3_dt=(it->sample_ns-r3_seg_start)*1e-9;
+                          if(!(r3_dt>0.0 && r3_dt<0.1)){
+                            r3_bad_segment=true;
+                            break;
+                          }
+                          ++r3_segments;
+                          r3_rate_sample_ns=it->sample_ns;
+                          r3_seg_start=it->sample_ns;
+                        }
+                        if(r3_bad_segment){
+                          causal35_r3_diag=6;
+                        } else {
+                          causal35_r3_end_hold_ms=
+                            (r3_t1-r3_rate_sample_ns)*1e-6;
+                          if(!(causal35_r3_end_hold_ms>=0.0 &&
+                               causal35_r3_end_hold_ms<=25.0)){
+                            causal35_r3_diag=7;
+                          } else {
+                            const double r3_tail_dt=(r3_t1-r3_seg_start)*1e-9;
+                            if(r3_tail_dt>0.0){
+                              if(!(r3_tail_dt<0.1)) causal35_r3_diag=6;
+                              else ++r3_segments;
+                            }
+                            if(causal35_r3_diag==0 && r3_segments<=0)
+                              causal35_r3_diag=8;
+                            if(causal35_r3_diag==0)
+                              causal35_r3_diag=9;
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              } else if(!d01.valid) causal35_reject_reason=4;
               if(anchor_to_t1.valid && d01.valid){
                 const cv::Matx33d Ra=metric_shadow::bodyToLocal(
                   causal_att_anchor.roll,causal_att_anchor.pitch,causal_att_anchor.yaw);
@@ -3305,7 +3387,8 @@ int main(int argc,char** argv){
               causal_metric35_csv
                 <<"frame,t0_ns,t1_ns,ready,anchor_recv_age_ms,anchor_sample_age_ms,"
                 <<"deltar_hold_ms,deltar_angle_deg,camera_dN_m,camera_dE_m,"
-                <<"lever_dN_m,lever_dE_m,imu_dN_m,imu_dE_m,residual_median_m\n";
+                <<"lever_dN_m,lever_dE_m,imu_dN_m,imu_dE_m,residual_median_m,"
+                <<"reject_reason,r3_diag,r3_start_hold_ms,r3_end_hold_ms,r3_samples\n";
               causal_metric35_header=true;
             }
             causal_metric35_csv
@@ -3320,7 +3403,12 @@ int main(int argc,char** argv){
               <<causal_metric35_step.lever_local_m[1]<<','
               <<causal_metric35_step.delta_local_m[0]<<','
               <<causal_metric35_step.delta_local_m[1]<<','
-              <<causal_metric35_step.residual_median_m<<'\n';
+              <<causal_metric35_step.residual_median_m<<','
+              <<causal35_reject_reason<<','
+              <<causal35_r3_diag<<','
+              <<causal35_r3_start_hold_ms<<','
+              <<causal35_r3_end_hold_ms<<','
+              <<causal35_r3_samples<<'\n';
             if(shadowFlushEnabled()) causal_metric35_csv.flush();
           }
 
