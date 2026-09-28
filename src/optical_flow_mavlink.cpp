@@ -983,14 +983,8 @@ struct FlowFc {
                   std::max(flowfc_highres_max_read_gap_ms,flowfc_read_gap_ms);
               flowfc_highres_max_parse_lag_ms=
                 std::max(flowfc_highres_max_parse_lag_ms,flowfc_parse_lag_ms);
-              if(flowfc_read_gap_ms>25.0){
+              if(flowfc_read_gap_ms>25.0)
                 ++flowfc_highres_read_gap_gt25;
-                std::cerr<<"FLOWFC_HIGHRES_GAP"
-                         <<" fc_time_usec="<<q.time_usec
-                         <<" read_gap_ms="<<flowfc_read_gap_ms
-                         <<" parse_lag_ms="<<flowfc_parse_lag_ms
-                         <<" read_bytes="<<n<<"\n";
-              }
               if(flowfc_diag_last_report_ns==0)
                 flowfc_diag_last_report_ns=flowfc_parse_ns;
               if(flowfc_parse_ns-flowfc_diag_last_report_ns>=5000000000LL){
