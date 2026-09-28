@@ -2546,6 +2546,53 @@ int main(int argc,char** argv){
       ++fps_decoded; ++w5w_decoded;
       ++frame;
 
+      // OV9281_OF_AE_V1: software exposure control from the same ground-facing
+      // ROI used by optical flow. The camera's UVC auto-exposure did not move
+      // exposure on this hardware, so keep manual mode and adjust it slowly.
+      //
+      // Important for WORKED5: no gain changes, no LK/RANSAC changes, and no
+      // per-frame control traffic. At most one V4L2 S_CTRL is issued every
+      // 10 decoded frames, only outside the brightness deadband.
+      if((frame%10)==0){
+        const int ax0=std::clamp((int)std::lround(g_feature_roi.x0*gray.cols),0,gray.cols-1);
+        const int ay0=std::clamp((int)std::lround(g_feature_roi.y0*gray.rows),0,gray.rows-1);
+        const int ax1=std::clamp((int)std::lround(g_feature_roi.x1*gray.cols),ax0+1,gray.cols);
+        const int ay1=std::clamp((int)std::lround(g_feature_roi.y1*gray.rows),ay0+1,gray.rows);
+        const cv::Mat ae_roi=gray(cv::Rect(ax0,ay0,ax1-ax0,ay1-ay0));
+        cv::Mat ae_flat=ae_roi.reshape(1,1).clone();
+        std::nth_element(ae_flat.ptr<uint8_t>(),
+                         ae_flat.ptr<uint8_t>()+ae_flat.total()/2,
+                         ae_flat.ptr<uint8_t>()+ae_flat.total());
+        const int ae_median=ae_flat.ptr<uint8_t>()[ae_flat.total()/2];
+
+        constexpr int kAeLow=110, kAeHigh=170;
+        int next_exp=cam.exposureAbsolute();
+        if(ae_median>kAeHigh){
+          // Overexposure destroys texture quickly, so recover faster.
+          next_exp=std::max(1,(int)std::floor(next_exp*0.70));
+          if(next_exp==cam.exposureAbsolute()) --next_exp;
+        } else if(ae_median<kAeLow){
+          // Brighten more gently to avoid exposure pumping and motion blur.
+          next_exp=std::min(200,(int)std::ceil(next_exp*1.20));
+          if(next_exp==cam.exposureAbsolute()) ++next_exp;
+        }
+        next_exp=std::clamp(next_exp,1,200);
+        if(next_exp!=cam.exposureAbsolute()){
+          const int old_exp=cam.exposureAbsolute();
+          const int64_t ae_set_t0=monoNs();
+          const bool ae_ok=cam.setExposureAbsolute(next_exp);
+          const double ae_set_ms=(monoNs()-ae_set_t0)*1e-6;
+          if(!ae_ok){
+            std::cerr<<"OV9281_OF_AE_V1 set exposure failed old="<<old_exp
+                     <<" requested="<<next_exp<<" errno="<<errno<<"\n";
+          } else if((frame%100)==0 || ae_set_ms>2.0){
+            std::cerr<<"OV9281_OF_AE_V1 median="<<ae_median
+                     <<" exposure="<<old_exp<<"->"<<next_exp
+                     <<" set_ms="<<ae_set_ms<<"\n";
+          }
+        }
+      }
+
       // RPZ2 diagnostic snapshots: the console experiment creates a marker,
       // and the production camera loop saves the next decoded frame.
       for(const auto& snap : std::array<std::pair<const char*,const char*>,2>{{
