@@ -2595,12 +2595,12 @@ int main(int argc,char** argv){
         next_exp=std::clamp(next_exp,1,200);
 
         if(next_exp!=old_exp){
-          if(!cam.setExposureAbsolute(next_exp)){
-            std::cerr<<"OV9281_OF_AE_V2 set exposure failed old="<<old_exp
-                     <<" requested="<<next_exp<<" errno="<<errno<<"\n";
+          if(!cam.requestExposureAbsolute(next_exp)){
+            std::cerr<<"OV9281_OF_AE_V2 request exposure failed old="<<old_exp
+                     <<" requested="<<next_exp<<"\n";
           } else {
             std::cerr<<"OV9281_OF_AE_V2 median="<<ae_median
-                     <<" exposure="<<old_exp<<"->"<<next_exp<<"\n";
+                     <<" exposure_request="<<old_exp<<"->"<<next_exp<<"\n";
           }
         }
       }
