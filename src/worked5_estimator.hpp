@@ -29,17 +29,19 @@ struct Step {
   double dy_m = 0.0;  // frozen blind convention: -du_norm * height
 };
 
-inline Step estimate(const std::vector<cv::Point2f>& prev_inliers,
-                     const std::vector<cv::Point2f>& curr_inliers,
-                     const cv::Mat& production_K,
-                     double production_focal_scale,
-                     const cv::Mat& D,
-                     double camera_height_m,
-                     double dt_s) {
+inline Step estimateWithFocalScale(const std::vector<cv::Point2f>& prev_inliers,
+                                   const std::vector<cv::Point2f>& curr_inliers,
+                                   const cv::Mat& production_K,
+                                   double production_focal_scale,
+                                   const cv::Mat& D,
+                                   double camera_height_m,
+                                   double dt_s,
+                                   double worked_focal_scale) {
   Step o;
   if (prev_inliers.size() != curr_inliers.size() ||
       prev_inliers.size() < 20 ||
       !(production_focal_scale > 0.0) || !std::isfinite(production_focal_scale) ||
+      !(worked_focal_scale > 0.0) || !std::isfinite(worked_focal_scale) ||
       !(camera_height_m > 0.02) || !std::isfinite(camera_height_m) ||
       !(dt_s > 0.0 && dt_s < 0.2)) {
     return o;
@@ -50,7 +52,7 @@ inline Step estimate(const std::vector<cv::Point2f>& prev_inliers,
   // keeps WORKED at exactly 1.10 even while the AP publisher remains at its
   // independent production focal_scale (historically 0.931).
   cv::Mat K = production_K.clone();
-  const double k = kFocalScale / production_focal_scale;
+  const double k = worked_focal_scale / production_focal_scale;
   K.at<double>(0,0) *= k;
   K.at<double>(1,1) *= k;
 
@@ -89,6 +91,20 @@ inline Step estimate(const std::vector<cv::Point2f>& prev_inliers,
   o.valid=std::isfinite(o.dx_m) && std::isfinite(o.dy_m) &&
           std::isfinite(o.scale) && std::isfinite(o.yaw);
   return o;
+}
+
+}
+
+inline Step estimate(const std::vector<cv::Point2f>& prev_inliers,
+                     const std::vector<cv::Point2f>& curr_inliers,
+                     const cv::Mat& production_K,
+                     double production_focal_scale,
+                     const cv::Mat& D,
+                     double camera_height_m,
+                     double dt_s) {
+  return estimateWithFocalScale(prev_inliers, curr_inliers, production_K,
+                                production_focal_scale, D,
+                                camera_height_m, dt_s, kFocalScale);
 }
 
 } // namespace worked5
