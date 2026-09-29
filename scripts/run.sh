@@ -115,6 +115,17 @@ BIN="$RUN_DIR/monkeysstab_optical_flow"
 CSV="$RUN_DIR/optical_flow_mavlink.csv"
 BUILD_LOG="$RUN_DIR/build.log"
 
+# YAW90_DATASET_V1
+# When the yaw-correspondence diagnostic is enabled, preserve every selected
+# source MJPEG frame inside the SAME run directory. This keeps one archive
+# self-contained: production CSV + correspondences + delta-R + raw frames.
+# An explicit MONKEYS_DATASET_DIR still wins.
+if [[ ( "${MONKEYS_YAW_CORR_CAPTURE:-0}" == "1" || "${MONKEYS_YAW_CORR_CAPTURE:-0}" == "true" || "${MONKEYS_YAW_CORR_CAPTURE:-0}" == "yes" ) && -z "${MONKEYS_DATASET_DIR:-}" ]]; then
+  export MONKEYS_DATASET_DIR="$RUN_DIR/yaw_frames"
+  export MONKEYS_DATASET_SURFACE="${MONKEYS_DATASET_SURFACE:-yaw90_sheet_grid}"
+  echo "YAW90 DATASET: raw MJPEG capture -> $MONKEYS_DATASET_DIR"
+fi
+
 # FORENSIC_DATASET_META_V1
 # A dataset is an offline-replay artifact, not a second sensor reader.  Capture
 # happens inside the production camera/Luna paths; here we freeze the exact
