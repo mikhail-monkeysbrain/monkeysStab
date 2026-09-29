@@ -215,6 +215,21 @@ bool diagnosticFileIoEnabled(){
   return enabled;
 }
 
+// YAW_LEVER_CONTRACT_AB_V1
+// Diagnostic branch only. Default keeps the frozen production contract.
+// Set MONKEYS_FLOW_LEVER_MODE=sensor to publish SENSOR-centric optical flow
+// without subtracting omega x camera_pos on the RPi; ArduPilot EKF3 then
+// remains solely responsible for FLOW_POS lever-arm geometry.
+bool sensorCentricLeverMode(){
+  static const bool sensor=[]{
+    const char* e=std::getenv("MONKEYS_FLOW_LEVER_MODE");
+    if(!e || !*e) return false;
+    const std::string v(e);
+    return v=="sensor" || v=="SENSOR";
+  }();
+  return sensor;
+}
+
 struct FeatureRoi {
   double x0=0.20;
   double y0=0.20;
@@ -4254,7 +4269,9 @@ int main(int argc,char** argv){
         // linear velocity omega x r when the rigid body rotates about the FC/IMU.
         // Remove only that translation-like optical-flow component.  If the
         // shadow cannot be computed, preserve the proven pre-change flow path.
-        const bool lever_production_applied=s.valid && s.lever_shadow_valid;
+        const bool lever_sensor_centric=sensorCentricLeverMode();
+        const bool lever_production_applied=
+          !lever_sensor_centric && s.valid && s.lever_shadow_valid;
         double flow_send_x=lever_production_applied ? s.lever_flow_body_x : s.flow_body_x;
         double flow_send_y=lever_production_applied ? s.lever_flow_body_y : s.flow_body_y;
         if(s.valid && bench_height_override>0.0){
