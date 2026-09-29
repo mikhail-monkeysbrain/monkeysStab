@@ -2142,6 +2142,32 @@ int main(int argc,char** argv){
     csv.flush();
     AsyncCsvWriter csv_writer(csv);
 
+    // YAW_CORRESPONDENCES_V1
+    // Diagnostic-only capture of the exact production RANSAC correspondences.
+    // Disabled by default. Disk writes happen on a separate AsyncCsvWriter.
+    const bool yaw_corr_capture=[]{
+      const char* e=std::getenv("MONKEYS_YAW_CORR_CAPTURE");
+      return e && *e &&
+             !(std::string(e)=="0" || std::string(e)=="false" ||
+               std::string(e)=="FALSE" || std::string(e)=="off" ||
+               std::string(e)=="OFF");
+    }();
+    std::ofstream yaw_corr_csv;
+    std::unique_ptr<AsyncCsvWriter> yaw_corr_writer;
+    uint64_t yaw_corr_rows=0;
+    if(yaw_corr_capture){
+      const std::filesystem::path production_csv_path(csvpath);
+      yaw_corr_csv.open(
+        production_csv_path.parent_path()/"yaw_correspondences.csv",
+        std::ios::out|std::ios::trunc);
+      if(!yaw_corr_csv)
+        throw std::runtime_error("не удалось открыть yaw_correspondences.csv");
+      yaw_corr_csv<<"frame,t0_ns,t1_ns,n,pairs\n";
+      yaw_corr_csv.flush();
+      yaw_corr_writer=std::make_unique<AsyncCsvWriter>(yaw_corr_csv);
+      std::cerr<<"YAW_CORRESPONDENCES_V1: ENABLED, every 3rd valid frame\n";
+    }
+
     if(g_fb_shadow_max_px>0.0){
       std::cerr<<(g_obs_shadow_enabled?"A/B/C/D SHADOW: ":"A/B/C SHADOW: ")
                <<"A=production publish, B=FB-consistency <= "
@@ -2803,6 +2829,31 @@ int main(int argc,char** argv){
           prev,gray,dt,calib,
           prev_camera_height_valid?prev_camera_height_m:0.0,
           current_camera_height_valid?current_camera_height_m:0.0);
+
+        // YAW_CORRESPONDENCES_V1
+        // Serialize only every third valid production frame. tryEnqueue()
+        // never waits for disk I/O and may drop diagnostic rows under load.
+        if(yaw_corr_capture &&
+           yaw_corr_writer &&
+           s.valid &&
+           !s.metric_prev_points.empty() &&
+           frame%3==0){
+          const size_t np=std::min(
+            s.metric_prev_points.size(),
+            s.metric_curr_points.size());
+          std::ostringstream row;
+          row<<frame<<','<<prev_ts<<','<<ts<<','<<np<<",\"";
+          for(size_t i=0;i<np;++i){
+            if(i) row<<';';
+            row<<s.metric_prev_points[i].x<<':'
+               <<s.metric_prev_points[i].y<<':'
+               <<s.metric_curr_points[i].x<<':'
+               <<s.metric_curr_points[i].y;
+          }
+          row<<"\"\n";
+          if(yaw_corr_writer->tryEnqueue(row.str()))
+            ++yaw_corr_rows;
+        }
 
         // Trigger on production forward-LK wall time.  Do not use valid=0:
         // the observed collapse begins before the final validity gate fails.
@@ -5958,6 +6009,12 @@ int main(int argc,char** argv){
     }
 
     g_running=false;
+    if(yaw_corr_writer){
+      yaw_corr_writer->stop();
+      std::cerr<<"YAW_CORRESPONDENCES_V1: rows="<<yaw_corr_rows
+               <<" dropped_rows="<<yaw_corr_writer->dropped()
+               <<" bytes="<<yaw_corr_writer->bytes()<<"\n";
+    }
     csv_writer.stop();
     std::cerr<<"CSV ASYNC: dropped_rows="<<csv_writer.dropped()<<" bytes="<<csv_writer.bytes()<<"\n";
     if(guide_thread.joinable()) guide_thread.join();
