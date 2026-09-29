@@ -93,7 +93,6 @@ inline Step estimateWithFocalScale(const std::vector<cv::Point2f>& prev_inliers,
   return o;
 }
 
-}
 
 inline Step estimate(const std::vector<cv::Point2f>& prev_inliers,
                      const std::vector<cv::Point2f>& curr_inliers,
