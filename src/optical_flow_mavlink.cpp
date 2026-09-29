@@ -2155,6 +2155,9 @@ int main(int argc,char** argv){
     std::ofstream yaw_corr_csv;
     std::unique_ptr<AsyncCsvWriter> yaw_corr_writer;
     uint64_t yaw_corr_rows=0;
+    std::ofstream yaw_deltar_csv;
+    std::unique_ptr<AsyncCsvWriter> yaw_deltar_writer;
+    uint64_t yaw_deltar_rows=0;
     if(yaw_corr_capture){
       const std::filesystem::path production_csv_path(csvpath);
       yaw_corr_csv.open(
@@ -2165,7 +2168,19 @@ int main(int argc,char** argv){
       yaw_corr_csv<<"frame,t0_ns,t1_ns,n,pairs\n";
       yaw_corr_csv.flush();
       yaw_corr_writer=std::make_unique<AsyncCsvWriter>(yaw_corr_csv);
-      std::cerr<<"YAW_CORRESPONDENCES_V1: ENABLED, every 3rd valid frame\n";
+
+      yaw_deltar_csv.open(
+        production_csv_path.parent_path()/"yaw_deltar.csv",
+        std::ios::out|std::ios::trunc);
+      if(!yaw_deltar_csv)
+        throw std::runtime_error("не удалось открыть yaw_deltar.csv");
+      yaw_deltar_csv
+        <<"frame,t0_ns,t1_ns,valid,"
+        <<"r00,r01,r02,r10,r11,r12,r20,r21,r22,angle_deg\n";
+      yaw_deltar_csv.flush();
+      yaw_deltar_writer=std::make_unique<AsyncCsvWriter>(yaw_deltar_csv);
+
+      std::cerr<<"YAW_CORRESPONDENCES_V2: ENABLED, every 3rd valid frame + exact HIGHRES delta_R\n";
     }
 
     if(g_fb_shadow_max_px>0.0){
@@ -3217,6 +3232,27 @@ int main(int argc,char** argv){
           // measured FC/RPi clock-rate drift are excluded.
           metric_highres_gyro_delta=metric_shadow::integrateBodyRates(
             hgh,prev_ts,ts,30.0);
+
+          // YAW_CORRESPONDENCES_V2: exact HIGHRES inter-frame rotation for the
+          // same every-third-frame sample as yaw_correspondences.csv.
+          if(yaw_corr_capture &&
+             yaw_deltar_writer &&
+             s.valid &&
+             !s.metric_prev_points.empty() &&
+             frame%3==0){
+            const auto& dR=metric_highres_gyro_delta.delta_R;
+            std::ostringstream row;
+            row<<std::setprecision(17)
+               <<frame<<','<<prev_ts<<','<<ts<<','
+               <<(metric_highres_gyro_delta.valid?1:0)<<','
+               <<dR(0,0)<<','<<dR(0,1)<<','<<dR(0,2)<<','
+               <<dR(1,0)<<','<<dR(1,1)<<','<<dR(1,2)<<','
+               <<dR(2,0)<<','<<dR(2,1)<<','<<dR(2,2)<<','
+               <<metric_highres_gyro_delta.integrated_angle_deg<<'\n';
+            if(yaw_deltar_writer->tryEnqueue(row.str()))
+              ++yaw_deltar_rows;
+          }
+
           if(a0.valid && metric_highres_gyro_delta.valid){
             const cv::Matx33d raw_R0=metric_shadow::bodyToLocal(
               a0.attitude.roll,a0.attitude.pitch,a0.attitude.yaw);
@@ -6011,9 +6047,15 @@ int main(int argc,char** argv){
     g_running=false;
     if(yaw_corr_writer){
       yaw_corr_writer->stop();
-      std::cerr<<"YAW_CORRESPONDENCES_V1: rows="<<yaw_corr_rows
-               <<" dropped_rows="<<yaw_corr_writer->dropped()
-               <<" bytes="<<yaw_corr_writer->bytes()<<"\n";
+      std::cerr<<"YAW_CORRESPONDENCES_V2: corr_rows="<<yaw_corr_rows
+               <<" corr_dropped="<<yaw_corr_writer->dropped()
+               <<" corr_bytes="<<yaw_corr_writer->bytes()<<"\n";
+    }
+    if(yaw_deltar_writer){
+      yaw_deltar_writer->stop();
+      std::cerr<<"YAW_CORRESPONDENCES_V2: deltar_rows="<<yaw_deltar_rows
+               <<" deltar_dropped="<<yaw_deltar_writer->dropped()
+               <<" deltar_bytes="<<yaw_deltar_writer->bytes()<<"\n";
     }
     csv_writer.stop();
     std::cerr<<"CSV ASYNC: dropped_rows="<<csv_writer.dropped()<<" bytes="<<csv_writer.bytes()<<"\n";
