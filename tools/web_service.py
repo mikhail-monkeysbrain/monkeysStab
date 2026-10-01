@@ -1365,8 +1365,16 @@ def set_zero():
             raise RuntimeError("Нет live-телеметрии WebSocket")
         cur=dict(_live_latest)
         zx,zy,zz=_zero["x"],_zero["y"],_zero["z"]
-        raw_x=(zx or 0.0)+float(cur.get("x_mm",0.0))/1000.0
-        raw_y=(zy or 0.0)+float(cur.get("y_mm",0.0))/1000.0
+        # x_mm/y_mm are in the current HOME body-aligned frame, while
+        # _zero[x/y] are FC LOCAL_POSITION_NED North/East coordinates.
+        # Rotate the displayed displacement back to N/E before moving HOME.
+        local_x=float(cur.get("x_mm",0.0))/1000.0
+        local_y=float(cur.get("y_mm",0.0))/1000.0
+        old_home_yaw_rad=math.radians(_yaw_zero_deg or 0.0)
+        d_n=math.cos(old_home_yaw_rad)*local_x-math.sin(old_home_yaw_rad)*local_y
+        d_e=math.sin(old_home_yaw_rad)*local_x+math.cos(old_home_yaw_rad)*local_y
+        raw_x=(zx or 0.0)+d_n
+        raw_y=(zy or 0.0)+d_e
         raw_z=(zz or 0.0)+float(cur.get("z_mm",0.0))/1000.0
         _zero["x"],_zero["y"],_zero["z"]=raw_x,raw_y,raw_z
         # HOME defines the current heading as local yaw=0.  _live_latest
