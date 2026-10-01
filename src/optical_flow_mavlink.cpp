@@ -2200,6 +2200,11 @@ int main(int argc,char** argv){
     constexpr double kReadyMinRangeM=0.10;
     constexpr double kReadyMaxRangeM=10.0;
     constexpr double kReadyMaxSpeedMps=0.03;
+    // Readiness checks liveness of successful production OF publication,
+    // not whether this exact camera-loop iteration happened to publish.
+    // Normal temporal aggregation intentionally publishes about every 60 ms.
+    constexpr int64_t kReadyFlowFreshNs=150000000LL; // 150 ms watchdog
+    int64_t last_ready_flow_send_ns=0;
 
     bool return_target_set=false;
     double return_target_n=0.0,return_target_e=0.0;
@@ -4268,6 +4273,8 @@ int main(int argc,char** argv){
 
             if(flow_sent){
               ++flow_sent_total;
+              if(s.valid && s.inliers>=30)
+                last_ready_flow_send_ns=flow_send_ns;
               flow_tx_x=temporal_flow_x;
               flow_tx_y=temporal_flow_y;
               flow_tx_dt_s=temporal_of_dt_s;
@@ -5080,7 +5087,10 @@ int main(int argc,char** argv){
             ? (ready_range>=kReadyMinRangeM && ready_range<=kReadyMaxRangeM)
             : (hl && lage>=-2.0 && lage<100.0 &&
                ready_range>=kReadyMinRangeM && ready_range<=kReadyMaxRangeM);
-          const bool flow_ok=s.valid && flow_sent && s.inliers>=30;
+          const bool flow_ok=
+            last_ready_flow_send_ns>0 &&
+            now>=last_ready_flow_send_ns &&
+            (now-last_ready_flow_send_ns)<=kReadyFlowFreshNs;
           const bool ekf_ok=esfresh &&
                             (es.flags & EKF_ATTITUDE) &&
                             (es.flags & EKF_VELOCITY_HORIZ) &&
