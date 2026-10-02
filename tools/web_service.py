@@ -26,6 +26,7 @@ GEOMETRY=ROOT/"config"/"mount_geometry.json"
 FC_PROFILE=ROOT/"config"/"fc_profile.json"
 RUN_ROOT=Path(os.environ.get("MONKEYS_RUN_ROOT", str(Path.home()/"monkeysStab_runs")))
 WEB_LOG=RUN_ROOT/"web_runtime.log"
+WEB_FORENSIC=RUN_ROOT/"web_forensic.csv"
 WEB_ASSETS=ROOT/"web_assets"
 PREVIEW_PATH=Path(os.environ.get("MONKEYS_WEB_PREVIEW_PATH","/dev/shm/monkeysstab_vo_preview.jpg"))
 DEFAULTS={
@@ -85,6 +86,8 @@ _run_record_started_wall=0.0
 _run_record_pending=None
 _run_raw_dir=None
 _run_raw_pending=None
+_forensic_handle=None
+FORENSIC_COLUMNS=["wall_time","mono_ns","frame","kind","action","detail","fc_n_m","fc_e_m","fc_d_m","fc_vn_mps","fc_ve_mps","fc_vd_mps","web_x_mm","web_y_mm","web_z_mm","web_yaw_deg","home_n_m","home_e_m","home_d_m","home_yaw_deg","range_m","ekf_valid","armed","raw_of_n_mm","raw_of_e_mm","worked5_dN_m","worked5_dE_m","flow_sent","range_sent"]
 RAW_DATASET_CONTROL=Path("/tmp/monkeysstab_raw_dataset_path")
 RUN_RECORD_DIR=RUN_ROOT/"recordings"
 RUN_RECORD_COLUMNS=[
@@ -99,6 +102,28 @@ RUN_RECORD_COLUMNS=[
 LIVE_UDP_PORT=int(os.environ.get("MONKEYS_WEB_TELEMETRY_UDP_PORT","8766"))
 FC_ENDPOINT="tcp://127.0.0.1:5760"
 GEOMETRY_PARAMS=["FLOW_POS_X","FLOW_POS_Y","FLOW_POS_Z","RNGFND1_POS_X","RNGFND1_POS_Y","RNGFND1_POS_Z"]
+
+def forensic_log(kind, action="", detail="", sample=None, raw_fc=None):
+    """Единая постоянная шкала Web-действий и телеметрии FC/Web."""
+    global _forensic_handle
+    try:
+        s=dict(sample) if isinstance(sample,dict) else {}; r=dict(raw_fc) if isinstance(raw_fc,dict) else {}
+        with _lock:
+            if _forensic_handle is None or _forensic_handle.closed:
+                RUN_ROOT.mkdir(parents=True,exist_ok=True)
+                new_file=not WEB_FORENSIC.exists() or WEB_FORENSIC.stat().st_size==0
+                _forensic_handle=open(WEB_FORENSIC,"a",encoding="utf-8",newline="",buffering=1)
+                if new_file: csv.DictWriter(_forensic_handle,fieldnames=FORENSIC_COLUMNS).writeheader()
+            row={k:"" for k in FORENSIC_COLUMNS}
+            row.update({"wall_time":time.strftime("%Y-%m-%d %H:%M:%S")+"."+f"{int((time.time()%1)*1000):03d}","mono_ns":s.get("mono_ns",r.get("mono_ns","")),"frame":s.get("frame",r.get("frame","")),"kind":kind,"action":action,"detail":detail,"fc_n_m":r.get("x",s.get("_fc_n_m","")),"fc_e_m":r.get("y",s.get("_fc_e_m","")),"fc_d_m":r.get("z",s.get("_fc_d_m","")),"fc_vn_mps":r.get("vx",s.get("vx","")),"fc_ve_mps":r.get("vy",s.get("vy","")),"fc_vd_mps":r.get("vz",s.get("vz","")),"web_x_mm":s.get("x_mm",""),"web_y_mm":s.get("y_mm",""),"web_z_mm":s.get("z_mm",""),"web_yaw_deg":s.get("yaw_deg",""),"home_n_m":_zero.get("x"),"home_e_m":_zero.get("y"),"home_d_m":_zero.get("z"),"home_yaw_deg":_yaw_zero_deg,"range_m":s.get("range_m",r.get("range_m","")),"ekf_valid":s.get("ekf_valid",r.get("ekf_valid","")),"armed":s.get("armed",r.get("armed","")),"raw_of_n_mm":s.get("raw_of_n_mm",""),"raw_of_e_mm":s.get("raw_of_e_mm",""),"worked5_dN_m":s.get("worked5_dN_m",""),"worked5_dE_m":s.get("worked5_dE_m",""),"flow_sent":s.get("flow_sent",""),"range_sent":s.get("range_sent","")})
+            csv.DictWriter(_forensic_handle,fieldnames=FORENSIC_COLUMNS).writerow(row); _forensic_handle.flush()
+    except Exception as e:
+        try: print("WEB_FORENSIC ERROR:",e,flush=True)
+        except Exception: pass
+
+def forensic_action(action, detail=""):
+    with _lock: s=dict(_live_latest) if isinstance(_live_latest,dict) else {}
+    forensic_log("ACTION",action,detail,sample=s)
 
 def load_json(path, fallback):
     try:
@@ -428,6 +453,8 @@ def live_payload(raw):
         "pitch_deg":raw.get("pitch_deg",0.0),
         "yaw_deg":yaw_rel_deg,
     }
+    out["_fc_n_m"]=x; out["_fc_e_m"]=y; out["_fc_d_m"]=z
+    forensic_log("TELEMETRY",sample=out,raw_fc=raw)
     _strip_legacy_imu_fields(out)
     with _lock:
         _live_latest=out
@@ -1364,6 +1391,7 @@ def set_zero():
         if not _live_latest:
             raise RuntimeError("Нет live-телеметрии WebSocket")
         cur=dict(_live_latest)
+        forensic_log("ACTION","WEB_HOME_PRESS","BEFORE",sample=cur)
         zx,zy,zz=_zero["x"],_zero["y"],_zero["z"]
         # x_mm/y_mm are in the current HOME body-aligned frame, while
         # _zero[x/y] are FC LOCAL_POSITION_NED North/East coordinates.
@@ -1410,6 +1438,7 @@ def set_zero():
         cur["imu_camvc_d_mm"]=None
         _strip_legacy_imu_fields(cur)
         _live_latest=cur
+        forensic_log("ACTION","WEB_HOME_PRESS","AFTER",sample=cur)
     ws_broadcast({"type":"zero"})
 
 def log_tail(max_lines=120):
@@ -2495,32 +2524,32 @@ class H(BaseHTTPRequestHandler):
             if p=="/api/config":
                 if running(): raise RuntimeError("Остановите flight runtime перед изменением стартовых параметров")
                 self.send_json({"ok":True,"runtime":save_config(self.body_json())})
-            elif p=="/api/start": self.send_json(start_runtime())
-            elif p=="/api/restart-fast": self.send_json(fast_restart_runtime())
-            elif p=="/api/stop": self.send_json(stop_runtime())
+            elif p=="/api/start": forensic_action("WEB_RUNTIME_START");self.send_json(start_runtime())
+            elif p=="/api/restart-fast": forensic_action("WEB_RUNTIME_RESTART");self.send_json(fast_restart_runtime())
+            elif p=="/api/stop": forensic_action("WEB_RUNTIME_STOP");self.send_json(stop_runtime())
             elif p=="/api/zero": set_zero();self.send_json({"ok":True})
             elif p=="/api/run-record/start": self.send_json(start_run_record())
             elif p=="/api/run-record/stop": self.send_json(stop_run_record())
             elif p=="/api/run-record/finalize": self.send_json(finalize_run_record(self.body_json().get("name","")))
             elif p=="/api/fc/arm":
-                out=fc_control("arm");log_event("WARN","ARM подтверждён FC");self.send_json(out)
+                forensic_action("WEB_ARM_PRESS");out=fc_control("arm");log_event("WARN","ARM подтверждён FC");forensic_action("WEB_ARM_OK");self.send_json(out)
             elif p=="/api/fc/disarm":
-                out=fc_control("disarm");log_event("INFO","DISARM подтверждён FC");self.send_json(out)
+                forensic_action("WEB_DISARM_PRESS");out=fc_control("disarm");log_event("INFO","DISARM подтверждён FC");forensic_action("WEB_DISARM_OK");self.send_json(out)
             elif p=="/api/fc/mode":
                 mode=str(self.body_json().get("mode","")).lower()
                 if mode not in ("stabilize","poshold"):
                     raise ValueError("Разрешены только Stabilize и PosHold")
-                out=fc_control("mode",mode);log_event("INFO","Режим FC -> "+mode);self.send_json(out)
+                forensic_action("WEB_MODE_PRESS",mode);out=fc_control("mode",mode);log_event("INFO","Режим FC -> "+mode);forensic_action("WEB_MODE_OK",mode);self.send_json(out)
             elif p=="/api/fc/takeoff":
                 alt=float(self.body_json().get("alt_m",0.0))
                 if not (0.10 <= alt <= 10.0):
                     raise ValueError("Высота TAKEOFF должна быть 0.10..10.0 м")
-                out=fc_control("takeoff",f"{alt:.3f}")
-                log_event("WARN",f"TAKEOFF принят FC: +{alt:.2f} м")
+                forensic_action("WEB_TAKEOFF_PRESS",f"{alt:.3f}");out=fc_control("takeoff",f"{alt:.3f}")
+                log_event("WARN",f"TAKEOFF принят FC: +{alt:.2f} м");forensic_action("WEB_TAKEOFF_OK",f"{alt:.3f}")
                 self.send_json(out)
             elif p=="/api/fc/land":
-                out=fc_control("mode","land")
-                log_event("WARN","LAND подтверждён FC")
+                forensic_action("WEB_LAND_PRESS");out=fc_control("mode","land")
+                log_event("WARN","LAND подтверждён FC");forensic_action("WEB_LAND_OK")
                 self.send_json(out)
             elif p=="/api/fc/params":
                 self.send_json({"ok":True,"values":set_profile_params(self.body_json().get("values",{}))})
