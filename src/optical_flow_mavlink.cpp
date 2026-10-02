@@ -532,6 +532,9 @@ struct FlowFc {
   bool armed=false;
   bool heartbeat_valid=false;
   int64_t heartbeat_recv_ns=0;
+  uint32_t heartbeat_custom_mode=0;
+  uint8_t heartbeat_base_mode=0;
+  uint8_t heartbeat_system_status=0;
   uint8_t target_sys=0,target_comp=0;
 
   static constexpr size_t remote_block_size=MAVLINK_MSG_REMOTE_LOG_DATA_BLOCK_FIELD_DATA_LEN;
@@ -838,6 +841,9 @@ struct FlowFc {
             {
               std::lock_guard<std::mutex> l(mu);
               armed=(hb.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)!=0;
+              heartbeat_custom_mode=hb.custom_mode;
+              heartbeat_base_mode=hb.base_mode;
+              heartbeat_system_status=hb.system_status;
               heartbeat_valid=true;
               heartbeat_recv_ns=monoNs();
             }
@@ -1304,6 +1310,17 @@ struct FlowFc {
     std::lock_guard<std::mutex> l(mu);
     if(!heartbeat_valid)return false;
     *out=armed;
+    if(age_ms)*age_ms=(monoNs()-heartbeat_recv_ns)*1e-6;
+    return true;
+  }
+
+  bool latestHeartbeat(uint32_t* custom_mode,uint8_t* base_mode,uint8_t* system_status,
+                       double* age_ms=nullptr){
+    std::lock_guard<std::mutex> l(mu);
+    if(!heartbeat_valid)return false;
+    if(custom_mode)*custom_mode=heartbeat_custom_mode;
+    if(base_mode)*base_mode=heartbeat_base_mode;
+    if(system_status)*system_status=heartbeat_system_status;
     if(age_ms)*age_ms=(monoNs()-heartbeat_recv_ns)*1e-6;
     return true;
   }
@@ -2138,7 +2155,7 @@ int main(int argc,char** argv){
     constexpr std::streamoff kCsvMaxBytes=250LL*1024LL*1024LL;
     bool csv_logging_enabled=true;
     bool csv_limit_reported=false;
-    csv<<"mono_ns,camera_ts_ns,v4l2_timestamp_ns,camera_dequeue_ns,v4l2_flags,v4l2_to_dequeue_ms,camera_poll_enter_ns,camera_poll_exit_ns,camera_poll_ms,camera_dq_enter_ns,camera_dq_exit_ns,camera_dq_ioctl_ms,camera_dq_batch_ms,camera_dq_count,loop_tail_to_poll_ms,prev_send_to_csv_ms,prev_csv_block_ms,prev_csv_helpers_ms,prev_csv_stream_ms,prev_csv_flush_ms,prev_csv_tellp_ms,prev_csv_limit_ms,prev_web_block_ms,prev_postweb_ms,prev_anchor_ms,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,lever_valid,lever_production_applied,lever_flow_body_x,lever_flow_body_y,lever_pred_flow_x,lever_pred_flow_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,flow_tx_x,flow_tx_y,flow_tx_dt_s,flow_tx_inputs,raw_publish_mode,causal35_translation_valid,causal35_translation_x,causal35_translation_y,causal35_raw_gyro_x,causal35_raw_gyro_y,causal35_raw_valid,causal35_raw_x,causal35_raw_y,causal35_optical_depth_m,causal35_reject_reason,causal35_anchor_recv_age_ms,causal35_anchor_sample_age_ms,causal35_deltar_hold_ms,stabilised_publish_mode,stabilised_publish_ready,stabilised_publish_source,range_sent,fc_armed,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,rc_zero_seq,rc_valid,rc_age_ms,rc1_us,rc2_us,rc3_us,rc4_us,rc5_us,rc6_us,rc7_us,rc8_us,rc9_us,rc10_us,rc11_us,rc12_us,rc13_us,rc14_us,rc15_us,rc16_us,rc17_us,rc18_us,worked5_valid,worked5_points,worked5_hcam_m,worked5_du_norm,worked5_dv_norm,worked5_dx_m,worked5_dy_m,worked5_dN_m,worked5_dE_m,worked5_acc_n_m,worked5_acc_e_m,highdyn_active,highdyn_reason6,highdyn_raw_dx_m,highdyn_raw_dy_m,highdyn_raw_dN_m,highdyn_raw_dE_m,highdyn_acc_n_m,highdyn_acc_e_m,highdyn_confidence,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
+    csv<<"mono_ns,camera_ts_ns,v4l2_timestamp_ns,camera_dequeue_ns,v4l2_flags,v4l2_to_dequeue_ms,camera_poll_enter_ns,camera_poll_exit_ns,camera_poll_ms,camera_dq_enter_ns,camera_dq_exit_ns,camera_dq_ioctl_ms,camera_dq_batch_ms,camera_dq_count,loop_tail_to_poll_ms,prev_send_to_csv_ms,prev_csv_block_ms,prev_csv_helpers_ms,prev_csv_stream_ms,prev_csv_flush_ms,prev_csv_tellp_ms,prev_csv_limit_ms,prev_web_block_ms,prev_postweb_ms,prev_anchor_ms,flow_send_ns,frame_pipeline_latency_ms,camera_queue_dropped,camera_queue_dropped_total,frame,guide_leg,guide_stage,valid,invalid_reason,bridge_pending,dt_s,features,tracked,inliers,inlier_ratio,t_features_ms,t_lk_ms,t_ransac_ms,t_post_ms,du_px,dv_px,du_norm,dv_norm,yaw_rate_cam_z,scale_rate,lk_height_scale,flow_cam_x,flow_cam_y,flow_body_x,flow_body_y,lever_valid,lever_production_applied,lever_flow_body_x,lever_flow_body_y,lever_pred_flow_x,lever_pred_flow_y,ab_fb_enabled,ab_fb_max_px,ab_fb_checked,ab_fb_pass,ab_fb_ratio,ab_fb_inliers,ab_fb_valid,ab_fb_flow_body_x,ab_fb_flow_body_y,ab_fb_t_ms,ab_robust_valid,ab_robust_flow_body_x,ab_robust_flow_body_y,ab_robust_sigma,ab_robust_mean_weight,ab_robust_downweighted,ab_robust_iters,ab_obs_valid,ab_obs_flow_body_x,ab_obs_flow_body_y,ab_obs_median_ratio,ab_obs_mean_weight,ab_obs_downweighted,quality,luna_m,luna_age_ms,range_to_fc_m,flow_send_x,flow_send_y,flow_sent,flow_tx_x,flow_tx_y,flow_tx_dt_s,flow_tx_inputs,raw_publish_mode,causal35_translation_valid,causal35_translation_x,causal35_translation_y,causal35_raw_gyro_x,causal35_raw_gyro_y,causal35_raw_valid,causal35_raw_x,causal35_raw_y,causal35_optical_depth_m,causal35_reject_reason,causal35_anchor_recv_age_ms,causal35_anchor_sample_age_ms,causal35_deltar_hold_ms,stabilised_publish_mode,stabilised_publish_ready,stabilised_publish_source,range_sent,fc_armed,heartbeat_valid,heartbeat_age_ms,fc_custom_mode,fc_base_mode,fc_system_status,ekf_local_valid,ekf_x_ned,ekf_y_ned,ekf_z_ned,ekf_vx_ned,ekf_vy_ned,ekf_vz_ned,ekf_age_ms,ekf_count,ekf_status_valid,ekf_flags,ekf_status_age_ms,ekf_status_count,ekf_vel_var,ekf_pos_h_var,ekf_pos_v_var,ekf_compass_var,ekf_terrain_var,return_event,rc_zero_seq,rc_valid,rc_age_ms,rc1_us,rc2_us,rc3_us,rc4_us,rc5_us,rc6_us,rc7_us,rc8_us,rc9_us,rc10_us,rc11_us,rc12_us,rc13_us,rc14_us,rc15_us,rc16_us,rc17_us,rc18_us,worked5_valid,worked5_points,worked5_hcam_m,worked5_du_norm,worked5_dv_norm,worked5_dx_m,worked5_dy_m,worked5_dN_m,worked5_dE_m,worked5_acc_n_m,worked5_acc_e_m,highdyn_active,highdyn_reason6,highdyn_raw_dx_m,highdyn_raw_dy_m,highdyn_raw_dN_m,highdyn_raw_dE_m,highdyn_acc_n_m,highdyn_acc_e_m,highdyn_confidence,fc_roll,fc_pitch,fc_yaw,fc_gyro_x,fc_gyro_y,fc_gyro_z,fc_gyro_age_ms,fc_gyro_samples,ctrl_target_valid,ctrl_target_x,ctrl_target_y,ctrl_target_vx,ctrl_target_vy,ctrl_target_age_ms,att_target_valid,att_target_roll,att_target_pitch,att_target_yaw,att_target_thrust,att_target_age_ms,outputs_valid,out1,out2,out3,out4,out5,out6,out7,out8,outputs_age_ms,c0_n,c0_bx,c0_by,c1_n,c1_bx,c1_by,c2_n,c2_bx,c2_by,c3_n,c3_bx,c3_by,c4_n,c4_bx,c4_by,c5_n,c5_bx,c5_by,c6_n,c6_bx,c6_by,c7_n,c7_bx,c7_by,c8_n,c8_bx,c8_by\n";
     csv.flush();
     AsyncCsvWriter csv_writer(csv);
 
@@ -4848,6 +4865,11 @@ int main(int argc,char** argv){
         const int64_t stage_csv_enter_ns=monoNs();
         FlowFcTarget csv_ct{}; FlowFcAttTarget csv_ca{}; FlowFcOutputs csv_co{};
         FlowFcRc csv_rc{};
+        uint32_t csv_custom_mode=0;
+        uint8_t csv_base_mode=0,csv_system_status=0;
+        double csv_hb_age=1e9;
+        const bool csv_hb_ok=fc.latestHeartbeat(
+          &csv_custom_mode,&csv_base_mode,&csv_system_status,&csv_hb_age);
         double csv_ct_age=1e9,csv_ca_age=1e9,csv_co_age=1e9,csv_rc_age=1e9;
         fc.latestControl(&csv_ct,&csv_ca,&csv_co,&csv_ct_age,&csv_ca_age,&csv_co_age);
         const bool csv_rc_have=fc.latestRc(&csv_rc,&csv_rc_age);
@@ -4928,6 +4950,8 @@ int main(int argc,char** argv){
            <<(stabilised_unified_publish?1:0)<<','<<(unified_publish_ready?1:0)<<','
            <<stabilised_unified_shadow_source<<','<<(range_sent?1:0)<<','
            <<(arm_ok?(arm_now?1:0):-1)<<','
+           <<(csv_hb_ok?1:0)<<','<<(csv_hb_ok?csv_hb_age:-1.0)<<','
+           <<csv_custom_mode<<','<<(int)csv_base_mode<<','<<(int)csv_system_status<<','
            <<(efresh?1:0)<<','<<ep.x<<','<<ep.y<<','<<ep.z<<','<<ep.vx<<','<<ep.vy<<','<<ep.vz<<','<<eage<<','<<ec<<','
            <<(esfresh?1:0)<<','<<es.flags<<','<<esage<<','<<esc<<','
            <<es.velocity_variance<<','<<es.pos_horiz_variance<<','<<es.pos_vert_variance<<','<<es.compass_variance<<','<<es.terrain_alt_variance<<','
