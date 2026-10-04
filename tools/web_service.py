@@ -76,6 +76,16 @@ _recovery_thread=None
 _recovery_fault_since=0.0
 _recovery_armed=True
 _recovery_last_restart_wall=0.0
+# FC_BOOT_RECOVERY_V1
+# Отдельный пассивный MAVLink-клиент следит за ATTITUDE.time_boot_ms.
+# Он не управляет частотами MAVLink и не пишет в FC. При подтверждённом
+# откате времени FC запускается восстановление только если runtime был нужен.
+_runtime_wanted=False
+_fc_boot_thread=None
+_fc_boot_stop=threading.Event()
+_fc_boot_last_ms=None
+_fc_boot_generation=0
+_fc_boot_last_event_wall=0.0
 _camera_jpeg=None
 _camera_last_wall=0.0
 _last_rc_zero_seq=None
@@ -434,6 +444,173 @@ def live_payload(raw):
         _live_last_wall=time.time()
     _record_sample(out)
     return out
+
+def _fc_boot_is_reboot(prev_ms, cur_ms):
+    """True только для реального отката FC boot-time, не для uint32 wrap."""
+    if prev_ms is None:
+        return False
+    prev=int(prev_ms) & 0xffffffff
+    cur=int(cur_ms) & 0xffffffff
+    # time_boot_ms wraps примерно через 49.7 суток. Это не reboot.
+    if prev > 0xf0000000 and cur < 0x0fffffff:
+        return False
+    # UART/TCP сохраняет порядок пакетов. Оставляем 1 с запаса на случай
+    # единичного старого/дублированного кадра и реагируем только на явный откат.
+    return cur + 1000 < prev
+
+
+def _schedule_fc_reboot_recovery(prev_ms, cur_ms):
+    """Зафиксировать новый boot epoch FC и восстановить flight contour."""
+    global _fc_boot_generation,_fc_boot_last_event_wall
+    global _recovery_state,_recovery_last_restart_wall,_recovery_armed
+
+    now=time.time()
+    with _recovery_lock:
+        # Один физический reboot может дать несколько разных MAVLink timestamp
+        # сразу после старта. Не запускаем несколько recovery одновременно.
+        if now-_fc_boot_last_event_wall < 2.0:
+            return
+        _fc_boot_last_event_wall=now
+        _fc_boot_generation+=1
+        generation=_fc_boot_generation
+        _recovery_state="FC_BOOT_DETECTED"
+
+    detail=f"generation={generation};prev_boot_ms={prev_ms};new_boot_ms={cur_ms}"
+    log_runtime_forensic("FC_REBOOT_DETECTED",detail=detail)
+    log_event("WARN",f"FC reboot обнаружен: boot {prev_ms} -> {cur_ms} ms")
+
+    def recover():
+        global _recovery_state,_recovery_last_restart_wall,_recovery_armed
+        # Ручной STOP означает, что оператор не хочет автоматического старта.
+        if not _runtime_wanted:
+            with _recovery_lock:
+                _recovery_state="FC_BOOT_IGNORED"
+            log_runtime_forensic("FC_REBOOT_RECOVERY_SKIPPED",detail="runtime_wanted=0")
+            return
+
+        with _recovery_lock:
+            _recovery_state="RESTARTING"
+            _recovery_armed=False
+            _recovery_last_restart_wall=time.time()
+        log_runtime_forensic("FC_REBOOT_RECOVERY_START",detail=detail)
+
+        try:
+            result=fast_restart_runtime()
+            ready=bool(result.get("ready",False))
+            with _recovery_lock:
+                _recovery_state="READY" if ready else "NOT_READY"
+            if ready:
+                log_event(
+                    "INFO",
+                    "FC reboot recovery: контур восстановлен, "
+                    f"reacquire={result.get('reacquire_ms')} ms"
+                )
+            else:
+                log_event(
+                    "ERROR",
+                    "FC reboot recovery: runtime перезапущен, "
+                    "но WORKED5/EKF не подтвердили READY"
+                )
+        except Exception as e:
+            with _recovery_lock:
+                _recovery_state="RECOVERY_FAILED"
+            log_runtime_forensic("FC_REBOOT_RECOVERY_FAIL",detail=str(e))
+            log_event("ERROR","FC reboot recovery: "+str(e))
+
+    threading.Thread(
+        target=recover,
+        name=f"fc-reboot-recovery-{generation}",
+        daemon=True
+    ).start()
+
+
+def start_fc_boot_monitor():
+    """Пассивно отслеживать новый boot epoch FC по MAVLink ATTITUDE.time_boot_ms."""
+    global _fc_boot_thread,_fc_boot_last_ms
+    if _fc_boot_thread and _fc_boot_thread.is_alive():
+        return
+    _fc_boot_stop.clear()
+
+    def run():
+        global _fc_boot_last_ms
+        buf=bytearray()
+        while not _fc_boot_stop.is_set():
+            s=None
+            try:
+                # Router остаётся владельцем UART. Монитор — обычный второй
+                # localhost TCP-клиент и поэтому не конфликтует с runtime.
+                s=socket.create_connection(("127.0.0.1",5760),timeout=1.0)
+                s.settimeout(0.5)
+                log_event("INFO","FC boot monitor подключён к tcp://127.0.0.1:5760")
+                while not _fc_boot_stop.is_set():
+                    try:
+                        data=s.recv(65536)
+                    except socket.timeout:
+                        continue
+                    if not data:
+                        break
+                    buf.extend(data)
+                    while buf:
+                        try:
+                            i=next(i for i,b in enumerate(buf) if b in (0xFE,0xFD))
+                        except StopIteration:
+                            buf.clear()
+                            break
+                        if i:
+                            del buf[:i]
+                        if len(buf)<2:
+                            break
+
+                        magic=buf[0]
+                        plen=buf[1]
+                        if magic==0xFE:
+                            total=plen+8
+                            if len(buf)<total:
+                                break
+                            msgid=buf[5]
+                            payload=bytes(buf[6:6+plen])
+                        else:
+                            if len(buf)<10:
+                                break
+                            incompat=buf[2]
+                            total=plen+12+(13 if (incompat & 0x01) else 0)
+                            if len(buf)<total:
+                                break
+                            msgid=buf[7] | (buf[8]<<8) | (buf[9]<<16)
+                            payload=bytes(buf[10:10+plen])
+
+                        # MAVLink ATTITUDE (30): первый uint32 = time_boot_ms.
+                        # Этот поток уже нужен runtime и обычно идёт 100 Гц.
+                        if msgid==30 and len(payload)>=4:
+                            boot_ms=struct.unpack_from("<I",payload,0)[0]
+                            prev=_fc_boot_last_ms
+                            _fc_boot_last_ms=boot_ms
+                            if _fc_boot_is_reboot(prev,boot_ms):
+                                _schedule_fc_reboot_recovery(prev,boot_ms)
+                        del buf[:total]
+            except OSError:
+                pass
+            finally:
+                if s is not None:
+                    try:
+                        s.close()
+                    except OSError:
+                        pass
+            if not _fc_boot_stop.is_set():
+                time.sleep(0.25)
+
+    _fc_boot_thread=threading.Thread(target=run,name="fc-boot-monitor",daemon=True)
+    _fc_boot_thread.start()
+
+
+def stop_fc_boot_monitor():
+    global _fc_boot_thread
+    _fc_boot_stop.set()
+    t=_fc_boot_thread
+    _fc_boot_thread=None
+    if t is not None and t.is_alive():
+        t.join(timeout=1.5)
+
 
 def start_recovery_watchdog():
     """Мониторинг свежести RAW runtime без автоматического перезапуска."""
@@ -1090,8 +1267,9 @@ def _arm_runtime_test_timer(pid):
     threading.Thread(target=timer,name="runtime-test-timer",daemon=True).start()
 
 def start_runtime(fast_start=False):
-    global _proc,_log_handle,_runtime_started_wall,_active_csv
+    global _proc,_log_handle,_runtime_started_wall,_active_csv,_runtime_wanted
     global _runtime_test_duration_s,_runtime_test_deadline_mono
+    _runtime_wanted=True
     with _lock:
         if running():
             log_runtime_forensic("RUNTIME_START_ALREADY_RUNNING",_proc.pid)
@@ -1175,7 +1353,7 @@ def fast_restart_runtime():
     global _proc,_log_handle,_runtime_started_wall,_active_csv
     global _yaw_zero_deg,_last_rc_zero_seq
     t0=time.monotonic()
-    stop_runtime()
+    stop_runtime(preserve_recovery_intent=True)
 
     # Recovery starts a NEW local navigation segment.  Do not reset ArduPilot
     # EKF itself: only forget Web/diagnostic origins so the first valid sample
@@ -1234,9 +1412,11 @@ def fast_restart_runtime():
                              f"restart_ms={result['restart_ms']};timeout_ms={result['reacquire_ms']}")
     return result
 
-def stop_runtime():
-    global _proc,_log_handle,_active_csv,_live_latest,_live_last_wall
+def stop_runtime(preserve_recovery_intent=False):
+    global _proc,_log_handle,_active_csv,_live_latest,_live_last_wall,_runtime_wanted
     global _runtime_test_duration_s,_runtime_test_deadline_mono,_runtime_test_timer_token
+    if not preserve_recovery_intent:
+        _runtime_wanted=False
     with _lock:
         if not running():
             # Popen may already have exited while run_system.sh left its
@@ -2446,7 +2626,7 @@ class H(BaseHTTPRequestHandler):
                 with _lock:
                     test_duration_s=_runtime_test_duration_s
                     test_remaining_s=max(0.0,_runtime_test_deadline_mono-time.monotonic()) if running() and _runtime_test_deadline_mono>0.0 else None
-                self.send_json({"running":running(),"pid":_proc.pid if running() else None,"transport":"websocket","live_age_ms":age_ms,"ws_clients":len(_ws_clients),"udp_rx":_live_udp_rx,"udp_bad":_live_udp_bad,"runtime_exit":runtime_exit_info(),"test_duration_s":test_duration_s or None,"test_remaining_s":test_remaining_s})
+                self.send_json({"running":running(),"pid":_proc.pid if running() else None,"runtime_wanted":_runtime_wanted,"recovery_state":_recovery_state,"fc_boot_generation":_fc_boot_generation,"fc_boot_ms":_fc_boot_last_ms,"transport":"websocket","live_age_ms":age_ms,"ws_clients":len(_ws_clients),"udp_rx":_live_udp_rx,"udp_bad":_live_udp_bad,"runtime_exit":runtime_exit_info(),"test_duration_s":test_duration_s or None,"test_remaining_s":test_remaining_s})
             elif p=="/api/telemetry":
                 self.send_json(telemetry())
             elif p=="/api/log":
@@ -2574,6 +2754,7 @@ if __name__=="__main__":
         finally:
             probe.close()
         ensure_router()
+        start_fc_boot_monitor()
         start_live_udp_listener()
         start_recovery_watchdog()
         start_statustext_monitor()
@@ -2608,5 +2789,6 @@ if __name__=="__main__":
         if running(): stop_runtime()
         stop_statustext_monitor()
         stop_live_udp_listener()
+        stop_fc_boot_monitor()
         stop_fc_blackbox()
         stop_router()
