@@ -635,9 +635,23 @@ def start_recovery_watchdog():
             # is estimator state and must not restart an otherwise live runtime.
             healthy=(sample is not None and age < 0.35)
             if healthy:
-                if _recovery_state in ("ACQUIRING","NOT_READY"):
-                    _recovery_state="READY"
-                elif _recovery_state not in ("RESTARTING",):
+                estimator_ready=(
+                    bool(sample.get("worked5_valid",False))
+                    and bool(sample.get("ekf_valid",False))
+                )
+                # Transport freshness alone is not enough to promote a failed
+                # FC-reboot recovery to READY. READY means the new contour has
+                # reacquired both WORKED5 and EKF.
+                if _recovery_state=="NOT_READY":
+                    if estimator_ready:
+                        _recovery_state="READY"
+                        log_runtime_forensic("FC_REBOOT_RECOVERY_LATE_READY")
+                        log_event("INFO","FC reboot recovery: WORKED5/EKF поздно подтвердили READY")
+                elif _recovery_state=="ACQUIRING":
+                    _recovery_state="READY" if estimator_ready else "RUNNING"
+                elif _recovery_state not in (
+                    "RESTARTING","FC_BOOT_DETECTED","RECOVERY_FAILED"
+                ):
                     _recovery_state="RUNNING"
                 _recovery_fault_since=0.0
                 # Rearm only after a healthy interval following a restart.
