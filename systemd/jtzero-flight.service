@@ -1,0 +1,19 @@
+[Unit]
+Description=JT-Zero flight runtime and Web UI
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=vio
+Group=vio
+WorkingDirectory=/home/vio/Desktop/monkeysStab
+Environment=MONKEYS_RAW_UNIFIED_PUBLISH=1
+ExecStart=/bin/bash /home/vio/Desktop/monkeysStab/startFlightRuntime.sh
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=12
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
