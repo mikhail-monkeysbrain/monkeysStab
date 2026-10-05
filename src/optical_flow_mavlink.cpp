@@ -515,6 +515,23 @@ struct FlowFc {
     const double off=highres_clock_offset0_ns+highres_clock_drift_ns_per_s*t_s;
     return fc_ns+static_cast<int64_t>(std::llround(off));
   }
+  // STARTUP_CLOCK_RESYNC_V1:
+  // Reset only the affine FC->RPi clock-fit state. HIGHRES history,
+  // WORKED5, optical-flow state and FC state are intentionally untouched.
+  void resetHighresClockMap(){
+    highres_clock_valid=false;
+    highres_clock_fc0_ns=0;
+    highres_clock_bin=-1;
+    highres_clock_bin_min_offset_ns=0;
+    highres_clock_fit_n=0;
+    highres_clock_sum_t=0.0L;
+    highres_clock_sum_o=0.0L;
+    highres_clock_sum_tt=0.0L;
+    highres_clock_sum_to=0.0L;
+    highres_clock_offset0_ns=0.0;
+    highres_clock_drift_ns_per_s=0.0;
+  }
+
   std::ofstream highres_gyro_shadow_ofs;
   // ATTITUDE_CAUSAL_LOG_V1: raw FC ATTITUDE measurement/receive timing.
   // Shadow-only. Used to validate causal absolute-orientation anchoring.
@@ -1391,14 +1408,18 @@ bool sendOpticalFlow(int fd,uint64_t time_usec,float rate_x,float rate_y,uint8_t
   return GroundMotionMavlinkPublisher::writeMessage(fd,msg);
 }
 
-bool setFcParamInt8(int fd,uint8_t target_sys,uint8_t target_comp,
-                    const char* name,int8_t value){
-  if(fd<0 || target_sys==0 || target_comp==0 || name==nullptr || *name=='\0')
-    return false;
+bool sendHealthRadioStatus(int fd){
+  if(fd<0)return false;
   mavlink_message_t msg{};
-  mavlink_msg_param_set_pack(
+  mavlink_msg_radio_status_pack(
     FlowFc::self_sys,FlowFc::self_comp,&msg,
-    target_sys,target_comp,name,(float)value,MAV_PARAM_TYPE_INT8);
+    254,   // rssi: JT-Zero healthy
+    254,   // remrssi
+    100,   // txbuf
+    0,     // noise
+    0,     // remnoise
+    0,     // rxerrors
+    0);    // fixed
   return GroundMotionMavlinkPublisher::writeMessage(fd,msg);
 }
 
@@ -2234,17 +2255,20 @@ int main(int argc,char** argv){
     constexpr int64_t kReadyFlowFreshNs=150000000LL; // 150 ms watchdog
     int64_t last_ready_flow_send_ns=0;
 
-    // OSD_SATS_HEALTH_V1: SATS is deliberately repurposed as a persistent
-    // pilot-visible health flag.  SIDEBARS and every other OSD item are untouched.
-    // SATS visible = JT-Zero not ready/lost; SATS hidden = OF + EKF aiding healthy.
-    // PARAM_SET is sent only on state transitions, never periodically.
-    bool osd_sats_initialized=false;
-    bool osd_sats_visible=true;
-    int64_t osd_healthy_since_ns=0;
-    int64_t osd_unhealthy_since_ns=0;
-    constexpr int64_t kOsdFlowFreshNs=300000000LL;      // 300 ms OF watchdog
-    constexpr int64_t kOsdHealthyStableNs=3000000000LL; // 3 s before hiding SATS
-    constexpr int64_t kOsdLostStableNs=1000000000LL;    // 1 s before showing SATS
+    // STARTUP_AUTO_ZERO_V1:
+    // One automatic zero per runtime, only after the complete flight-readiness
+    // condition has remained stable. Never repeats after an in-flight dropout.
+    bool startup_zero_done=false;
+
+    // OSD_RSSI_HEALTH_V1:
+    // RSSI is a fail-safe JT-Zero health heartbeat.
+    // While production OF is fresh and EKF horizontal aiding is healthy,
+    // RADIO_STATUS with high RSSI is periodically sent to the FC.
+    // On OF/runtime/RPi/link loss transmission stops; FC-side RSSI timeout
+    // returns the OSD indication to zero without requiring any final RPi message.
+    constexpr int64_t kOsdFlowFreshNs=300000000LL; // 300 ms OF watchdog
+    constexpr int64_t kOsdRssiPeriodNs=500000000LL; // 2 Hz heartbeat
+    int64_t last_osd_rssi_send_ns=0;
 
     bool return_target_set=false;
     double return_target_n=0.0,return_target_e=0.0;
@@ -2530,6 +2554,12 @@ int main(int argc,char** argv){
     double prev_anchor_ms=-1.0;
     int64_t prev_loop_end_ns=0;
 
+    // STARTUP_CLOCK_RESYNC_V1:
+    // Start timing only after OV9281 has produced a successfully decoded frame.
+    // HIGHRES_CLOCK_MAP_V2 is reset exactly once 10 s later.
+    int64_t startup_first_decoded_ns=0;
+    bool startup_clock_reset_done=false;
+
     while(g_running){
       pollfd p{cam.fd,POLLIN,0};
       const int64_t camera_poll_enter_ns=monoNs();
@@ -2665,6 +2695,21 @@ int main(int argc,char** argv){
       if(gray.empty()) continue;
       ++fps_decoded; ++w5w_decoded;
       ++frame;
+
+      if(startup_first_decoded_ns==0)
+        startup_first_decoded_ns=monoNs();
+
+      if(!startup_clock_reset_done &&
+         monoNs()-startup_first_decoded_ns>=10000000000LL){
+        {
+          std::lock_guard<std::mutex> l(fc.mu);
+          fc.resetHighresClockMap();
+        }
+        startup_clock_reset_done=true;
+        std::cerr
+          <<"STARTUP_CLOCK_RESYNC_V1: HIGHRES_CLOCK_MAP_V2 reset "
+          <<"10 s after first decoded OV9281 frame\n";
+      }
 
       // OV9281_OF_AE_V2: lightweight adaptive shutter for optical flow.
       // Keep the proven OF path untouched. Brightness is estimated from a
@@ -4379,10 +4424,10 @@ int main(int argc,char** argv){
         const bool esok=fc.latestEkf(&es,&esage,&esc);
         const bool esfresh=esok&&esage<1000.0;
 
-        // OSD_SATS_HEALTH_V1.
-        // On startup force SATS visible. Hide it only after 3 s of continuous
-        // production OF + EKF horizontal aiding. Show it again after 1 s loss.
-        // This is an operator indicator only; it never gates flight or modifies OF.
+        // OSD_RSSI_HEALTH_V1.
+        // High RSSI is transmitted only while production OF is fresh and
+        // EKF horizontal aiding is confirmed. On any unhealthy state we send
+        // nothing and deliberately let the FC-side RSSI timeout fall to zero.
         {
           const int64_t osd_now_ns=monoNs();
           const bool osd_flow_fresh=
@@ -4393,37 +4438,18 @@ int main(int argc,char** argv){
             esfresh &&
             (es.flags & EKF_ATTITUDE) &&
             (es.flags & EKF_VELOCITY_HORIZ) &&
-            (es.flags & EKF_POS_HORIZ_REL) &&
             !(es.flags & EKF_UNINITIALIZED);
-          const bool osd_healthy=osd_flow_fresh && osd_ekf_aiding;
+          const bool osd_healthy=
+            startup_clock_reset_done &&
+            startup_zero_done &&
+            osd_flow_fresh &&
+            osd_ekf_aiding;
 
-          if(!osd_sats_initialized){
-            if(setFcParamInt8(fc.fd,fc.target_sys,fc.target_comp,"OSD1_SATS_EN",1)){
-              osd_sats_initialized=true;
-              osd_sats_visible=true;
-              std::cerr<<"OSD STATUS: SATS visible (JT-Zero waiting/not ready)\n";
-            }
-          }
-
-          if(osd_healthy){
-            osd_unhealthy_since_ns=0;
-            if(osd_healthy_since_ns==0) osd_healthy_since_ns=osd_now_ns;
-            if(osd_sats_initialized && osd_sats_visible &&
-               osd_now_ns-osd_healthy_since_ns>=kOsdHealthyStableNs){
-              if(setFcParamInt8(fc.fd,fc.target_sys,fc.target_comp,"OSD1_SATS_EN",0)){
-                osd_sats_visible=false;
-                std::cerr<<"OSD STATUS: SATS hidden (JT-Zero OF + EKF aiding healthy)\n";
-              }
-            }
-          }else{
-            osd_healthy_since_ns=0;
-            if(osd_unhealthy_since_ns==0) osd_unhealthy_since_ns=osd_now_ns;
-            if(osd_sats_initialized && !osd_sats_visible &&
-               osd_now_ns-osd_unhealthy_since_ns>=kOsdLostStableNs){
-              if(setFcParamInt8(fc.fd,fc.target_sys,fc.target_comp,"OSD1_SATS_EN",1)){
-                osd_sats_visible=true;
-                std::cerr<<"OSD STATUS: SATS visible (JT-Zero OF/EKF aiding lost)\n";
-              }
+          if(osd_healthy &&
+             (last_osd_rssi_send_ns==0 ||
+              osd_now_ns-last_osd_rssi_send_ns>=kOsdRssiPeriodNs)){
+            if(sendHealthRadioStatus(fc.fd)){
+              last_osd_rssi_send_ns=osd_now_ns;
             }
           }
         }
@@ -5198,14 +5224,38 @@ int main(int argc,char** argv){
           const bool ekf_ok=esfresh &&
                             (es.flags & EKF_ATTITUDE) &&
                             (es.flags & EKF_VELOCITY_HORIZ) &&
-                            (es.flags & EKF_POS_HORIZ_REL) &&
                             !(es.flags & EKF_UNINITIALIZED);
-          const bool local_ok=efresh && speed_h<=kReadyMaxSpeedMps;
-          const bool ready_now=luna_ok && flow_ok && ekf_ok && local_ok;
+
+          // STARTUP_READY_NO_LOCAL_V1:
+          // LOCAL_POSITION_NED may appear ~25 s after EKF horizontal velocity
+          // aiding and production optical flow are already healthy. Do not make
+          // startup zero / OSD health depend on that late telemetry message.
+          const bool ready_now=luna_ok && flow_ok && ekf_ok;
           if(ready_now){
             if(flight_ready_since_ns==0) flight_ready_since_ns=now;
             if((now-flight_ready_since_ns)*1e-9>=kReadyStableSec){
               flight_ready=true;
+
+              if(!startup_zero_done){
+                {
+                  std::lock_guard<std::mutex> l(fc.mu);
+                  imu_dr::reset(fc.imu_dr_state);
+                }
+
+                web_raw_n=web_raw_e=0.0;
+                web_raw_vn=web_raw_ve=0.0;
+                web_raw_step_valid=false;
+
+                startup_zero_done=true;
+                ++rc_zero_seq;
+
+                std::cerr
+                  <<"STARTUP_AUTO_ZERO_V1: flight readiness stable "
+                  <<kReadyStableSec
+                  <<" s; current position accepted as 0/0/0"
+                  <<" seq="<<rc_zero_seq<<"\n";
+              }
+
               if(return_cli || blind4_cli){
                 std::cerr<<"\nСИСТЕМА ГОТОВА.\n";
                 if(blind4_cli){
@@ -5219,8 +5269,9 @@ int main(int argc,char** argv){
                 std::cerr<<"\n======================================================================\n"
                          <<"СИСТЕМА ГОТОВА\n"
                          <<"range="<<((bench_height_override>0.0)?bench_height_override:lm)
-                         <<" m, flow valid, EKF velH/posRel valid, |vH|="
-                         <<speed_h<<" m/s\n"
+                         <<" m, flow valid, EKF velH valid"
+                         <<", LOCAL="<<(efresh?"available":"pending")
+                         <<", |vH|="<<(efresh?speed_h:-1.0)<<" m/s\n"
                          <<"Состояние было непрерывно стабильным "<<kReadyStableSec<<" с.\n"
                          <<"======================================================================\n";
               }
@@ -5233,7 +5284,7 @@ int main(int argc,char** argv){
                          <<" luna="<<(luna_ok?"OK":"NO")
                          <<" flow="<<(flow_ok?"OK":"NO")
                          <<" ekf="<<(ekf_ok?"OK":"NO")
-                         <<" local="<<(local_ok?"OK":"NO")
+                         <<" local="<<(efresh?"INFO":"PENDING")
                          <<" range="<<((bench_height_override>0.0)?bench_height_override:(hl?lm:-1.0))
                          <<" vH="<<(efresh?speed_h:-1.0)<<"\n";
               }
