@@ -1391,6 +1391,14 @@ bool sendOpticalFlow(int fd,uint64_t time_usec,float rate_x,float rate_y,uint8_t
   return GroundMotionMavlinkPublisher::writeMessage(fd,msg);
 }
 
+bool sendVoStatusText(int fd,uint8_t severity,const char* text){
+  if(fd<0 || text==nullptr || *text=='\0') return false;
+  mavlink_message_t msg{};
+  mavlink_msg_statustext_pack(
+    FlowFc::self_sys,FlowFc::self_comp,&msg,severity,text,0,0);
+  return GroundMotionMavlinkPublisher::writeMessage(fd,msg);
+}
+
 FeatureRoi g_feature_roi{};
 int g_max_features=500; // production default; diagnostic sweeps may override in-process
 double g_fb_shadow_max_px=0.0; // 0=disabled; diagnostic A/B only, never changes MAVLink production flow
@@ -2222,6 +2230,15 @@ int main(int argc,char** argv){
     // Normal temporal aggregation intentionally publishes about every 60 ms.
     constexpr int64_t kReadyFlowFreshNs=150000000LL; // 150 ms watchdog
     int64_t last_ready_flow_send_ns=0;
+
+    // OSD_VO_STATUS_V1: operator indication only.  It follows successful
+    // production OF transmissions and never gates or modifies flight data.
+    bool vo_osd_ready=false;
+    int64_t vo_osd_candidate_since_ns=0;
+    int64_t vo_osd_last_text_ns=0;
+    constexpr int64_t kVoOsdFreshNs=300000000LL;       // 300 ms
+    constexpr int64_t kVoOsdStableNs=1000000000LL;     // 1.0 s
+    constexpr int64_t kVoOsdRepeatNs=2000000000LL;     // keep OSD MESSAGE visible
 
     bool return_target_set=false;
     double return_target_n=0.0,return_target_e=0.0;
@@ -4347,6 +4364,38 @@ int main(int argc,char** argv){
           if(!prev.empty() && !s.valid) ++flow_invalid_total;
           if(s.valid && !flow_fresh) ++stale_flow_rejected_total;
           if(s.valid && flow_fresh && terrain_step_guard) ++terrain_step_reject_total;
+        }
+
+        // OSD_VO_STATUS_V1.  READY means the FC link has been receiving
+        // successful production optical-flow packets continuously for >=1 s.
+        // MESSAGE panels hide STATUSTEXT after a short timeout, so refresh READY
+        // every 2 s. LOST is emitted once after the production stream goes stale.
+        {
+          const int64_t vo_now_ns=monoNs();
+          const bool vo_fresh=
+            last_ready_flow_send_ns>0 &&
+            vo_now_ns>=last_ready_flow_send_ns &&
+            (vo_now_ns-last_ready_flow_send_ns)<=kVoOsdFreshNs;
+          if(vo_fresh){
+            if(vo_osd_candidate_since_ns==0) vo_osd_candidate_since_ns=vo_now_ns;
+            if(vo_now_ns-vo_osd_candidate_since_ns>=kVoOsdStableNs){
+              if(!vo_osd_ready ||
+                 vo_osd_last_text_ns==0 ||
+                 vo_now_ns-vo_osd_last_text_ns>=kVoOsdRepeatNs){
+                if(sendVoStatusText(fc.fd,MAV_SEVERITY_INFO,"JT VO READY")){
+                  vo_osd_ready=true;
+                  vo_osd_last_text_ns=vo_now_ns;
+                }
+              }
+            }
+          }else{
+            vo_osd_candidate_since_ns=0;
+            if(vo_osd_ready){
+              if(sendVoStatusText(fc.fd,MAV_SEVERITY_WARNING,"JT VO LOST"))
+                vo_osd_last_text_ns=vo_now_ns;
+              vo_osd_ready=false;
+            }
+          }
         }
 
         FlowFcLocal ep{}; double eage=1e9; uint64_t ec=0;
