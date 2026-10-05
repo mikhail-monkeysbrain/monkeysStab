@@ -1391,11 +1391,14 @@ bool sendOpticalFlow(int fd,uint64_t time_usec,float rate_x,float rate_y,uint8_t
   return GroundMotionMavlinkPublisher::writeMessage(fd,msg);
 }
 
-bool sendVoStatusText(int fd,uint8_t severity,const char* text){
-  if(fd<0 || text==nullptr || *text=='\0') return false;
+bool setFcParamInt8(int fd,uint8_t target_sys,uint8_t target_comp,
+                    const char* name,int8_t value){
+  if(fd<0 || target_sys==0 || target_comp==0 || name==nullptr || *name=='\0')
+    return false;
   mavlink_message_t msg{};
-  mavlink_msg_statustext_pack(
-    FlowFc::self_sys,FlowFc::self_comp,&msg,severity,text,0,0);
+  mavlink_msg_param_set_pack(
+    FlowFc::self_sys,FlowFc::self_comp,&msg,
+    target_sys,target_comp,name,(float)value,MAV_PARAM_TYPE_INT8);
   return GroundMotionMavlinkPublisher::writeMessage(fd,msg);
 }
 
@@ -2231,14 +2234,17 @@ int main(int argc,char** argv){
     constexpr int64_t kReadyFlowFreshNs=150000000LL; // 150 ms watchdog
     int64_t last_ready_flow_send_ns=0;
 
-    // OSD_VO_STATUS_V1: operator indication only.  It follows successful
-    // production OF transmissions and never gates or modifies flight data.
-    bool vo_osd_ready=false;
-    int64_t vo_osd_candidate_since_ns=0;
-    int64_t vo_osd_last_text_ns=0;
-    constexpr int64_t kVoOsdFreshNs=300000000LL;       // 300 ms
-    constexpr int64_t kVoOsdStableNs=1000000000LL;     // 1.0 s
-    constexpr int64_t kVoOsdRepeatNs=2000000000LL;     // keep OSD MESSAGE visible
+    // OSD_SATS_HEALTH_V1: SATS is deliberately repurposed as a persistent
+    // pilot-visible health flag.  SIDEBARS and every other OSD item are untouched.
+    // SATS visible = JT-Zero not ready/lost; SATS hidden = OF + EKF aiding healthy.
+    // PARAM_SET is sent only on state transitions, never periodically.
+    bool osd_sats_initialized=false;
+    bool osd_sats_visible=true;
+    int64_t osd_healthy_since_ns=0;
+    int64_t osd_unhealthy_since_ns=0;
+    constexpr int64_t kOsdFlowFreshNs=300000000LL;      // 300 ms OF watchdog
+    constexpr int64_t kOsdHealthyStableNs=3000000000LL; // 3 s before hiding SATS
+    constexpr int64_t kOsdLostStableNs=1000000000LL;    // 1 s before showing SATS
 
     bool return_target_set=false;
     double return_target_n=0.0,return_target_e=0.0;
@@ -4366,44 +4372,61 @@ int main(int argc,char** argv){
           if(s.valid && flow_fresh && terrain_step_guard) ++terrain_step_reject_total;
         }
 
-        // OSD_VO_STATUS_V1.  READY means the FC link has been receiving
-        // successful production optical-flow packets continuously for >=1 s.
-        // MESSAGE panels hide STATUSTEXT after a short timeout, so refresh READY
-        // every 2 s. LOST is emitted once after the production stream goes stale.
-        {
-          const int64_t vo_now_ns=monoNs();
-          const bool vo_fresh=
-            last_ready_flow_send_ns>0 &&
-            vo_now_ns>=last_ready_flow_send_ns &&
-            (vo_now_ns-last_ready_flow_send_ns)<=kVoOsdFreshNs;
-          if(vo_fresh){
-            if(vo_osd_candidate_since_ns==0) vo_osd_candidate_since_ns=vo_now_ns;
-            if(vo_now_ns-vo_osd_candidate_since_ns>=kVoOsdStableNs){
-              if(!vo_osd_ready ||
-                 vo_osd_last_text_ns==0 ||
-                 vo_now_ns-vo_osd_last_text_ns>=kVoOsdRepeatNs){
-                if(sendVoStatusText(fc.fd,MAV_SEVERITY_INFO,"JT VO READY")){
-                  vo_osd_ready=true;
-                  vo_osd_last_text_ns=vo_now_ns;
-                }
-              }
-            }
-          }else{
-            vo_osd_candidate_since_ns=0;
-            if(vo_osd_ready){
-              if(sendVoStatusText(fc.fd,MAV_SEVERITY_WARNING,"JT VO LOST"))
-                vo_osd_last_text_ns=vo_now_ns;
-              vo_osd_ready=false;
-            }
-          }
-        }
-
         FlowFcLocal ep{}; double eage=1e9; uint64_t ec=0;
         const bool eok=fc.latestLocal(&ep,&eage,&ec);
         const bool efresh=eok&&eage<500.0;
         FlowEkfStatus es{}; double esage=1e9; uint64_t esc=0;
         const bool esok=fc.latestEkf(&es,&esage,&esc);
         const bool esfresh=esok&&esage<1000.0;
+
+        // OSD_SATS_HEALTH_V1.
+        // On startup force SATS visible. Hide it only after 3 s of continuous
+        // production OF + EKF horizontal aiding. Show it again after 1 s loss.
+        // This is an operator indicator only; it never gates flight or modifies OF.
+        {
+          const int64_t osd_now_ns=monoNs();
+          const bool osd_flow_fresh=
+            last_ready_flow_send_ns>0 &&
+            osd_now_ns>=last_ready_flow_send_ns &&
+            (osd_now_ns-last_ready_flow_send_ns)<=kOsdFlowFreshNs;
+          const bool osd_ekf_aiding=
+            esfresh &&
+            (es.flags & EKF_ATTITUDE) &&
+            (es.flags & EKF_VELOCITY_HORIZ) &&
+            (es.flags & EKF_POS_HORIZ_REL) &&
+            !(es.flags & EKF_UNINITIALIZED);
+          const bool osd_healthy=osd_flow_fresh && osd_ekf_aiding;
+
+          if(!osd_sats_initialized){
+            if(setFcParamInt8(fc.fd,fc.target_sys,fc.target_comp,"OSD1_SATS_EN",1)){
+              osd_sats_initialized=true;
+              osd_sats_visible=true;
+              std::cerr<<"OSD STATUS: SATS visible (JT-Zero waiting/not ready)\n";
+            }
+          }
+
+          if(osd_healthy){
+            osd_unhealthy_since_ns=0;
+            if(osd_healthy_since_ns==0) osd_healthy_since_ns=osd_now_ns;
+            if(osd_sats_initialized && osd_sats_visible &&
+               osd_now_ns-osd_healthy_since_ns>=kOsdHealthyStableNs){
+              if(setFcParamInt8(fc.fd,fc.target_sys,fc.target_comp,"OSD1_SATS_EN",0)){
+                osd_sats_visible=false;
+                std::cerr<<"OSD STATUS: SATS hidden (JT-Zero OF + EKF aiding healthy)\n";
+              }
+            }
+          }else{
+            osd_healthy_since_ns=0;
+            if(osd_unhealthy_since_ns==0) osd_unhealthy_since_ns=osd_now_ns;
+            if(osd_sats_initialized && !osd_sats_visible &&
+               osd_now_ns-osd_unhealthy_since_ns>=kOsdLostStableNs){
+              if(setFcParamInt8(fc.fd,fc.target_sys,fc.target_comp,"OSD1_SATS_EN",1)){
+                osd_sats_visible=true;
+                std::cerr<<"OSD STATUS: SATS visible (JT-Zero OF/EKF aiding lost)\n";
+              }
+            }
+          }
+        }
 
         bool arm_now=false; double arm_age_now=1e9;
         const bool arm_ok=fc.latestArm(&arm_now,&arm_age_now) && arm_age_now<2500.0;
