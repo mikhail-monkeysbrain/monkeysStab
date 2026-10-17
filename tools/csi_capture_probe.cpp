@@ -2,6 +2,9 @@
 // No MAVLink, no FC commands, no changes to WORKED5 or USB camera path.
 #include <libcamera/libcamera.h>
 #include <atomic>
+#include <array>
+#include <libcamera/formats.h>
+#include <libcamera/control_ids.h>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
@@ -43,8 +46,9 @@ public:
     camera_->requestCompleted.connect(this, &Capture::completed);
     libcamera::ControlList controls(camera_->controls());
     const int64_t frame_us = 1000000 / fps;
+    const std::array<int64_t, 2> durations{frame_us, frame_us};
     controls.set(libcamera::controls::FrameDurationLimits,
-                 libcamera::Span<const int64_t, 2>({frame_us, frame_us}));
+                 libcamera::Span<const int64_t, 2>(durations));
     if (camera_->start(&controls) != 0) throw std::runtime_error("camera start failed");
     running_.store(true);
     for (auto &req : requests_) {
