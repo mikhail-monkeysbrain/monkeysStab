@@ -14,7 +14,7 @@ if [[ ! -f "${MAVLINK_ROOT:-}/ardupilotmega/mavlink.h" ]]; then
   echo "ERROR: MAVLink headers not found. Set MAVLINK_ROOT or install project dependencies." >&2
   exit 2
 fi
-g++ -std=c++20 -O2 -DNDEBUG -pthread -Wno-address-of-packed-member \
+g++ -std=c++20 -O0 -g0 -fno-inline -pthread -Wno-address-of-packed-member \
   -Wno-deprecated-enum-enum-conversion \
   -I"$ROOT/src" -I"$MAVLINK_ROOT" \
   "$ROOT/tools/worked5_csi_bench.cpp" -o "$OUT" \
