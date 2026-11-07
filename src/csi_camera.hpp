@@ -67,7 +67,7 @@ public:
     const int64_t us=1000000/fps;
     const std::array<int64_t,2> durations{us,us};
     controls.set(libcamera::controls::FrameDurationLimits,
-                 libcamera::Span<const int64_t,2>(durations));
+                 std::span<const int64_t,2>(durations));
     if(camera_->start(&controls)) throw std::runtime_error("CSI start");
     running_=true;
     for(auto& req:requests_)
