@@ -1,7 +1,6 @@
 // Bench-only CSI -> production estimateRawFlow() bridge.
 // Never opens a serial port, never sends MAVLink or motor commands.
-#define JTZERO_OPTFLOW_LIBRARY 1
-#include "../src/optical_flow_mavlink.cpp"
+#include "../src/worked5_flow_isolated.hpp"
 #include "../src/csi_camera.hpp"
 #include <iostream>
 #include <chrono>
