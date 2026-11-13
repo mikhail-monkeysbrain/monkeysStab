@@ -1548,13 +1548,51 @@ FlowStep estimateRawFlow(const cv::Mat& prev,const cv::Mat& curr,double dt,const
   // 4-parameter fit below estimates image scale from tracked features instead.
   o.lk_height_scale=1.0;
 
+  // LK_PHOTOMETRIC_V1: compensate global additive brightness jumps before
+  // pyramidal LK. Sparse per-pixel differences estimate a robust offset;
+  // strong spatial change (camera movement/occlusion) disables correction.
+  // This changes only the images supplied to forward LK, not GFTT, geometry,
+  // RANSAC thresholds or the published output format.
+  const cv::Mat* lk_curr=&curr;
+  cv::Mat lk_curr_normalized;
+  {
+    std::array<uint32_t,511> hist{};
+    uint32_t total=0;
+    for(int yy=y0;yy<y1;yy+=8){
+      const uint8_t* pa=prev.ptr<uint8_t>(yy);
+      const uint8_t* pb=curr.ptr<uint8_t>(yy);
+      for(int xx=x0;xx<x1;xx+=8){
+        const int delta=int(pb[xx])-int(pa[xx]);
+        ++hist[(size_t)(delta+255)];
+        ++total;
+      }
+    }
+    if(total){
+      const auto percentile=[&](uint32_t rank){
+        uint32_t accum=0;
+        for(int i=0;i<511;++i){
+          accum+=hist[(size_t)i];
+          if(accum>=rank)return i-255;
+        }
+        return 0;
+      };
+      const int q25=percentile((total+3)/4);
+      const int q50=percentile((total+1)/2);
+      const int q75=percentile((3*total+3)/4);
+      if(std::abs(q50)>=3 && std::abs(q50)<=30 && (q75-q25)<=16){
+        cv::subtract(curr,cv::Scalar(q50),lk_curr_normalized);
+        lk_curr=&lk_curr_normalized;
+      }
+    }
+  }
+
   // LK_RUNTIME_TIMING_V1
   // Diagnostic only. Production LK inputs, parameters and output are unchanged.
   timespec lk_thr0{}, lk_thr1{}, lk_proc0{}, lk_proc1{};
   clock_gettime(CLOCK_THREAD_CPUTIME_ID,&lk_thr0);
   clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&lk_proc0);
   const int64_t t_lk0=monoNs();
-  cv::calcOpticalFlowPyrLK(prev,curr,p0,p1,st,err,{21,21},3,
+  cv::calcOpticalFlowPyrLK(prev,*lk_curr,p0,p1,st,err,{21,21},3,
                            cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,30,0.01),
                            0,1e-4);
   o.t_lk_ms=(monoNs()-t_lk0)*1e-6;
